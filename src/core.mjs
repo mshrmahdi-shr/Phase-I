@@ -16,6 +16,7 @@ export function createProject({name='',projectNo='',address='',date='',company='
     siteBoundary:[], buildingBoundary:[], historical:[],
     geology:{surficial:null,bedrock:null},
     dpi:300,
+    exportPreferences:{codes:[],sources:{A:'osm',B:'esri-imagery',C:'toporama',D:'osm',E:'osm'}},
     figures:figureDefaults(),
     createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()
   };
@@ -77,6 +78,15 @@ export function restoreProject(value){
     return [code,f];
   }));
   p.geology={surficial:null,bedrock:null,...(p.geology&&typeof p.geology==='object'?p.geology:{})};
+  for(const kind of ['surficial','bedrock']){
+    const metadata=p.geology[kind];
+    if(!metadata?.source&&typeof metadata?.name==='string'&&/\.km[zl]$/i.test(metadata.name)){
+      p.geology[kind]={...metadata,source:{id:'custom',name:`Custom import: ${metadata.name}`}};
+    }
+  }
+  const savedCodes=Array.isArray(value.exportPreferences?.codes)?value.exportPreferences.codes:[];
+  p.exportPreferences={codes:Object.keys(figureDefaults()).filter(code=>savedCodes.includes(code)),
+    sources:{A:'osm',B:'esri-imagery',C:'toporama',D:'osm',E:'osm'}};
   p.schemaVersion=3;
   return p;
 }

@@ -105,3 +105,19 @@ test('legacy Figure B defaults migrate without losing project or custom extents'
   assert.equal(core.restoreProject(p).figures.B.extentMeters,150);
   assert.throws(()=>core.restoreProject({name:'invalid'}));
 });
+
+test('export preferences restore only known figure codes and sources without rewriting project numbers',()=>{
+  const p=createProject({projectNo:'FE 26-15876'});
+  assert.deepEqual(p.exportPreferences.codes,[]);
+  p.exportPreferences={codes:['E','C','A','A','Z'],sources:{A:'unknown',C:'toporama',E:'osm'}};
+  p.geology.bedrock={source:{id:'MRD126-REV1',name:'Official'},siteUnit:'55b'};
+  const restored=core.restoreProject(JSON.parse(JSON.stringify(p)));
+  assert.equal(restored.projectNo,'FE 26-15876');
+  assert.deepEqual(restored.exportPreferences.codes,['A','C','E']);
+  assert.deepEqual(restored.exportPreferences.sources,{A:'osm',B:'esri-imagery',C:'toporama',D:'osm',E:'osm'});
+  assert.equal(restored.geology.bedrock.source.id,'MRD126-REV1');
+  delete p.exportPreferences;assert.deepEqual(core.restoreProject(p).exportPreferences.codes,[]);
+  p.geology.bedrock={name:'My supplied geology.kmz',count:3,siteUnit:'Custom 55b'};
+  assert.equal(core.restoreProject(p).geology.bedrock.source.id,'custom');
+  assert.equal(core.restoreProject(p).geology.bedrock.name,'My supplied geology.kmz');
+});
