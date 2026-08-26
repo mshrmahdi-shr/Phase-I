@@ -3,3 +3,4 @@ _site/
 mrd128-cache/
 mrd126-cache/
 test-results/
+.worktrees/
