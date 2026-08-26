@@ -3,8 +3,9 @@ import {normalizeCompanyProfile,validateCompanyProfile} from './company-profile.
 const TEMPLATE_SCHEMA_VERSION=1;
 const MAX_DECOMPRESSED_BYTES=8*1024*1024;
 const README='Phase I company template\n\nImport this file with Import Company Template, review the preview, and confirm replacement.\n';
-const ZIP_DATE=new Date(1980,0,1,0,0,0,0);
+const ZIP_DATE=new Date(Date.UTC(1980,0,1,0,0,0,0));
 const LOGO_FILES=new Map([['image/png','logo.png'],['image/jpeg','logo.jpg']]);
+const RESERVED_WINDOWS_NAMES=/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
 function plainObject(value,label){
   if(!value||typeof value!=='object'||Array.isArray(value)) throw new Error(`${label} must be a plain object.`);
@@ -31,8 +32,9 @@ function stableJson(value){
 }
 
 function safeFilename(companyName){
-  const base=companyName.normalize('NFKD').replace(/\p{Mark}/gu,'').toLowerCase()
-    .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,80)||'company';
+  let base=companyName.normalize('NFKD').replace(/\p{Mark}/gu,'').toLowerCase()
+    .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,80).replace(/-+$/g,'')||'company';
+  if(RESERVED_WINDOWS_NAMES.test(base)) base=`company-${base}`;
   return `${base}.phasei-template.zip`;
 }
 
@@ -88,7 +90,7 @@ function assertSignature(bytes,mime){
 async function checkedLogo(blob,metadata){
   if(!(blob instanceof Blob)) throw new Error('Template logo data must be a Blob.');
   if(blob.size!==metadata.size) throw new Error('Logo size does not match its metadata.');
-  if(blob.type&&blob.type!==metadata.mime) throw new Error('Logo Blob MIME type does not match its metadata.');
+  if(blob.type!==metadata.mime) throw new Error('Logo Blob MIME type does not match its metadata.');
   const bytes=new Uint8Array(await blob.arrayBuffer());
   assertSignature(bytes,metadata.mime);
   if(await sha256(bytes)!==metadata.sha256) throw new Error('Logo SHA-256 hash does not match its bytes.');
@@ -114,43 +116,138 @@ function decodedPath(value){
   return segments.join('/').toLowerCase();
 }
 
-function inspectEntries(zip){
-  const entries=[];
+function zipBytes(source){
+  if(source instanceof ArrayBuffer) return new Uint8Array(source);
+  return new Uint8Array(source.buffer,source.byteOffset,source.byteLength);
+}
+
+function findEndOfCentralDirectory(bytes,view){
+  const first=Math.max(0,bytes.byteLength-65_557);
+  for(let offset=bytes.byteLength-22;offset>=first;offset--){
+    if(view.getUint32(offset,true)!==0x06054b50) continue;
+    if(offset+22+view.getUint16(offset+20,true)===bytes.byteLength) return offset;
+  }
+  throw new Error('Company template ZIP has no valid central directory.');
+}
+
+function asciiPath(bytes){
+  let result='';
+  for(const byte of bytes){
+    if(byte<0x20||byte>0x7e) throw new Error('Template ZIP paths must use printable ASCII characters.');
+    result+=String.fromCharCode(byte);
+  }
+  return result;
+}
+
+function inspectCentralDirectory(source){
+  const bytes=zipBytes(source);
+  if(bytes.byteLength<22) throw new Error('Company template is not a valid ZIP archive.');
+  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+  const end=findEndOfCentralDirectory(bytes,view);
+  const disk=view.getUint16(end+4,true);
+  const centralDisk=view.getUint16(end+6,true);
+  const diskEntries=view.getUint16(end+8,true);
+  const entryCount=view.getUint16(end+10,true);
+  const centralSize=view.getUint32(end+12,true);
+  const centralOffset=view.getUint32(end+16,true);
+  if(disk!==0||centralDisk!==0||diskEntries!==entryCount) throw new Error('Multi-disk template ZIPs are not supported.');
+  if(entryCount===0xffff||centralSize===0xffffffff||centralOffset===0xffffffff) throw new Error('ZIP64 company templates are not supported.');
+  if(centralOffset+centralSize!==end) throw new Error('Company template ZIP has an invalid central directory boundary.');
+
+  const records=[];
   const names=new Set();
   let total=0;
-  for(const entry of Object.values(zip.files)){
-    const original=entry.unsafeOriginalName??entry.name;
+  let offset=centralOffset;
+  for(let index=0;index<entryCount;index++){
+    if(offset+46>end||view.getUint32(offset,true)!==0x02014b50) throw new Error('Company template ZIP has an invalid central directory record.');
+    const flags=view.getUint16(offset+8,true);
+    const compressedSize=view.getUint32(offset+20,true);
+    const declaredSize=view.getUint32(offset+24,true);
+    const nameLength=view.getUint16(offset+28,true);
+    const extraLength=view.getUint16(offset+30,true);
+    const commentLength=view.getUint16(offset+32,true);
+    const localOffset=view.getUint32(offset+42,true);
+    const next=offset+46+nameLength+extraLength+commentLength;
+    if(next>end) throw new Error('Company template ZIP has a truncated central directory record.');
+    if((flags&1)!==0) throw new Error('Encrypted company template ZIP entries are not supported.');
+    if(compressedSize===0xffffffff||declaredSize===0xffffffff||localOffset===0xffffffff) throw new Error('ZIP64 company template entries are not supported.');
+    const original=asciiPath(bytes.subarray(offset+46,offset+46+nameLength));
     const name=decodedPath(original);
     if(names.has(name)) throw new Error(`Template ZIP contains duplicate normalized path "${name}".`);
     names.add(name);
-    if(entry.dir) throw new Error(`Template ZIP contains unexpected directory "${name}".`);
-    const size=entry?._data?.uncompressedSize;
-    if(size!==undefined&&(!Number.isSafeInteger(size)||size<0)) throw new Error('Template ZIP contains invalid decompressed size metadata.');
-    if(size!==undefined){
-      total+=size;
-      if(total>MAX_DECOMPRESSED_BYTES) throw new Error('Template ZIP decompressed content exceeds 8 MiB.');
-    }
-    entries.push({name,entry,size});
+    total+=declaredSize;
+    if(total>MAX_DECOMPRESSED_BYTES) throw new Error('Template ZIP decompressed content exceeds 8 MiB.');
+    records.push({name,original,declaredSize});
+    offset=next;
   }
-  const logos=entries.filter(({name})=>name==='logo.png'||name==='logo.jpg');
+  if(offset!==end) throw new Error('Company template ZIP has unexpected central directory data.');
+  const logos=records.filter(({name})=>name==='logo.png'||name==='logo.jpg');
   if(logos.length>1) throw new Error('Template ZIP contains multiple logos.');
-  if(entries.some(({name})=>name.endsWith('.svg'))) throw new Error('SVG logos are not supported; use PNG or JPEG.');
+  if(records.some(({name})=>name.endsWith('.svg'))) throw new Error('SVG logos are not supported; use PNG or JPEG.');
   const allowed=new Set(['template.json','readme.txt','logo.png','logo.jpg']);
-  const unexpected=entries.find(({name})=>!allowed.has(name));
+  const unexpected=records.find(({name})=>!allowed.has(name));
   if(unexpected) throw new Error(`Template ZIP contains unexpected file "${unexpected.name}".`);
-  if(entries.length!==3||!names.has('template.json')||!names.has('readme.txt')||logos.length!==1){
+  if(records.length!==3||!names.has('template.json')||!names.has('readme.txt')||logos.length!==1){
     throw new Error('Template ZIP must contain template.json, README.txt, and exactly one PNG or JPEG logo.');
   }
-  return {entries,logo:logos[0],metadataTotal:total};
+  return {records,logo:logos[0]};
 }
 
-async function entryBytes(item,total){
-  const bytes=await item.entry.async('uint8array');
-  if(!Number.isSafeInteger(item.size)){
-    total.value+=bytes.byteLength;
-    if(total.value>MAX_DECOMPRESSED_BYTES) throw new Error('Template ZIP decompressed content exceeds 8 MiB.');
+function attachEntries(zip,records){
+  const entries=new Map();
+  for(const entry of Object.values(zip.files)){
+    const name=decodedPath(entry.unsafeOriginalName??entry.name);
+    if(entries.has(name)) throw new Error(`Template ZIP contains duplicate normalized path "${name}".`);
+    if(entry.dir) throw new Error(`Template ZIP contains unexpected directory "${name}".`);
+    entries.set(name,entry);
   }
-  return bytes;
+  if(entries.size!==records.length) throw new Error('Template ZIP records do not match the loaded archive.');
+  return records.map(record=>{
+    const entry=entries.get(record.name);
+    if(!entry) throw new Error(`Template ZIP record "${record.name}" could not be loaded.`);
+    return {...record,entry};
+  });
+}
+
+function entryBytes(item,total){
+  return new Promise((resolve,reject)=>{
+    const chunks=[];
+    let length=0;
+    let settled=false;
+    const stream=item.entry.internalStream('uint8array');
+    const fail=error=>{
+      if(settled) return;
+      settled=true;
+      chunks.length=0;
+      try{stream.pause();}catch{}
+      reject(error);
+    };
+    stream
+      .on('data',chunk=>{
+        if(settled) return;
+        if(chunk.byteLength>MAX_DECOMPRESSED_BYTES-total.value){
+          fail(new Error('Template ZIP decompressed content exceeds 8 MiB.'));
+          return;
+        }
+        total.value+=chunk.byteLength;
+        length+=chunk.byteLength;
+        chunks.push(chunk);
+      })
+      .on('error',fail)
+      .on('end',()=>{
+        if(settled) return;
+        if(length!==item.declaredSize){
+          fail(new Error(`Template ZIP entry "${item.name}" inflated size does not match its central directory record.`));
+          return;
+        }
+        settled=true;
+        const bytes=new Uint8Array(length);
+        let offset=0;
+        for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+        resolve(bytes);
+      })
+      .resume();
+  });
 }
 
 export async function exportCompanyTemplate({profile,assetStore,Zip=globalThis.JSZip}={}){
@@ -176,15 +273,17 @@ export async function inspectCompanyTemplate(file,{Zip=globalThis.JSZip}={}){
   const Constructor=zipConstructor(Zip);
   if(!(file instanceof Blob)&&!(file instanceof ArrayBuffer)&&!ArrayBuffer.isView(file)) throw new Error('Company template must be a ZIP Blob or byte buffer.');
   const source=file instanceof Blob?await file.arrayBuffer():file;
+  const preflight=inspectCentralDirectory(source);
   let archive;
   try{
     archive=await Constructor.loadAsync(source,{createFolders:false});
   }catch(error){
     throw new Error('Company template is not a valid ZIP archive.',{cause:error});
   }
-  const {entries,logo,metadataTotal}=inspectEntries(archive);
+  const entries=attachEntries(archive,preflight.records);
+  const logo=entries.find(item=>item.name===preflight.logo.name);
   const byName=new Map(entries.map(item=>[item.name,item]));
-  const total={value:metadataTotal};
+  const total={value:0};
   const templateBytes=await entryBytes(byName.get('template.json'),total);
   let template;
   try{
@@ -207,14 +306,15 @@ export async function inspectCompanyTemplate(file,{Zip=globalThis.JSZip}={}){
 
 export async function commitCompanyTemplate(candidate,{assetStore}={}){
   plainObject(candidate,'Company template candidate');
-  if(!assetStore||typeof assetStore.replace!=='function') throw new Error('An asset store with atomic replace support is required.');
+  if(!assetStore||typeof assetStore.put!=='function') throw new Error('An asset store with atomic put support is required.');
   const profile=checkedProfile(candidate.profile);
   const logoMetadata=normalizeMetadata(candidate.logoMetadata);
   assertMetadataMatchesProfile(logoMetadata,profile);
   await checkedLogo(candidate.logoBlob,logoMetadata);
-  await assetStore.replace({
-    removeIds:[profile.logoAssetId],
-    put:{metadata:logoMetadata,blob:candidate.logoBlob}
-  });
-  return profile;
+  if(typeof globalThis.crypto?.randomUUID!=='function') throw new Error('Secure random asset IDs are unavailable.');
+  const id=`company-logo-${globalThis.crypto.randomUUID()}`;
+  const persistedMetadata={...logoMetadata,id};
+  const persistedProfile=normalizeCompanyProfile({...profile,logoAssetId:id});
+  await assetStore.put({metadata:persistedMetadata,blob:candidate.logoBlob});
+  return persistedProfile;
 }

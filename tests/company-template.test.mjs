@@ -38,6 +38,53 @@ function readStore(asset){
   };
 }
 
+function centralDirectory(bytes){
+  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+  let eocd=-1;
+  for(let offset=bytes.length-22;offset>=Math.max(0,bytes.length-65_557);offset--){
+    if(view.getUint32(offset,true)===0x06054b50&&offset+22+view.getUint16(offset+20,true)===bytes.length){eocd=offset;break;}
+  }
+  assert.notEqual(eocd,-1);
+  const count=view.getUint16(eocd+10,true);
+  let offset=view.getUint32(eocd+16,true);
+  const records=[];
+  for(let index=0;index<count;index++){
+    assert.equal(view.getUint32(offset,true),0x02014b50);
+    const nameLength=view.getUint16(offset+28,true);
+    const recordLength=46+nameLength+view.getUint16(offset+30,true)+view.getUint16(offset+32,true);
+    const name=new TextDecoder().decode(bytes.subarray(offset+46,offset+46+nameLength));
+    records.push({name,offset,length:recordLength});
+    offset+=recordLength;
+  }
+  return {view,eocd,records};
+}
+
+async function duplicateCentralRecord(blob,name){
+  const bytes=new Uint8Array(await blob.arrayBuffer());
+  const {view,eocd,records}=centralDirectory(bytes);
+  const record=records.find(value=>value.name===name);
+  assert.ok(record);
+  const result=new Uint8Array(bytes.length+record.length);
+  result.set(bytes.subarray(0,eocd));
+  result.set(bytes.subarray(record.offset,record.offset+record.length),eocd);
+  result.set(bytes.subarray(eocd),eocd+record.length);
+  const output=new DataView(result.buffer);
+  const nextEocd=eocd+record.length;
+  output.setUint16(nextEocd+8,view.getUint16(eocd+8,true)+1,true);
+  output.setUint16(nextEocd+10,view.getUint16(eocd+10,true)+1,true);
+  output.setUint32(nextEocd+12,view.getUint32(eocd+12,true)+record.length,true);
+  return new Blob([result],{type:'application/zip'});
+}
+
+async function declareCentralSize(blob,name,size){
+  const bytes=new Uint8Array(await blob.arrayBuffer());
+  const {records}=centralDirectory(bytes);
+  const record=records.find(value=>value.name===name);
+  assert.ok(record);
+  new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength).setUint32(record.offset+24,size,true);
+  return new Blob([bytes],{type:'application/zip'});
+}
+
 async function zipBlob(files){
   const zip=new JSZip();
   for(const [name,value] of files) zip.file(name,value);
@@ -81,31 +128,56 @@ test('inspection does not mutate storage and commit atomically persists the insp
   let mutations=0;
   let replacement;
   const assetStore={
-    async replace(value){mutations++;replacement=value;}
+    async put(value){mutations++;replacement=value;}
   };
   const candidate=await inspectCompanyTemplate(await zipBlob(files),{Zip:JSZip});
   assert.equal(mutations,0);
 
   const saved=await commitCompanyTemplate(candidate,{assetStore});
   assert.equal(mutations,1);
-  assert.deepEqual(replacement.removeIds,['logo-1']);
-  assert.equal(replacement.put.metadata.sha256,candidate.logoMetadata.sha256);
-  assert.deepEqual(saved,candidate.profile);
+  assert.notEqual(saved.logoAssetId,candidate.profile.logoAssetId);
+  assert.equal(replacement.metadata.id,saved.logoAssetId);
+  assert.equal(replacement.metadata.sha256,candidate.logoMetadata.sha256);
+  assert.deepEqual(saved,{...candidate.profile,logoAssetId:saved.logoAssetId});
 });
 
-test('a failed commit leaves existing asset state and the candidate profile untouched',async()=>{
+test('an imported asset ID collision leaves the current profile and logo intact',async()=>{
   const {files}=await validFiles();
   const candidate=await inspectCompanyTemplate(await zipBlob(files),{Zip:JSZip});
-  const originalProfile=structuredClone(candidate.profile);
-  const oldAsset={id:'old-logo',contents:'old'};
+  const currentProfile={companyName:'Current Company',logoAssetId:'logo-1'};
+  const oldBlob=new Blob(['old logo'],{type:'image/png'});
+  const assets=new Map([['logo-1',{metadata:{id:'logo-1'},blob:oldBlob}]]);
   const assetStore={
-    current:oldAsset,
-    async replace(){throw new DOMException('quota','QuotaExceededError');}
+    async put(asset){
+      if(assets.has(asset.metadata.id)) throw new DOMException('collision','ConstraintError');
+      assets.set(asset.metadata.id,asset);
+    },
+    async replace({removeIds,put}){
+      for(const id of removeIds) assets.delete(id);
+      assets.set(put.metadata.id,put);
+    }
+  };
+
+  const saved=await commitCompanyTemplate(candidate,{assetStore});
+  assert.notEqual(saved.logoAssetId,'logo-1');
+  assert.equal(assets.get('logo-1').blob,oldBlob);
+  assert.equal(assets.get(saved.logoAssetId).metadata.sha256,candidate.logoMetadata.sha256);
+  assert.deepEqual(currentProfile,{companyName:'Current Company',logoAssetId:'logo-1'});
+});
+
+test('a failed collision-safe put leaves existing asset state and the candidate untouched',async()=>{
+  const {files}=await validFiles();
+  const candidate=await inspectCompanyTemplate(await zipBlob(files),{Zip:JSZip});
+  const original=structuredClone(candidate.profile);
+  let replacements=0;
+  const assetStore={
+    async put(){throw new DOMException('quota','QuotaExceededError');},
+    async replace(){replacements++;}
   };
 
   await assert.rejects(()=>commitCompanyTemplate(candidate,{assetStore}),{name:'QuotaExceededError'});
-  assert.deepEqual(assetStore.current,oldAsset);
-  assert.deepEqual(candidate.profile,originalProfile);
+  assert.equal(replacements,0);
+  assert.deepEqual(candidate.profile,original);
 });
 
 for(const [label,name] of [
@@ -129,6 +201,17 @@ test('rejects duplicate normalized paths',async()=>{
   await assert.rejects(async()=>inspectCompanyTemplate(await zipBlob(files),{Zip:JSZip}),/duplicate/i);
 });
 
+test('rejects exact duplicate manifest and logo records hidden by the JSZip file map',async()=>{
+  for(const name of ['template.json','logo.png']){
+    const {files}=await validFiles();
+    const archive=await zipBlob(files);
+    const duplicate=await duplicateCentralRecord(archive,name);
+    const loaded=await JSZip.loadAsync(await duplicate.arrayBuffer());
+    assert.equal(Object.keys(loaded.files).length,3);
+    await assert.rejects(()=>inspectCompanyTemplate(duplicate,{Zip:JSZip}),/duplicate/i);
+  }
+});
+
 test('rejects unexpected executable files and multiple logos',async()=>{
   const executable=await validFiles();
   executable.files.push(['run.exe','MZ']);
@@ -143,6 +226,13 @@ test('rejects more than 8 MiB of decompressed content from ZIP metadata',async()
   const {files}=await validFiles();
   files[2][1]=new Uint8Array(8*1024*1024);
   await assert.rejects(async()=>inspectCompanyTemplate(await zipBlob(files),{Zip:JSZip}),/8 MiB|decompressed|size/i);
+});
+
+test('aborts streamed inflation above 8 MiB when central metadata understates the actual bytes',async()=>{
+  const {files}=await validFiles();
+  files[2][1]=new Uint8Array(8*1024*1024);
+  const understated=await declareCentralSize(await zipBlob(files),'README.txt',1);
+  await assert.rejects(()=>inspectCompanyTemplate(understated,{Zip:JSZip}),/8 MiB/i);
 });
 
 test('rejects invalid JSON and unsupported template schemas',async()=>{
@@ -181,4 +271,34 @@ test('rejects a logo whose declared SHA-256 does not match its bytes',async()=>{
   data.logo.sha256='0'.repeat(64);
   files[0][1]=JSON.stringify(data);
   await assert.rejects(async()=>inspectCompanyTemplate(await zipBlob(files),{Zip:JSZip}),/SHA-256|hash/i);
+});
+
+test('rejects an untyped logo Blob even when its bytes and metadata describe PNG',async()=>{
+  const {profile,asset}=await fixture();
+  const untyped=new Blob([await asset.blob.arrayBuffer()]);
+  await assert.rejects(
+    ()=>exportCompanyTemplate({profile,assetStore:readStore({...asset,blob:untyped}),Zip:JSZip}),
+    /Blob MIME|MIME type/i
+  );
+});
+
+test('uses cross-time-zone deterministic timestamps and Windows-safe filenames',async()=>{
+  const previous=process.env.TZ;
+  try{
+    const outputs=[];
+    for(const [index,zone] of ['Pacific/Kiritimati','America/Toronto'].entries()){
+      process.env.TZ=zone;
+      const module=await import(`../src/company-template.mjs?timezone=${index}`);
+      const {profile,asset}=await fixture({companyName:'CON'});
+      outputs.push(await module.exportCompanyTemplate({profile,assetStore:readStore(asset),Zip:JSZip}));
+    }
+    assert.deepEqual(
+      new Uint8Array(await outputs[0].blob.arrayBuffer()),
+      new Uint8Array(await outputs[1].blob.arrayBuffer())
+    );
+    assert.equal(outputs[0].filename,'company-con.phasei-template.zip');
+  }finally{
+    if(previous===undefined) delete process.env.TZ;
+    else process.env.TZ=previous;
+  }
 });
