@@ -3,7 +3,7 @@
 Date: 2026-08-26
 Repository: `mshrmahdi-shr/Phase-I` only
 Baseline: `ad1814c2c6f087eb64a9a6d3069c0297b3fcb94d`
-Status: chat design approved; written specification awaiting user review.
+Status: chat design and written specification approved by the user (2026-08-26).
 
 ## 1. User-visible outcome
 
