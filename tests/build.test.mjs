@@ -11,6 +11,7 @@ test('Pages staging includes app modules but excludes repository and test depend
   await buildSite({output,revision:'test-commit'});
   assert.ok((await fs.readFile(path.join(output,'app.js'),'utf8')).length>0);
   assert.ok((await fs.stat(path.join(output,'src/geology.mjs'))).isFile());
+  for(const name of ['vendor/jspdf.umd.min.js','vendor/jspdf.LICENSE','assets/fonts/DejaVuSans.ttf','assets/fonts/LICENSE.txt'])assert.ok((await fs.stat(path.join(output,name))).isFile(),name);
   assert.equal(JSON.parse(await fs.readFile(path.join(output,'version.json'),'utf8')).revision,'test-commit');
-  for(const name of ['.git','node_modules','tests','scripts'])await assert.rejects(()=>fs.access(path.join(output,name)));
+  for(const name of ['.git','node_modules','tests','scripts','.superpowers','work','reference.pdf'])await assert.rejects(()=>fs.access(path.join(output,name)));
 });
