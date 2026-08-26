@@ -103,6 +103,10 @@ test('legacy Figure B defaults migrate without losing project or custom extents'
   assert.equal(core.restoreProject(p).name,'Kept');
   p.figures.B.extentMeters=150;
   assert.equal(core.restoreProject(p).figures.B.extentMeters,150);
+  p.figures.B.bounds={north:43.1,south:42.9,east:-78.9,west:-79.1};p.location={lat:43,lng:-79};
+  assert.deepEqual(core.restoreProject(p).figures.B.bounds,p.figures.B.bounds);
+  p.figures.B.bounds={north:42,south:43,east:-79.1,west:-78.9};
+  assert.throws(()=>core.restoreProject(p),/figure view/i);
   assert.throws(()=>core.restoreProject({name:'invalid'}));
 });
 

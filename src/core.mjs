@@ -56,6 +56,13 @@ export function validLocation(p){
     Number.isFinite(p.lat) && Number.isFinite(p.lng) && Math.abs(p.lat)<=90 && Math.abs(p.lng)<=180);
 }
 
+export function validFigureBounds(bounds,location=null){
+  if(!bounds||typeof bounds!=='object'||Array.isArray(bounds))return false;
+  const {north,south,east,west}=bounds;
+  if(![north,south,east,west].every(Number.isFinite)||north<=south||east<=west||south< -85||north>85||west< -180||east>180)return false;
+  return !location||(validLocation(location)&&location.lat>=south&&location.lat<=north&&location.lng>=west&&location.lng<=east);
+}
+
 // extentMeters is the minimum ground span; the longer sheet dimension adds context.
 export function figureBounds(location,extentMeters){
   if(!validLocation(location)||Math.abs(location.lat)>85||!Number.isFinite(extentMeters)||extentMeters<=0) throw new Error('Set a valid SITE and figure extent.');
@@ -74,6 +81,7 @@ export function restoreProject(value){
   p.figures=Object.fromEntries(Object.entries(figureDefaults()).map(([code,defaults])=>{
     const f={...defaults,...value.figures[code]};
     if(typeof f.title!=='string'||!Number.isFinite(f.extentMeters)||f.extentMeters<=0) throw new Error('The project contains invalid figure settings.');
+    if(f.bounds!=null&&!validFigureBounds(f.bounds,p.location))throw new Error(`Figure ${code} has an invalid saved figure view.`);
     if(code==='B'&&value.schemaVersion!==3&&f.extentMeters===250) f.extentMeters=100;
     return [code,f];
   }));

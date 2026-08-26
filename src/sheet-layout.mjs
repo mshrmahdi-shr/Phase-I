@@ -1,4 +1,4 @@
-import {figureBounds,figureDefaults} from './core.mjs';
+import {figureBounds,figureDefaults,validFigureBounds} from './core.mjs';
 
 const R=6378137,GROUND_R=6371000,DEG=Math.PI/180;
 export const MAX_RASTER_PIXELS=16000000;
@@ -8,6 +8,7 @@ export function groundWidth(bounds){
   const centre=unprojectPoint([0,(projectPoint([0,bounds.south])[1]+projectPoint([0,bounds.north])[1])/2])[1];
   return GROUND_R*(bounds.east-bounds.west)*DEG*Math.cos(centre*DEG);
 }
+export function groundHeight(bounds){return GROUND_R*(bounds.north-bounds.south)*DEG;}
 export function metricScale(bounds,pixelWidth,maxPixelWidth=160){
   const width=groundWidth(bounds);
   if(!Number.isFinite(width)||width<=0||!Number.isFinite(pixelWidth)||pixelWidth<=0||!Number.isFinite(maxPixelWidth)||maxPixelWidth<=0)throw new Error('A scale requires a valid final map extent.');
@@ -23,7 +24,13 @@ export function sheetGeometry(project,code,dpi=300){
   if(!defaults[code]||!figure)throw new Error('Choose a valid figure A-E.');
   if(!Number.isFinite(dpi)||dpi<72||dpi>300)throw new Error('Unsafe composition DPI; choose 300 DPI (or 150 DPI).');
   if(!Number.isFinite(figure.extentMeters)||figure.extentMeters<defaults[code].extentMeters)throw new Error(`Figure ${code} requires at least ${defaults[code].extentMeters} m.`);
-  const required=figureBounds(project.location,figure.extentMeters);
+  const minimum=figureBounds(project.location,defaults[code].extentMeters);
+  let required;
+  if(figure.bounds!=null){
+    if(!validFigureBounds(figure.bounds,project.location))throw new Error(`Figure ${code}: keep SITE inside the saved A3 view.`);
+    required={north:Math.max(figure.bounds.north,minimum.north),south:Math.min(figure.bounds.south,minimum.south),
+      east:Math.max(figure.bounds.east,minimum.east),west:Math.min(figure.bounds.west,minimum.west)};
+  }else required=figureBounds(project.location,figure.extentMeters);
   if(required.west<-180||required.east>180||required.south<-85||required.north>85)throw new Error('This sheet crosses the supported Mercator map bounds; reduce its extent.');
   const mapFrame={x:9.3,y:9.3,width:332.4,height:278.4};
   const sw=projectPoint([required.west,required.south]),ne=projectPoint([required.east,required.north]);
@@ -37,6 +44,14 @@ export function sheetGeometry(project,code,dpi=300){
   const bounds={west,south,east,north};
   return {code,dpi,page:{width:420,height:297,margin:7},sheet:{x:7,y:7,width:406,height:283},mapFrame,
     titleFrame:{x:343.7,y:9.3,width:67,height:278.4},bounds,projected,raster,scale:metricScale(bounds,raster.width,raster.width*55/mapFrame.width)};
+}
+export function captureFigureView(project,code,bounds){
+  const defaults=figureDefaults();
+  if(!defaults[code]||!project?.figures?.[code])throw new Error('Choose a valid figure A-E.');
+  if(!validFigureBounds(bounds,project.location))throw new Error('Keep SITE visible inside the map before saving this A3 view.');
+  const draft={...project,figures:{...project.figures,[code]:{...project.figures[code],extentMeters:defaults[code].extentMeters,bounds:{...bounds}}}};
+  const geometry=sheetGeometry(draft,code,150);
+  return {bounds:geometry.bounds,extentMeters:Math.max(defaults[code].extentMeters,Math.ceil(groundHeight(geometry.bounds)))};
 }
 export function mapPoint(point,geometry,width=geometry.raster.width,height=geometry.raster.height){
   const [x,y]=projectPoint(point),b=geometry.projected;
