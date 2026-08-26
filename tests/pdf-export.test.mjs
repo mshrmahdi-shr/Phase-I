@@ -14,6 +14,10 @@ function png(code){
   return 'data:image/png;base64,'+Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',deflateSync(Buffer.from([0,code.charCodeAt(0),100,150,128]))),chunk('IEND',Buffer.alloc(0))]).toString('base64');
 }
 function compositor(log,disposed){return async({code,geometry})=>{log.push(code);return {dataUrl:png(code),width:1,height:1,bounds:geometry.bounds,dispose:()=>disposed.push(code)};};}
+function decodePdfText(raw){
+  const cmap=new Map([...raw.matchAll(/<([0-9a-f]{4})><([0-9a-f]{4})>/gi)].map(m=>[m[1].toLowerCase(),String.fromCodePoint(parseInt(m[2],16))]));
+  return [...raw.matchAll(/<([0-9a-f]+)>\s*Tj/gi)].map(m=>m[1].match(/.{4}/g).map(g=>cmap.get(g.toLowerCase())||'?').join('')).join('\n');
+}
 async function engine(){const {exportCombinedPdf}=await import('../src/pdf-export.mjs');return exportCombinedPdf;}
 test('real PDF has only A/C/E pages in figure order, A3 media boxes, embedded text, and cleaned maps',async()=>{
   const exportPdf=await engine(),log=[],disposed=[];
@@ -29,8 +33,7 @@ test('real PDF has only A/C/E pages in figure order, A3 media boxes, embedded te
   assert.ok(!/\/JavaScript|\/Launch|\/URI\b/.test(raw),'user text never becomes executable PDF actions');
   assert.equal(result.filename,'26-123-figures-ACE.pdf');
   // Decode this PDF's uncompressed ToUnicode mapping and text operators (not a fixture PDF).
-  const cmap=new Map([...raw.matchAll(/<([0-9a-f]{4})><([0-9a-f]{4})>/gi)].map(m=>[m[1].toLowerCase(),String.fromCodePoint(parseInt(m[2],16))]));
-  const decoded=[...raw.matchAll(/<([0-9a-f]+)>\s*Tj/gi)].map(m=>m[1].match(/.{4}/g).map(g=>cmap.get(g.toLowerCase())||'?').join('')).join('\n');
+  const decoded=decodePdfText(raw);
   assert.match(decoded,/FIGURE A/);assert.match(decoded,/FIGURE C/);assert.match(decoded,/FIGURE E/);
   assert.match(decoded,/Page 1 of 3/);assert.match(decoded,/Page 3 of 3/);assert.match(decoded,/Café geological study/);
   const finalBaseline=Number([...raw.matchAll(/([\d.]+) ([\d.]+) Td/g)].at(-1)[2]);
@@ -80,6 +83,10 @@ test('cancellation during bitmap decoding rejects the complete PDF without retai
 test('Persian remains an embedded-font PDF and custom bedrock labels retain their supplied meaning',async()=>{
   const result=await (await engine())({project:{...project(),name:'پروژه محیط زیست'},codes:['E'],datasets,compose:compositor([],[])});
   assert.ok(result.blob.size>20000);
+  const raw=Buffer.from(await result.blob.arrayBuffer()).toString('latin1');
+  const decoded=decodePdfText(raw);
+  assert.match(decoded,/Custom bedrock/,'decoded PDF must retain the supplied custom bedrock label');
+  assert.ok(decoded.includes('ﺖﺴﯾﺯ ﻂﯿﺤﻣ ﻩﮊﻭﺮﭘ'),'decoded PDF must retain the expected jsPDF-shaped Persian Unicode');
 });
 test('geology prerequisites check final sheet coverage, SITE holes and closed nondegenerate geometry',async()=>{
   const exportPdf=await engine(),p=project(),compose=compositor([],[]);
