@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+  <name>MRD126-REV1 — Bedrock Geology With Lowlands</name>
+  <description>Ontario Geological Survey 2011. 1:250 000 scale bedrock geology of Ontario; Miscellaneous Release—Data 126-Revision 1. Compilation scale 1:250 000. Simplified source descriptor from the supplied MRD126-REV1 doc.kml; only its With Lowlands polygon branch is retained. The application loads the generated local mrd126-cache/manifest.json, not this remote NetworkLink. NetworkLink Regions must never select cache tiles; use actual polygon geometry bounds.</description>
+  <NetworkLink><name>Bedrock Geology With Lowlands — polygons</name><Link>
+    <href>https://www.geologyontario.mndm.gov.on.ca/mines/data/google/MRD126/files/paleo/doc.kml</href>
+  </Link></NetworkLink>
+</Document></kml>
