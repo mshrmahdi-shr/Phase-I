@@ -25,11 +25,15 @@ test('company profile normalization accepts ISO timestamps only',()=>{
   assert.throws(()=>normalizeCompanyProfile({...emptyCompanyProfile(),updatedAt:'August 26, 2026'}),/ISO timestamp/i);
 });
 
-test('profile snapshot contains only normalized data and does not share placement state',()=>{
+test('profile snapshot contains only normalized data and is immutable',()=>{
   const profile={...emptyCompanyProfile(),companyName:'ABC Engineering',unknown:{script:'alert(1)'},logoPlacement:{align:'left',scale:1.25}};
   const snapshot=snapshotCompanyProfile(profile);
   assert.deepEqual(snapshot.logoPlacement,{align:'left',scale:1.25});
   assert.equal('unknown' in snapshot,false);
   profile.logoPlacement.align='right';
+  assert.equal(snapshot.logoPlacement.align,'left');
+  assert.throws(()=>{snapshot.companyName='Changed Company';},TypeError);
+  assert.equal(snapshot.companyName,'ABC Engineering');
+  assert.throws(()=>{snapshot.logoPlacement.align='right';},TypeError);
   assert.equal(snapshot.logoPlacement.align,'left');
 });

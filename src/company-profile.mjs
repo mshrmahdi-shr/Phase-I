@@ -88,5 +88,7 @@ export function validateCompanyProfile(value,{requireLogo=true}={}){
 }
 
 export function snapshotCompanyProfile(value){
-  return structuredClone(normalizeCompanyProfile(value));
+  const snapshot=structuredClone(normalizeCompanyProfile(value));
+  Object.freeze(snapshot.logoPlacement);
+  return Object.freeze(snapshot);
 }
