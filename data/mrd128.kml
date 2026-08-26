@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2" xmlns:kml="http://www.opengis.net/kml/2.2" xmlns:atom="http://www.w3.org/2005/Atom">
+<Document>
+	<name>MRD128-Revised</name>
+	<open>1</open>
+	<LookAt>
+		<longitude>-79.5</longitude>
+		<latitude>44</latitude>
+		<altitude>0</altitude>
+		<range>750000</range>
+		<tilt>1.743751201793569e-014</tilt>
+		<heading>1.334503351371925e-014</heading>
+		<altitudeMode>relativeToGround</altitudeMode>
+	</LookAt>
+	<NetworkLink><name>Logo</name><Url><href>http://www.geologyontario.mndm.gov.on.ca/mines/data/google/ogsearth2/files/Logo/doc.kml</href></Url></NetworkLink>
+	<NetworkLink><name>Legend</name><open>1</open><Snippet maxLines="2"><![CDATA[<a href='http://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/Legend/MRD128_legend.pdf'>View Legend</a>]]></Snippet></NetworkLink>
+	<Folder>
+		<name>Surficial Geology of Southern Ontario</name>
+		<open>1</open>
+		<description><![CDATA[Ontario Geological Survey 2010. Surficial geology of Southern Ontario; Ontario Geological Survey, Miscellaneous Release--Data 128-REV]]></description>
+		<NetworkLink><name>Pits and Quarries</name><Url><href>http://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/pits/doc.kml</href></Url></NetworkLink>
+		<NetworkLink><name>Point Features</name><Url><href>http://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/points/doc.kml</href></Url></NetworkLink>
+		<NetworkLink><name>Linear Features</name><Url><href>http://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/lines/doc.kml</href></Url></NetworkLink>
+		<NetworkLink><name>Surficial Geology</name><description><![CDATA[Surficial geology unit polygons, which classify the earth's surface by the surface or near-surface geological material.]]></description><Url><href>http://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/polygons/doc.kml</href></Url></NetworkLink>
+		<NetworkLink><name>Surficial Geology Raster</name><visibility>1</visibility><Url><href>http://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/SurficialGeology/doc.kmz</href></Url></NetworkLink>
+	</Folder>
+</Document>
+</kml>
