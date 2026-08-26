@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {deflateSync,crc32} from 'node:zlib';
 import {createProject} from '../src/core.mjs';
+import {JSDOM} from 'jsdom';
 
 const project=()=>({...createProject({name:'Café geological study',projectNo:'26-123',address:'Toronto',date:'2026-08-26'}),location:{lat:43.7,lng:-79.3}});
 const feature={name:'Custom bedrock',description:'User supplied unit',unitCode:'54a',color:'#aaaaaa',fillOpacity:.6,polygon:[[-80,43],[-78,43],[-78,45],[-80,45],[-80,43]],holes:[]};
@@ -56,6 +57,25 @@ test('cancellation during composition disposes image and never resolves a PDF; s
     p.name='Changed in editor';assert.equal(args.project.name,'Café geological study');controller.abort();return compositor([],disposed)(args);
   }}),{name:'AbortError'});assert.deepEqual(disposed,['A']);
   await assert.rejects(exportPdf({project:p,codes:['A'],signal:controller.signal,compose:()=>{throw Error('must not compose');}}),{name:'AbortError'});
+});
+test('cancellation during bitmap decoding rejects the complete PDF without retaining the renderer',async t=>{
+  const exportPdf=await engine(),controller=new AbortController(),dom=new JSDOM('<!doctype html><body></body>');
+  const previous={document:globalThis.document,fetch:globalThis.fetch,createImageBitmap:globalThis.createImageBitmap};
+  let canvas,started,release,closed=0;
+  const decoding=new Promise(resolve=>{started=resolve;});
+  dom.window.HTMLCanvasElement.prototype.getContext=function(){canvas=this;return {fillRect(){}};};
+  globalThis.document=dom.window.document;
+  globalThis.fetch=async()=>({ok:true,headers:new Headers({'content-type':'image/png'}),blob:async()=>new Blob(['image'])});
+  globalThis.createImageBitmap=()=>new Promise(resolve=>{release=()=>resolve({width:1536,height:1286,close(){closed++;}});started();});
+  t.after(()=>{for(const [key,value] of Object.entries(previous)){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}dom.window.close();});
+  const outcome=exportPdf({project:project(),codes:['C'],signal:controller.signal}).then(result=>({result}),error=>({error}));
+  await decoding;controller.abort();let timer;
+  try{
+    const observed=await Promise.race([outcome,new Promise(resolve=>{timer=setTimeout(()=>resolve({pending:true}),50);})]);
+    assert.ok(!observed.pending,'combined export must not wait for an abandoned decoder');assert.equal(observed.error?.name,'AbortError');assert.equal(observed.result,undefined);
+    assert.equal(canvas.width,0);assert.equal(canvas.height,0);assert.equal(dom.window.document.body.children.length,0);
+  }finally{clearTimeout(timer);release();await outcome;}
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(closed,1);
 });
 test('Persian remains an embedded-font PDF and custom bedrock labels retain their supplied meaning',async()=>{
   const result=await (await engine())({project:{...project(),name:'پروژه محیط زیست'},codes:['E'],datasets,compose:compositor([],[])});

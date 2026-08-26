@@ -24,7 +24,7 @@ test('bounded compositor rejects pre-aborted work before allocating a browser su
   await assert.rejects(composeMap({project,code:'A',geometry}),/canvas|browser/i);
 });
 
-function browserSurface(t,{failure=false,controller,stall=false}={}){
+function browserSurface(t,{failure=false,controller,stall=false,decode}={}){
   let active=0,peak=0,decoded=0,closed=0,drawn=0,aborted=0;
   const ctx={fillRect(){},drawImage(){drawn++;},beginPath(){},moveTo(){},lineTo(){},closePath(){},fill(){},stroke(){},arc(){},setLineDash(){},strokeText(){},fillText(){}};
   const dom=new JSDOM('<!doctype html><body></body>'),document=dom.window.document;
@@ -33,7 +33,7 @@ function browserSurface(t,{failure=false,controller,stall=false}={}){
   dom.window.HTMLCanvasElement.prototype.toDataURL=function(){assert.ok(this.width>0&&this.height>0);assert.ok(document.body.contains(this),'rendering surface is attached independently of the editor');return 'data:image/jpeg;base64,AAAA';};
   const globals={document:globalThis.document,fetch:globalThis.fetch,createImageBitmap:globalThis.createImageBitmap};
   globalThis.document=document;
-  globalThis.createImageBitmap=async()=>{decoded++;return {width:256,height:256,close(){closed++;}};};
+  globalThis.createImageBitmap=async()=>{decoded++;const bitmap={width:256,height:256,close(){closed++;}};return decode?decode(bitmap):bitmap;};
   let count=0;
   globalThis.fetch=async(url,{signal})=>{
     const request=++count;active++;peak=Math.max(peak,active);
@@ -67,6 +67,24 @@ test('stalled image requests time out, abort siblings and remove their visible p
   const project={...createProject(),location:{lat:43.7,lng:-79.3}},geometry=sheetGeometry(project,'A'),surface=browserSurface(t,{stall:true});
   await assert.rejects(composeMap({project,code:'A',geometry,requestTimeoutMs:5}),/timed out/i);
   assert.equal(surface.stats().active,0);assert.equal(surface.canvas.width,0);assert.equal(surface.document.body.children.length,0);
+});
+for(const mode of ['timeout','cancel'])test(`${mode} during bitmap decoding promptly releases the raster and closes late bitmaps`,async t=>{
+  const {composeMap}=await import('../src/map-compositor.mjs'),{sheetGeometry}=await import('../src/sheet-layout.mjs');
+  const project={...createProject(),location:{lat:43.7,lng:-79.3}},geometry=sheetGeometry(project,'A'),controller=new AbortController();
+  const pending=[];let started;const decoding=new Promise(resolve=>{started=resolve;});
+  const surface=browserSurface(t,{decode:bitmap=>new Promise(resolve=>{pending.push(()=>resolve(bitmap));started();})});
+  const outcome=composeMap({project,code:'A',geometry,signal:controller.signal,requestTimeoutMs:mode==='timeout'?5:30000}).then(result=>({result}),error=>({error}));
+  await decoding;if(mode==='cancel')controller.abort();
+  let timer;
+  try{
+    const observed=await Promise.race([outcome,new Promise(resolve=>{timer=setTimeout(()=>resolve({pending:true}),50);})]);
+    assert.ok(!observed.pending,'cancellation/timeout must settle without waiting for the bitmap decoder');
+    if(mode==='cancel')assert.equal(observed.error?.name,'AbortError');else assert.match(observed.error?.message||'',/timed out/i);
+    assert.equal(surface.canvas.width,0);assert.equal(surface.canvas.height,0);assert.equal(surface.document.body.children.length,0);assert.equal(surface.stats().active,0);
+    assert.equal(surface.stats().closed,0,'the decoder has not produced a bitmap yet');
+  }finally{clearTimeout(timer);pending.forEach(resolve=>resolve());await outcome;}
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(pending.length>0);assert.equal(surface.stats().closed,pending.length,'each bitmap resolving after cancellation is closed exactly once');assert.equal(surface.stats().drawn,0);
 });
 test('map overlays retain holes, distinguish site/building outlines and anchor SITE with the shared transform',async()=>{
   const {paintMapOverlays}=await import('../src/map-compositor.mjs'),{sheetGeometry}=await import('../src/sheet-layout.mjs');

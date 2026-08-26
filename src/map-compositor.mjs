@@ -28,7 +28,20 @@ export function imageryPlan(code,geometry){
 async function decodeImage(blob,signal){
   throwIfAborted(signal);
   if(typeof createImageBitmap==='function'){
-    const bitmap=await createImageBitmap(blob);if(signal?.aborted){bitmap.close();throwIfAborted(signal);}return bitmap;
+    // Native bitmap decoding has no AbortSignal support. Abandon our wait as
+    // soon as it is cancelled, but retain a handler to close any late result.
+    return new Promise((resolve,reject)=>{
+      let abandoned=false;
+      const abort=()=>{abandoned=true;signal?.removeEventListener('abort',abort);reject(new DOMException('Export cancelled.','AbortError'));};
+      signal?.addEventListener('abort',abort,{once:true});
+      Promise.resolve().then(()=>{throwIfAborted(signal);return createImageBitmap(blob);}).then(bitmap=>{
+        signal?.removeEventListener('abort',abort);
+        if(abandoned)bitmap.close();else resolve(bitmap);
+      },error=>{
+        signal?.removeEventListener('abort',abort);if(!abandoned)reject(error);
+      });
+      if(signal?.aborted)abort();
+    });
   }
   const url=URL.createObjectURL(blob),img=new Image();
   try{
