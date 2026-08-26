@@ -12,6 +12,8 @@ let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v
 let active='A',draw=null,pts=[],siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,exportBusy=false;
 let locationRevision=0;
 const geoCoverage={surficial:null,bedrock:null},geoReady={surficial:false,bedrock:false},geoRequest={surficial:0,bedrock:0};
+// Imports supersede dataset commits, but only an official request owns its load button.
+const officialLoading={surficial:0,bedrock:0};
 const geo={surficial:[],bedrock:[]}, geoSource={surficial:null,bedrock:null};
 const map=L.map('map',{zoomSnap:0,fadeAnimation:false,zoomAnimation:false}).setView([43.75,-79.3],11);
 const baseSources={street:sourceForFigure('A'),satellite:sourceForFigure('B'),toporama:sourceForFigure('C')};
@@ -142,6 +144,7 @@ async function loadMRD(user=true){
   if(!project.location){if(user)status('geologyStatus','Locate the property first.','error');return;}
   const ticket=++geoRequest.surficial,revision=locationRevision;
   let bounds;try{bounds=requiredGeologyBounds('surficial',true);}catch(error){status('geologyStatus',error.message,'error');return;}
+  officialLoading.surficial=ticket;
   geoReady.surficial=false;preflight.refresh();exportDialog?.refresh();loadingButton('loadMrd128',true);
   status('geologyStatus','Loading local OGS MRD128 cache…');
   try{
@@ -153,7 +156,7 @@ async function loadMRD(user=true){
     if(!result.features.length)throw Error('No cached geology polygons cover this location.');
     commitDataset(result.features,'surficial',{id:'MRD128-REV',name:'MRD128 / MRD128-REV, Surficial Geology of Southern Ontario',credits:'Ontario Geological Survey'},result.docs,bounds);
   }catch(e){if(ticket===geoRequest.surficial)status('geologyStatus',`MRD128 load failed: ${e.message} Check the published cache or import a polygon KML/KMZ.`,'error');}
-  finally{if(ticket===geoRequest.surficial){loadingButton('loadMrd128',false);preflight.refresh();exportDialog?.refresh();}}
+  finally{if(ticket===officialLoading.surficial){officialLoading.surficial=0;loadingButton('loadMrd128',false);preflight.refresh();exportDialog?.refresh();}}
 }
 $('loadBedrock').onclick=()=>loadOfficialBedrock(true);
 async function loadOfficialBedrock(user=true){
@@ -161,6 +164,7 @@ async function loadOfficialBedrock(user=true){
   if(!project.location){if(user)status('geologyStatus','Locate the property first.','error');return;}
   const ticket=++geoRequest.bedrock,revision=locationRevision;
   let bounds;try{bounds=requiredGeologyBounds('bedrock',true);}catch(error){status('geologyStatus',error.message,'error');return;}
+  officialLoading.bedrock=ticket;
   geoReady.bedrock=false;preflight.refresh();exportDialog?.refresh();loadingButton('loadBedrock',true);
   status('geologyStatus','Loading local MRD126-REV1 With Lowlands geometry cache…');
   try{
@@ -171,7 +175,7 @@ async function loadOfficialBedrock(user=true){
     if(!result.features.length)throw Error('No cached bedrock polygons cover this extent.');
     commitDataset(result.features,'bedrock',result.source,result.docs,result.coverage);
   }catch(error){if(ticket===geoRequest.bedrock)status('geologyStatus',`MRD126 Bedrock load failed: ${error.message} Check the published cache or import a polygon KML/KMZ.`,'error');}
-  finally{if(ticket===geoRequest.bedrock){loadingButton('loadBedrock',false);preflight.refresh();exportDialog?.refresh();}}
+  finally{if(ticket===officialLoading.bedrock){officialLoading.bedrock=0;loadingButton('loadBedrock',false);preflight.refresh();exportDialog?.refresh();}}
 }
 $('uploadGeology').onchange=async e=>{
   const file=e.target.files?.[0];if(!file||exportBusy)return;

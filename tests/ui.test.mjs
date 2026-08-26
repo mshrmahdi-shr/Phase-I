@@ -62,7 +62,7 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   $('exportPdf').click();assert.equal($('exportDialog').hidden,false);
   $('selectAllReady').click();assert.equal($('downloadPdf').textContent,'Download PDF (2 sheets)');
   $('cancelExport').click();
-  await t.test('official Bedrock commits source only for the current SITE and custom reload stays explicit',async()=>{
+  await t.test('official Bedrock commits source only for the current SITE and custom reload stays explicit',async t=>{
     const feature={name:'55B — Georgian Bay Formation',description:'Official test unit',unitCode:'55b',color:'#99bb88',fillOpacity:.6,
       polygon:[[-80,43],[-79,43],[-79,44],[-80,44],[-80,43]],holes:[]};
     const manifest={version:1,source:'MRD126-REV1',complete:true,cachedAt:'2026-08-26T12:00:00Z',counts:{expected:1,saved:1,failed:0,pending:0},
@@ -108,6 +108,40 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
       assert.equal($('drawState').textContent,'Drawing site','cancellation must preserve unfinished editor drawing');
       assert.ok(Object.values(map._layers).some(layer=>layer instanceof L.Polyline&&!(layer instanceof L.Polygon)&&layer.getLatLngs().length===1));
     }finally{releaseLoad();$('cancelExport').click();await exporting;dom.window.HTMLCanvasElement.prototype.getContext=nativeContext;}
+
+    function deferred(){let resolve;const promise=new Promise(done=>resolve=done);return {promise,resolve};}
+    function gateOfficialRequests(gates){
+      let next=0;
+      globalThis.fetch=async url=>{
+        if(url.endsWith('manifest.json')||url.endsWith('mrd128.kml'))await gates[next++].promise;
+        return {ok:true,text:async()=>text,json:async()=>url.endsWith('manifest.json')?manifest:{features:[feature]}};
+      };
+    }
+    for(const [kind,buttonId] of [['bedrock','loadBedrock'],['surficial','loadMrd128']]){
+      await t.test(`custom ${kind} import supersedes dataset commit without stranding its official reload button`,async()=>{
+        const officialGate=deferred(),importGate=deferred();gateOfficialRequests([officialGate]);
+        const loading=$(buttonId).onclick();assert.equal($(buttonId).disabled,true);
+        $('geologyKind').value=kind;
+        const importing=$('uploadGeology').onchange({target:{files:[{name:`replacement-${kind}.kml`,text:()=>importGate.promise}]}});
+        officialGate.resolve();await loading;
+        try{
+          assert.equal($(buttonId).disabled,false,'the completed official request must release its own button even after import supersedes its data');
+        }finally{importGate.resolve(text);await importing;}
+        const saved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology[kind];
+        assert.equal(saved.source.id,'custom');assert.match(saved.name,new RegExp(`replacement-${kind}`));
+      });
+      await t.test(`older ${kind} request cannot unlock a newer official request after custom import`,async()=>{
+        const olderGate=deferred(),newerGate=deferred();gateOfficialRequests([olderGate,newerGate]);
+        const older=$(buttonId).onclick();
+        $('geologyKind').value=kind;
+        await $('uploadGeology').onchange({target:{files:[{name:`latest-${kind}.kml`,text:async()=>text}]}});
+        const newer=$(buttonId).onclick();olderGate.resolve();await older;
+        try{assert.equal($(buttonId).disabled,true,'the newer official request still owns the loading button');}
+        finally{newerGate.resolve();await newer;}
+        assert.equal($(buttonId).disabled,false);
+        assert.equal(JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology[kind].source.id,kind==='bedrock'?'MRD126-REV1':'MRD128-REV');
+      });
+    }
   });
   await t.test('native preview refuses imported extents below the shared figure minimum',async()=>{
     choose('A');p.figures.A.extentMeters=100;
