@@ -33,6 +33,9 @@ jobs:
       - name: Build local MRD128 cache
         working-directory: _site
         run: node ../scripts/cache-mrd128.mjs
+      - name: Build complete MRD126 With Lowlands cache
+        working-directory: _site
+        run: node ../scripts/cache-mrd126.mjs
       - uses: actions/configure-pages@v5
         with:
           enablement: true

@@ -5,9 +5,11 @@ Static, local-project mapping app. Live site: https://mshrmahdi-shr.github.io/Ph
 ## Stage 1 readiness
 
 - Address lookup, adjustable SITE, separate site/building boundaries.
-- A–E minimum ground spans: 500 m, 100 m, 1 km, 2 km, 20 km. The longer map dimension and imagery zoom limits may add context; use the scale bar for the actual displayed scale.
+- A–E minimum ground spans: 500 m, 100 m, 1 km, 2 km, 20 km. The map aspect adds context; imagery can be overzoomed without increasing its source detail. A shared segmented metric bar shows approximate ground scale from the final extent.
 - MRD128 polygons fetched at build time and read from the same-origin Pages cache, including adjacent KMZ tiles and polygon holes. SITE detection and visible-unit legends use the actual polygon geometry.
-- Surficial unit descriptions and approximate RGB swatches transcribed from the supplied OGS MRD128 legend PDF. The PDF uses CMYK; RGB values match its Poppler rendering. Map fill is translucent. Bedrock imports retain their own names, descriptions and KML colors.
+- Official MRD126-REV1 Bedrock uses the supplied With Lowlands polygon chain, compiled at 1:250,000. The complete cache manifest selects files from actual geometry bounds and preserves holes. Official legend mappings are separate from custom imports, which retain their names, descriptions and KML colors.
+- Figure C uses NRCan Toporama WMS 1.1.1, EPSG:3857, layer `WMS-Toporama`. A/D/E use OpenStreetMap and B uses Esri World Imagery. Editor source failures are visible; there is no silent fallback. Preview and PDF enforce their assigned figure sources.
+- **Export PDF** selects ready figures independently of the editor and downloads one combined A3 PDF in A–E order. Progress, cancellation and all-or-nothing source/text checks prevent partial exports.
 - A3 landscape preview with live map, SITE, boundaries, scale, north arrow, relevant legend, project fields and credits. Missing project/geology data or missing visible tiles blocks printing.
 - JSON project backup/import and local browser saving. Geology files must be reloaded after reopening a saved project; saved unit metadata alone never satisfies print validation.
 
@@ -21,34 +23,43 @@ pnpm test
 pnpm build
 cd _site
 node ../scripts/cache-mrd128.mjs
+node ../scripts/cache-mrd126.mjs
 python -m http.server 8000
 ```
 
-Open `http://localhost:8000`. The cache build needs network access to OGS and downloads roughly 177 MB. Do not commit `_site`, `mrd128-cache` or `node_modules`.
+Open `http://localhost:8000`. Serve the built `_site`, which includes the packaged PDF library and Unicode font. Both cache builds require network access to OGS: MRD128 is roughly 177 MB; MRD126 produces about 57 MB across 468 data files plus its manifest. Both builders fail on incomplete data. Do not commit `_site`, either generated cache, private reference PDFs or `node_modules`.
+
+## Combined PDF workflow
+
+1. Enter project name, number, date and address; locate SITE. Entered project numbers are preserved verbatim in project data and sheets; only download filenames are sanitized.
+2. B requires a completed site boundary. D/E require loaded geometry, coverage of the fitted sheet and a detected SITE unit. Use the official load buttons or import self-contained polygon KML/KMZ. Selecting D/E loads missing official data; custom datasets are never silently replaced with official data.
+3. Press **Export PDF**. Check specific ready rows or **Select all ready**. Incomplete rows explain what is missing. Saved checkbox preferences are revalidated, and invalid selections are removed.
+4. Press **Download PDF (N sheets)**. Editing is locked during composition. Cancel or Escape stops the batch; no partial PDF downloads. On success, the browser downloads one file with original figure letters and separate page counters.
+5. Use 150 or 300 composition DPI. Existing 600 DPI preferences are retained but rejected with a choose-300 message because the A3 raster exceeds safe limits. Higher composition DPI does not create source detail. Unicode is embedded with DejaVu Sans; unsupported characters and text that cannot fit at readable sizes explicitly block export.
+
+Source images still need an internet connection and CORS access when the dialog reports ready. Geology metadata in saved JSON is not loaded geometry. Reload datasets after reopening a project. Imported geometry and project fields are not uploaded by PDF composition.
 
 ## Print workflow
 
 1. Enter project name, number, date and address; locate/adjust SITE.
-2. Choose a figure. Figure B needs a completed site boundary. D needs loaded MRD128 and a detected site unit. E needs a self-contained bedrock polygon KML/KMZ and a detected site unit.
-3. Press **Print A3 / PDF**. Correct every preflight message. Wait until the full-size preview says **Ready**.
+2. Choose a figure. Figure B needs a completed site boundary. D/E need loaded geology, fitted-sheet coverage and a detected site unit.
+3. Press **Single-sheet A3 preview**. Correct every preflight message. The assigned figure source is used even after a temporary editor basemap change. Wait until the full-size preview says **Ready**; missing tiles or overflowing title/legend/source fields block native printing.
 4. Press **Print / Save PDF**. Choose **A3**, **landscape**, **100% scale**, and disable browser headers/footers. Check the print dialog before saving. The sheet is 406 × 283 mm within 7 mm page margins.
 5. After printing, the map returns to the editor. **Back to map** also cancels the preview safely.
 
-The A3 preview and native print invocation have been tested in the app browser; a saved native PDF and physical printer output still need operator acceptance in the intended browser. Browser print settings, tile-provider availability and source resolution affect the output. Selecting 300/600 DPI does not create additional image detail.
+Native browser print settings and physical printer output still need operator acceptance in the intended browser. Tile-provider availability and source resolution affect both export paths. Composition DPI does not change native browser print settings.
 
 ## Known limitations / next stage
 
 - Uploaded aerials currently retain the file and year, but do **not** yet display as aligned map overlays or print imagery. Alignment, large-image storage and full date support remain to be implemented.
 - DXF currently contains site/building boundary polylines in longitude/latitude degrees only. No SITE text, projected coordinate system, IMAGE/IMAGEDEF entities or raster ZIP package yet. It is not an accepted AutoCAD report package.
-- Figure C is street context, not verified topographic elevation data.
-- Bedrock parsing has synthetic regression coverage. Acceptance with the user's actual Bedrock KML/KMZ is still required.
-- Geology imports must contain polygons themselves, not only external NetworkLinks. No automatic bedrock data service is configured.
+- Geology imports must contain polygons themselves, not only external NetworkLinks; the official source buttons use their complete same-origin caches instead.
 - Browser storage is limited and not a backup. Export project JSON regularly; large aerial files can exceed browser quota.
 - Address and basemap services require internet and are external services. No address autocomplete, bulk geocoding or tile prefetch is performed. Check imagery rights, date and suitability before using a figure in a report.
 - This software does not replace professional review of site location, geology or environmental conclusions.
 
 ## Deployment
 
-The existing GitHub Pages workflow on `main` installs locked test dependencies, runs tests, stages an allowlist of public files, builds the complete OGS cache, then uploads/deploys `_site`. Incomplete caches fail the build. `version.json` identifies the deployed commit and build time. Tests, dependencies, private reference PDFs and source-control metadata are not published.
+The existing GitHub Pages workflow on `main` installs locked dependencies, runs tests, stages an allowlist of public files, builds both complete OGS caches, then uploads/deploys `_site`. Incomplete caches fail before upload. `version.json` identifies the deployed commit and build time. Only the required jsPDF runtime/license and public font/license are packaged; tests, development dependencies, private reference PDFs and source-control metadata are not published.
 
 On a failed deployment, inspect the specific Actions error before changing or rerunning anything. A green local test run is not proof of a successful Pages deployment.

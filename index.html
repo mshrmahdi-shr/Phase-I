@@ -20,7 +20,7 @@
       <section>
         <div class="section-heading"><h2>Project</h2><span id="saveState" class="badge">Local</span></div>
         <label>Project name<input id="projectName" placeholder="Phase I ESA – 92 Orchard Road" /></label>
-        <div class="two-col"><label>Project no.<input id="projectNo" placeholder="FE 26-15876" /></label><label>Date<input id="projectDate" type="date" /></label></div>
+        <div class="two-col"><label>Project no.<input id="projectNo" placeholder="26-15876" /></label><label>Date<input id="projectDate" type="date" /></label></div>
         <label>Address<div class="inline-input"><input id="address" placeholder="92 Orchard Road, Ajax, ON" /><button id="searchAddress" class="primary">Find</button></div></label>
         <div id="searchStatus" class="helper">Uses OpenStreetMap/Nominatim for address lookup.</div>
         <div id="saveMessage" class="helper" role="status">Saved projects stay in this browser. Export Project for a backup.</div>
@@ -35,7 +35,7 @@
       <section>
         <div class="section-heading"><h2>Imagery</h2><span class="badge">High-res source</span></div>
         <label>Current / historical aerial<input id="uploadAerial" type="file" accept="image/*,.tif,.tiff" /></label>
-        <div class="two-col"><label>Year<input id="aerialYear" type="number" min="1900" max="2100" placeholder="1960" /></label><label>DPI<select id="dpi"><option>300</option><option>600</option></select></label></div>
+        <div class="two-col"><label>Year<input id="aerialYear" type="number" min="1900" max="2100" placeholder="1960" /></label><label>Composition DPI<select id="dpi"><option>150</option><option selected>300</option><option value="600">600 (too large for A3)</option></select></label></div>
         <button id="openEarth">Open site in Google Earth</button>
         <div id="imageryStatus" class="helper">Upload the highest-resolution original available.</div>
       </section>
@@ -43,24 +43,28 @@
       <section>
         <div class="section-heading"><h2>Geology</h2><span class="badge">OGS MRD128</span></div>
         <button id="loadMrd128" class="primary wide">Load official MRD128 Surficial</button>
+        <button id="loadBedrock" class="primary wide">Load official MRD126 Bedrock</button>
         <p class="helper">OGS MRD128-REV polygons load from this site's cached KML/KMZ, with the supplied official legend. Reload geology after reopening a project.</p>
         <label>Or import KML/KMZ<input id="uploadGeology" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" /></label>
-        <select id="geologyKind"><option value="surficial">Surficial geology</option><option value="bedrock">Bedrock geology</option></select>
+        <label>Import dataset type<select id="geologyKind"><option value="surficial">Surficial geology</option><option value="bedrock">Bedrock geology</option></select></label>
+        <p class="helper">Official Bedrock: MRD126-REV1 With Lowlands, compiled at 1:250,000. Custom imports keep their own legend; use the official button to replace them.</p>
         <div id="geologyStatus" class="helper">Locate the property first, then load MRD128.</div>
       </section>
 
       <section>
         <div class="section-heading"><h2>Export</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
-        <div class="button-grid"><button id="printA3" class="primary">Print A3 / PDF</button><button id="exportDxf">Export DXF</button><button id="exportJson">Export Project</button><label class="file-button">Import Project<input id="importJson" type="file" accept="application/json,.json" /></label></div>
+        <button id="exportPdf" class="primary wide">Export PDF</button>
+        <div class="button-grid"><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button><button id="exportJson">Export Project</button><label class="file-button">Import Project<input id="importJson" type="file" accept="application/json,.json" /></label></div>
         <div id="printValidation" class="validation-panel" role="alert" hidden></div>
         <p class="helper">A3 opens a full-size preview before printing. DPI is a preference, not a guarantee of source resolution. DXF currently exports boundaries only; no raster package yet.</p>
       </section>
     </aside>
 
     <section class="workspace">
-      <div class="map-toolbar"><div class="segmented"><button class="basemap active" data-map="street">Street</button><button class="basemap" data-map="satellite">Satellite</button></div><div class="coords" id="coords">No site selected</div></div>
+      <div class="map-toolbar"><div class="segmented"><button class="basemap active" data-map="street">Street</button><button class="basemap" data-map="satellite">Satellite</button><button class="basemap" data-map="toporama">Toporama</button></div><div class="coords" id="coords">No site selected</div></div>
       <div id="mapHome" class="map-home"><div id="map"></div></div>
-      <div class="map-note">Figures use their specified minimum ground span. A3 includes the live map, SITE, boundaries, scale and legend. Figure C currently uses street context, not a verified elevation layer.</div>
+      <div class="map-note" id="mapSourceStatus" role="status"></div>
+      <div class="map-note">Assigned output sources: A/D/E OpenStreetMap, B Esri imagery, C NRCan Toporama. Preview and PDF use those sources. Composition DPI does not increase source detail.</div>
     </section>
 
     <aside class="panel figures-panel">
@@ -70,6 +74,18 @@
       <div class="aerial-card"><div class="section-heading"><h3>Historical aerials</h3><span class="badge" id="aerialCount">0</span></div><div id="aerialList" class="helper">No historical imagery added.</div></div>
     </aside>
   </main>
+
+  <div id="exportDialog" hidden role="dialog" aria-modal="true" aria-labelledby="exportHeading" aria-describedby="exportHelp">
+    <section class="export-panel">
+      <h2 id="exportHeading">Export combined PDF</h2>
+      <p id="exportHelp">Select ready figures. Each selected figure becomes one A3 landscape sheet, in A–E order. Readiness checks project data; source-image failures block the complete download.</p>
+      <div class="export-selection-actions"><button id="selectAllReady">Select all ready</button><button id="clearExport">Clear selection</button></div>
+      <div id="exportRows"></div>
+      <div id="exportProgress" role="status" aria-live="polite"></div>
+      <progress id="exportMeter" aria-label="Current export phase progress" hidden></progress>
+      <div class="export-footer"><button id="cancelExport">Cancel</button><button id="downloadPdf" class="primary" disabled>Download PDF (0 sheets)</button></div>
+    </section>
+  </div>
 
   <div id="printPreview" hidden role="dialog" aria-modal="true" aria-label="A3 print preview">
     <div class="print-toolbar"><button id="closePrint">Back to map</button><span id="printStatus" role="status"></span><button id="confirmPrint" class="primary" disabled>Print / Save PDF</button></div>

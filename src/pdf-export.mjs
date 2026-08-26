@@ -147,7 +147,7 @@ export async function exportCombinedPdf({project,codes,datasets={},dpi=300,onPro
   }
   throwIfAborted(signal);const buffer=doc.output('arraybuffer');
   await new Promise(resolve=>setTimeout(resolve,0));throwIfAborted(signal);
-  const filename=`${(snapshot.project.name||'phase-i').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}-figures-${selected.join('')}.pdf`;
+  const filename=`${(snapshot.project.projectNo||'phase-i').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}-figures-${selected.join('')}.pdf`;
   const result={blob:new Blob([buffer],{type:'application/pdf'}),filename,pageCount:sheets.length};
   onProgress({phase:'complete',completed:sheets.length,total:sheets.length});throwIfAborted(signal);return result;
 }

@@ -27,7 +27,7 @@ test('real PDF has only A/C/E pages in figure order, A3 media boxes, embedded te
   assert.match(raw,/\/ToUnicode/);assert.match(raw,/\/FontFile2/);
   assert.equal((raw.match(/\/Subtype \/Image/g)||[]).length,6,'each page has a unique color image and alpha image');
   assert.ok(!/\/JavaScript|\/Launch|\/URI\b/.test(raw),'user text never becomes executable PDF actions');
-  assert.ok(result.filename.endsWith('.pdf'));
+  assert.equal(result.filename,'26-123-figures-ACE.pdf');
   // Decode this PDF's uncompressed ToUnicode mapping and text operators (not a fixture PDF).
   const cmap=new Map([...raw.matchAll(/<([0-9a-f]{4})><([0-9a-f]{4})>/gi)].map(m=>[m[1].toLowerCase(),String.fromCodePoint(parseInt(m[2],16))]));
   const decoded=[...raw.matchAll(/<([0-9a-f]+)>\s*Tj/gi)].map(m=>m[1].match(/.{4}/g).map(g=>cmap.get(g.toLowerCase())||'?').join('')).join('\n');
