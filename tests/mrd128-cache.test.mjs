@@ -7,10 +7,10 @@ test('cachePathForMrd128Url keeps files inside the MRD128 mirror', () => {
   assert.equal(cachePathForMrd128Url(u),'mrd128-cache/polygons/doc.kml');
 });
 
-test('rewriteMrd128Href maps official absolute links to local mirrored paths', () => {
+test('rewriteMrd128Href keeps the local mirror folder name in nested links', () => {
   const base='http://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/polygons/doc.kml';
   const child='http://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/polygons/43/-79/doc.kml';
-  assert.equal(rewriteMrd128Href(child, base),'./43/-79/doc.kml');
+  assert.equal(rewriteMrd128Href(child, base),'../../mrd128-cache/polygons/43/-79/doc.kml');
 });
 
 test('extractHrefValues finds network-link hrefs from KML', () => {
@@ -22,6 +22,6 @@ test('rewriteKmlLinks rewrites mirrored MRD128 polygon hrefs but leaves unrelate
   const base='https://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/polygons/doc.kml';
   const kml='<kml><href>https://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/polygons/tiles/a.kml</href><href>https://example.com/x.kml</href></kml>';
   const out=rewriteKmlLinks(kml,base);
-  assert.match(out,/<href>\.\/tiles\/a\.kml<\/href>/);
+  assert.match(out,/<href>\.\.\/\.\.\/mrd128-cache\/polygons\/tiles\/a\.kml<\/href>/);
   assert.match(out,/<href>https:\/\/example\.com\/x\.kml<\/href>/);
 });
