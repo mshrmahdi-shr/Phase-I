@@ -98,12 +98,14 @@ function validateIdList(value,label){
 export function createAssetStore({indexedDB=globalThis.indexedDB,databaseName='phase-i-assets-v1'}={}){
   if(!indexedDB||typeof indexedDB.open!=='function') throw new Error('IndexedDB is unavailable.');
   if(typeof databaseName!=='string'||!databaseName.trim()) throw new Error('Asset database name must be a non-empty string.');
-  let databasePromise;
+  let databaseAttempt;
+  let databaseVersion=DATABASE_VERSION;
 
   function openDatabase(){
-    if(databasePromise) return databasePromise;
-    databasePromise=new Promise((resolve,reject)=>{
-      const request=indexedDB.open(databaseName,DATABASE_VERSION);
+    if(databaseAttempt) return databaseAttempt.promise;
+    const attempt={abandoned:false,settled:false};
+    attempt.promise=new Promise((resolve,reject)=>{
+      const request=indexedDB.open(databaseName,databaseVersion);
       request.onupgradeneeded=()=>{
         const database=request.result;
         if(!database.objectStoreNames.contains(ASSET_STORE)) database.createObjectStore(ASSET_STORE,{keyPath:'id'});
@@ -111,14 +113,45 @@ export function createAssetStore({indexedDB=globalThis.indexedDB,databaseName='p
       };
       request.onsuccess=()=>{
         const database=request.result;
-        database.onversionchange=()=>database.close();
+        databaseVersion=Math.max(databaseVersion,database.version);
+        if(attempt.abandoned||databaseAttempt!==attempt){
+          database.close();
+          if(!attempt.settled){
+            attempt.settled=true;
+            resolve(database);
+          }
+          return;
+        }
+        database.onversionchange=event=>{
+          if(Number.isSafeInteger(event.newVersion)) databaseVersion=Math.max(DATABASE_VERSION,event.newVersion);
+          database.close();
+          attempt.abandoned=true;
+          if(databaseAttempt===attempt) databaseAttempt=undefined;
+        };
+        attempt.settled=true;
         resolve(database);
       };
-      request.onerror=event=>reject(storageError(event));
-      request.onblocked=()=>reject(new Error('Asset database upgrade is blocked by another open page.'));
+      request.onerror=event=>{
+        if(attempt.settled) return;
+        attempt.settled=true;
+        attempt.abandoned=true;
+        if(databaseAttempt===attempt) databaseAttempt=undefined;
+        reject(storageError(event));
+      };
+      request.onblocked=()=>{
+        if(attempt.settled) return;
+        attempt.settled=true;
+        attempt.abandoned=true;
+        if(databaseAttempt===attempt) databaseAttempt=undefined;
+        reject(new Error('Asset database upgrade is blocked by another open page.'));
+      };
     });
-    databasePromise.catch(()=>{databasePromise=undefined;});
-    return databasePromise;
+    databaseAttempt=attempt;
+    attempt.promise.catch(()=>{
+      attempt.abandoned=true;
+      if(databaseAttempt===attempt) databaseAttempt=undefined;
+    });
+    return attempt.promise;
   }
 
   async function mutate(id,operation){
@@ -269,10 +302,11 @@ export function createAssetStore({indexedDB=globalThis.indexedDB,databaseName='p
     },
 
     async close(){
-      const current=databasePromise;
-      databasePromise=undefined;
+      const current=databaseAttempt;
+      databaseAttempt=undefined;
       if(!current) return;
-      try{(await current).close();}catch{}
+      current.abandoned=true;
+      try{(await current.promise).close();}catch{}
     }
   };
 }

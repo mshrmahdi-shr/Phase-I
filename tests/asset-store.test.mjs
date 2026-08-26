@@ -22,6 +22,13 @@ function store(indexedDB=new IDBFactory()){
   return value;
 }
 
+function opened(request){
+  return new Promise((resolve,reject)=>{
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(request.error);
+  });
+}
+
 test.after(async()=>{
   await Promise.all(created.map(value=>value.close()));
 });
@@ -177,4 +184,60 @@ test('estimate reports repository asset count and byte total',async()=>{
   const estimate=await repository.estimate();
   assert.equal(estimate.assetCount,2);
   assert.equal(estimate.totalBytes,7);
+});
+
+test('versionchange closes and evicts the cached connection so later reads reopen',async()=>{
+  const indexedDB=new IDBFactory();
+  const databaseName=`test-${crypto.randomUUID()}`;
+  const repository=createAssetStore({indexedDB,databaseName});
+  created.push(repository);
+  await repository.put(asset('logo-1'));
+
+  const upgraded=await opened(indexedDB.open(databaseName,2));
+  upgraded.close();
+
+  assert.equal((await repository.get('logo-1')).metadata.id,'logo-1');
+});
+
+test('a blocked open that succeeds late closes its abandoned connection',async()=>{
+  const factory=new IDBFactory();
+  const databaseName=`test-${crypto.randomUUID()}`;
+  const blocker=await opened(factory.open(databaseName,1));
+  let resolveLate;
+  let opens=0;
+  const lateSuccess=new Promise(resolve=>{resolveLate=resolve;});
+  const indexedDB={
+    open(name,version){
+      opens++;
+      const request=factory.open(name,opens===1?2:version);
+      if(opens===1) request.addEventListener('success',()=>resolveLate(request.result));
+      return request;
+    }
+  };
+  const repository=createAssetStore({indexedDB,databaseName});
+  created.push(repository);
+
+  await assert.rejects(()=>repository.get('missing'),/blocked/i);
+  blocker.close();
+  const abandonedDatabase=await lateSuccess;
+
+  assert.throws(()=>abandonedDatabase.transaction('assets','readonly'),{name:'InvalidStateError'});
+  assert.equal(await repository.get('missing'),null);
+});
+
+test('a synchronous open failure is evicted so a later operation can retry',async()=>{
+  const factory=new IDBFactory();
+  let attempts=0;
+  const indexedDB={
+    open(...args){
+      attempts++;
+      if(attempts===1) throw new DOMException('temporary open failure','UnknownError');
+      return factory.open(...args);
+    }
+  };
+  const repository=store(indexedDB);
+
+  await assert.rejects(()=>repository.get('missing'),{name:'UnknownError'});
+  assert.equal(await repository.get('missing'),null);
+  assert.equal(attempts,2);
 });
