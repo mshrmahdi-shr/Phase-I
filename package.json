@@ -11,6 +11,7 @@
   },
   "packageManager": "pnpm@11.19.0",
   "devDependencies": {
+    "fake-indexeddb": "6.2.5",
     "jsdom": "26.1.0",
     "jspdf": "4.2.1",
     "jszip": "3.10.1",
