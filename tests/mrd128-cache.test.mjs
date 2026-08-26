@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cachePathForMrd128Url, rewriteMrd128Href, extractHrefValues, rewriteKmlLinks, shouldFollowSurficialLink } from '../src/mrd128-cache.mjs';
+import * as cache from '../src/mrd128-cache.mjs';
 
 test('cachePathForMrd128Url keeps files inside the MRD128 mirror', () => {
   const u='http://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/polygons/doc.kml';
@@ -29,4 +30,11 @@ test('rewriteKmlLinks rewrites mirrored MRD128 polygon hrefs but leaves unrelate
 test('shouldFollowSurficialLink follows mirrored MRD128 KMZ tiles', () => {
   assert.equal(shouldFollowSurficialLink({name:'-79.5_43.5_-79_44',href:'../../mrd128-cache/polygons/files/-79.5_43.5_-79_44.kmz'}),true);
   assert.equal(shouldFollowSurficialLink({name:'Logo',href:'../Logo/doc.kml'}),false);
+});
+
+test('a partial or truncated MRD128 cache cannot be reported ready for deployment',()=>{
+  assert.throws(()=>cache.assertCompleteCache({saved:93,failed:1,pending:0}));
+  assert.throws(()=>cache.assertCompleteCache({saved:93,failed:0,pending:2}));
+  assert.throws(()=>cache.assertCompleteCache({saved:1,failed:0,pending:0}));
+  assert.doesNotThrow(()=>cache.assertCompleteCache({saved:93,failed:0,pending:0}));
 });

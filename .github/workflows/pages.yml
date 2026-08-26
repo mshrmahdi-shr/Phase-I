@@ -18,17 +18,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - name: Install test dependencies
+        run: pnpm install --frozen-lockfile
       - name: Run core tests
-        run: node --test tests/*.test.mjs
+        run: pnpm test
+      - name: Stage public files
+        run: node scripts/build-site.mjs
       - name: Build local MRD128 cache
-        run: node scripts/cache-mrd128.mjs
+        working-directory: _site
+        run: node ../scripts/cache-mrd128.mjs
       - uses: actions/configure-pages@v5
         with:
           enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-# print-preflight deploy trigger

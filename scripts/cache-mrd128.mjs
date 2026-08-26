@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { extractHrefValues, cachePathForMrd128Url, rewriteKmlLinks } from '../src/mrd128-cache.mjs';
+import { extractHrefValues, cachePathForMrd128Url, rewriteKmlLinks, assertCompleteCache } from '../src/mrd128-cache.mjs';
 
 const ROOT='https://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/polygons/doc.kml';
 const MAX_DOCS=600;
@@ -66,7 +66,7 @@ while(queue.length && seen.size<MAX_DOCS){
   for(const children of results) for(const child of children) if(!seen.has(child) && queue.length<MAX_DOCS) queue.push(child);
 }
 
-if(!saved) throw new Error('MRD128 mirror produced no files');
+assertCompleteCache({saved,failed,pending:queue.length});
 
 try{
   const indexPath='data/mrd128.kml';

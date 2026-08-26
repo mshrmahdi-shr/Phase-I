@@ -1,5 +1,9 @@
 const MARK='/mines/data/google/mrd128/';
 
+export function assertCompleteCache({saved,failed,pending}){
+  if(saved<2||failed>0||pending>0)throw new Error(`Incomplete MRD128 cache: ${saved} saved, ${failed} failed, ${pending} pending.`);
+}
+
 export function extractHrefValues(kml=''){
   return [...String(kml).matchAll(/<href>\s*([^<]+?)\s*<\/href>/gi)].map(m=>m[1].trim());
 }

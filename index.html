@@ -23,6 +23,7 @@
         <div class="two-col"><label>Project no.<input id="projectNo" placeholder="FE 26-15876" /></label><label>Date<input id="projectDate" type="date" /></label></div>
         <label>Address<div class="inline-input"><input id="address" placeholder="92 Orchard Road, Ajax, ON" /><button id="searchAddress" class="primary">Find</button></div></label>
         <div id="searchStatus" class="helper">Uses OpenStreetMap/Nominatim for address lookup.</div>
+        <div id="saveMessage" class="helper" role="status">Saved projects stay in this browser. Export Project for a backup.</div>
       </section>
 
       <section>
@@ -42,7 +43,7 @@
       <section>
         <div class="section-heading"><h2>Geology</h2><span class="badge">OGS MRD128</span></div>
         <button id="loadMrd128" class="primary wide">Load official MRD128 Surficial</button>
-        <p class="helper">Built-in index: OGS MRD128-REV. It follows the official Surficial Geology network link and applies the supplied MRD128 legend.</p>
+        <p class="helper">OGS MRD128-REV polygons load from this site's cached KML/KMZ, with the supplied official legend. Reload geology after reopening a project.</p>
         <label>Or import KML/KMZ<input id="uploadGeology" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" /></label>
         <select id="geologyKind"><option value="surficial">Surficial geology</option><option value="bedrock">Bedrock geology</option></select>
         <div id="geologyStatus" class="helper">Locate the property first, then load MRD128.</div>
@@ -51,13 +52,15 @@
       <section>
         <div class="section-heading"><h2>Export</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
         <div class="button-grid"><button id="printA3" class="primary">Print A3 / PDF</button><button id="exportDxf">Export DXF</button><button id="exportJson">Export Project</button><label class="file-button">Import Project<input id="importJson" type="file" accept="application/json,.json" /></label></div>
+        <div id="printValidation" class="validation-panel" role="alert" hidden></div>
+        <p class="helper">A3 opens a full-size preview before printing. DPI is a preference, not a guarantee of source resolution. DXF currently exports boundaries only; no raster package yet.</p>
       </section>
     </aside>
 
     <section class="workspace">
       <div class="map-toolbar"><div class="segmented"><button class="basemap active" data-map="street">Street</button><button class="basemap" data-map="satellite">Satellite</button></div><div class="coords" id="coords">No site selected</div></div>
       <div id="mapHome" class="map-home"><div id="map"></div></div>
-      <div class="map-note">A3 print now uses the actual live map, SITE/boundaries, scale, north arrow and geology legend.</div>
+      <div class="map-note">Figures use their specified minimum ground span. A3 includes the live map, SITE, boundaries, scale and legend. Figure C currently uses street context, not a verified elevation layer.</div>
     </section>
 
     <aside class="panel figures-panel">
@@ -68,23 +71,25 @@
     </aside>
   </main>
 
-  <section id="printSheet" class="print-sheet" aria-hidden="true">
+  <div id="printPreview" hidden role="dialog" aria-modal="true" aria-label="A3 print preview">
+    <div class="print-toolbar"><button id="closePrint">Back to map</button><span id="printStatus" role="status"></span><button id="confirmPrint" class="primary" disabled>Print / Save PDF</button></div>
+    <section id="printSheet" class="print-sheet">
     <div id="printMapHost" class="sheet-map"></div>
     <div class="sheet-titleblock">
-      <div class="tb-project"><b>PROJECT NAME AND ADDRESS</b><span id="printProject">—</span></div>
-      <div><b>PROJECT NO.</b><span id="printNo">—</span></div>
-      <div><b>DATE</b><span id="printDate">—</span></div>
-      <div><b>SCALE</b><span id="printScale">AS SHOWN</span></div>
-      <div><b>NORTH</b><span>N</span></div>
-      <div><b>FIGURE</b><span id="printFigure">A</span></div>
-      <div class="tb-title"><b>TITLE</b><span id="printTitle">SITE LOCATION MAP</span></div>
+      <div class="tb-brand"><strong>PHASE I ESA</strong><span>ENVIRONMENTAL SITE ASSESSMENT</span></div>
+      <div class="tb-north"><b>NORTH</b><span>N</span><span class="print-north-arrow">▲</span></div>
+      <div class="tb-legend"><b>LEGEND</b><div id="printLegend"></div></div>
+      <div class="tb-project"><b>PROJECT NAME AND ADDRESS</b><span id="printProject">—</span><span id="printAddress">—</span></div>
+      <div class="tb-title"><b>FIGURE <span id="printFigure">A</span></b><span id="printTitle">SITE LOCATION MAP</span></div>
+      <div class="tb-details"><div><b>PROJECT NO.</b><span id="printNo">—</span></div><div><b>DATE</b><span id="printDate">—</span></div><div><b>SCALE</b><span id="printScale">AS SHOWN</span></div></div>
       <div class="tb-source"><b>SOURCE</b><span id="printSource">—</span></div>
     </div>
-  </section>
+    </section>
+  </div>
+  <p id="printGuard">Use the application's Print A3 / PDF button to validate and prepare a complete map before printing.</p>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script type="module" src="app.js"></script>
-  <script type="module" src="print-preflight.mjs"></script>
 </body>
 </html>

@@ -41,3 +41,27 @@ test('Figure E requires loaded bedrock polygons and a detected site unit', () =>
 test('complete Figure A project passes validation', () => {
   assert.deepEqual(validatePrintRequirements({project:baseProject(),figureCode:'A'}),[]);
 });
+
+test('print rejects blank, null and out-of-range SITE coordinates', () => {
+  for (const location of [{lat:null,lng:null},{lat:'',lng:''},{lat:91,lng:0},{lat:43,lng:181},{lat:NaN,lng:-79}]) {
+    const errors=validatePrintRequirements({project:{...baseProject(),location}});
+    assert.ok(errors.some(e=>e.code==='location'), JSON.stringify(location));
+  }
+});
+
+test('Figure B rejects open, degenerate and invalid boundary rings', () => {
+  for (const siteBoundary of [
+    [[0,0],[1,0],[1,1],[0,1]],
+    [[0,0],[0,0],[0,0],[0,0]],
+    [[0,0],[1,1],[2,2],[0,0]],
+    [[0,0],[1,1],[0,1],[1,0],[0,0]],
+    [[null,0],[1,0],[1,1],[null,0]]
+  ]) {
+    assert.ok(validatePrintRequirements({project:{...baseProject(),siteBoundary},figureCode:'B'}).some(e=>e.code==='site-boundary'));
+  }
+});
+
+test('print rejects an impossible project date and unknown figure', () => {
+  assert.ok(validatePrintRequirements({project:{...baseProject(),date:'2026-02-30'}}).some(e=>e.code==='project-date'));
+  assert.ok(validatePrintRequirements({project:baseProject(),figureCode:'X'}).some(e=>e.code==='figure'));
+});

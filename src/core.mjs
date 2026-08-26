@@ -1,7 +1,7 @@
 export function figureDefaults(){
   return {
     A:{title:'SITE LOCATION MAP',extentMeters:500,status:'Not Started'},
-    B:{title:'CURRENT AERIAL / SITE PLAN',extentMeters:250,status:'Not Started'},
+    B:{title:'CURRENT AERIAL / SITE PLAN',extentMeters:100,status:'Not Started'},
     C:{title:'TOPOGRAPHICAL MAP',extentMeters:1000,status:'Not Started'},
     D:{title:'SURFICIAL GEOLOGY',extentMeters:2000,status:'Not Started'},
     E:{title:'BEDROCK GEOLOGY',extentMeters:20000,status:'Not Started'}
@@ -29,14 +29,76 @@ export function closeRing(points){
   return out;
 }
 
-export function pointInPolygon(point, polygon){
+function onSegment([x,y], [ax,ay], [bx,by]){
+  const dx=bx-ax, dy=by-ay, length=Math.hypot(dx,dy);
+  if(!length) return Math.hypot(x-ax,y-ay)<1e-10;
+  return Math.abs((x-ax)*dy-(y-ay)*dx)<=1e-10*length &&
+    x>=Math.min(ax,bx)-1e-10 && x<=Math.max(ax,bx)+1e-10 &&
+    y>=Math.min(ay,by)-1e-10 && y<=Math.max(ay,by)+1e-10;
+}
+
+export function pointInPolygon(point, polygon, holes=[]){
+  if(!Array.isArray(polygon)||polygon.length<3) return false;
+  if(holes.some(h=>pointInPolygon(point,h))) return false;
   const [x,y]=point; let inside=false;
   for(let i=0,j=polygon.length-1;i<polygon.length;j=i++){
     const [xi,yi]=polygon[i], [xj,yj]=polygon[j];
+    if(onSegment(point,polygon[i],polygon[j])) return true;
     const intersects=((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/((yj-yi)||Number.EPSILON)+xi);
     if(intersects) inside=!inside;
   }
   return inside;
+}
+
+export function validLocation(p){
+  return Boolean(p && typeof p.lat==='number' && typeof p.lng==='number' &&
+    Number.isFinite(p.lat) && Number.isFinite(p.lng) && Math.abs(p.lat)<=90 && Math.abs(p.lng)<=180);
+}
+
+// extentMeters is the minimum ground span; the longer sheet dimension adds context.
+export function figureBounds(location,extentMeters){
+  if(!validLocation(location)||Math.abs(location.lat)>85||!Number.isFinite(extentMeters)||extentMeters<=0) throw new Error('Set a valid SITE and figure extent.');
+  const dLat=extentMeters/2/6371000*180/Math.PI;
+  const dLng=dLat/Math.cos(location.lat*Math.PI/180);
+  return {north:location.lat+dLat,south:location.lat-dLat,east:location.lng+dLng,west:location.lng-dLng};
+}
+
+export function restoreProject(value){
+  if(!value||typeof value!=='object'||Array.isArray(value)||!value.figures) throw new Error('This file is not a Phase I project.');
+  const p={...createProject(),...value};
+  for(const key of ['name','projectNo','date','address']) if(typeof p[key]!=='string') throw new Error('Project fields must contain text.');
+  if(p.location!==null&&!validLocation(p.location)) throw new Error('The project has invalid SITE coordinates.');
+  for(const key of ['siteBoundary','buildingBoundary']) if(!Array.isArray(p[key])||(p[key].length&&!validBoundary(p[key]))) throw new Error('The project contains an invalid boundary.');
+  if(!Array.isArray(p.historical)) throw new Error('The project has an invalid aerial image list.');
+  p.figures=Object.fromEntries(Object.entries(figureDefaults()).map(([code,defaults])=>{
+    const f={...defaults,...value.figures[code]};
+    if(typeof f.title!=='string'||!Number.isFinite(f.extentMeters)||f.extentMeters<=0) throw new Error('The project contains invalid figure settings.');
+    if(code==='B'&&value.schemaVersion!==3&&f.extentMeters===250) f.extentMeters=100;
+    return [code,f];
+  }));
+  p.geology={surficial:null,bedrock:null,...(p.geology&&typeof p.geology==='object'?p.geology:{})};
+  p.schemaVersion=3;
+  return p;
+}
+
+export function validBoundary(ring){
+  if(!Array.isArray(ring)||ring.length<4||ring.length>5000) return false;
+  if(!ring.every(p=>Array.isArray(p)&&p.length>=2&&validLocation({lng:p[0],lat:p[1]}))) return false;
+  const [x,y]=ring[0], last=ring.at(-1);
+  if(x!==last[0]||y!==last[1]) return false;
+  const vertices=ring.slice(0,-1);
+  if(new Set(vertices.map(p=>p.join(','))).size!==vertices.length) return false;
+  let area=0;
+  for(let i=0;i<ring.length-1;i++) area+=(ring[i][0]-x)*(ring[i+1][1]-y)-(ring[i+1][0]-x)*(ring[i][1]-y);
+  if(Math.abs(area)<1e-14) return false;
+  const cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+  for(let i=0;i<vertices.length;i++) for(let j=i+2;j<vertices.length;j++){
+    if(i===0&&j===vertices.length-1) continue;
+    const a=ring[i],b=ring[i+1],c=ring[j],d=ring[j+1];
+    if(onSegment(a,c,d)||onSegment(b,c,d)||onSegment(c,a,b)||onSegment(d,a,b)||
+      (cross(a,b,c)*cross(a,b,d)<0&&cross(c,d,a)*cross(c,d,b)<0)) return false;
+  }
+  return true;
 }
 
 function dxfPolyline(layer, points){
@@ -52,56 +114,56 @@ export function buildDxf({siteBoundary=[],buildingBoundary=[]}={}){
 }
 
 const MRD128_LEGEND = {
-  '21': {title:'Man-made deposits', detail:'Fill, sewage lagoon, landfill, urban development', color:'#8f2fa6'},
-  '20': {title:'Organic deposits', detail:'Peat, muck, marl', color:'#8d8d8d'},
-  '19': {title:'Modern alluvial deposits', detail:'Clay, silt, sand, gravel, may contain organic remains', color:'#f08b52'},
-  '18': {title:'Colluvial deposits', detail:'Boulders, scree, talus, undifferentiated landslide materials', color:'#e8b085'},
-  '17': {title:'Eolian deposits', detail:'Fine to very fine sand and silt', color:'#f6df66'},
-  '16': {title:'Coarse-textured marine deposits', detail:'Sand, gravel, minor silt and clay', color:'#f5a623'},
-  '16a': {title:'Coarse-textured marine deposits', detail:'Deltaic deposits', color:'#f5a623'},
-  '16b': {title:'Coarse-textured marine deposits', detail:'Littoral deposits', color:'#f5a623'},
-  '16c': {title:'Coarse-textured marine deposits', detail:'Foreshore and basinal deposits', color:'#f5a623'},
-  '15': {title:'Fine-textured marine deposits', detail:'Silt and clay, minor sand and gravel', color:'#5965a8'},
-  '14': {title:'Coarse-textured lacustrine deposits', detail:'Sand, gravel, minor silt and clay', color:'#f2df2b'},
-  '14a': {title:'Coarse-textured lacustrine deposits', detail:'Deltaic deposit', color:'#f2df2b'},
-  '14b': {title:'Coarse-textured lacustrine deposits', detail:'Littoral deposits', color:'#f2df2b'},
-  '14c': {title:'Coarse-textured lacustrine deposits', detail:'Foreshore and basinal deposits', color:'#f2df2b'},
-  '13': {title:'Fine-textured lacustrine deposits', detail:'Silt and clay, minor sand and gravel', color:'#4bb8b6'},
-  '12': {title:'Older alluvial deposits', detail:'Clay, silt, sand, gravel, may contain organic remains', color:'#a96d38'},
-  '11': {title:'Coarse-textured glaciomarine deposits', detail:'Sand, gravel, minor silt and clay', color:'#dfc92d'},
-  '11a': {title:'Coarse-textured glaciomarine deposits', detail:'Deltaic deposits', color:'#dfc92d'},
-  '11b': {title:'Coarse-textured glaciomarine deposits', detail:'Littoral deposits', color:'#dfc92d'},
-  '11c': {title:'Coarse-textured glaciomarine deposits', detail:'Foreshore and basinal deposits', color:'#dfc92d'},
-  '10': {title:'Fine-textured glaciomarine deposits', detail:'Silt and clay, minor sand and gravel', color:'#54aaa9'},
-  '10a': {title:'Fine-textured glaciomarine deposits', detail:'Massive to well laminated', color:'#54aaa9'},
-  '10b': {title:'Fine-textured glaciomarine deposits', detail:'Interbedded silt and clay and gritty, pebbly flow till and rainout deposits', color:'#54aaa9'},
-  '9': {title:'Coarse-textured glaciolacustrine deposits', detail:'Sand, gravel, minor silt and clay', color:'#f5e83b'},
-  '9a': {title:'Coarse-textured glaciolacustrine deposits', detail:'Deltaic deposits', color:'#f5e83b'},
-  '9b': {title:'Coarse-textured glaciolacustrine deposits', detail:'Littoral deposits', color:'#f5e83b'},
-  '9c': {title:'Coarse-textured glaciolacustrine deposits', detail:'Foreshore and basinal deposits', color:'#f5e83b'},
-  '8': {title:'Fine-textured glaciolacustrine deposits', detail:'Silt and clay, minor sand and gravel', color:'#7cc8d8'},
-  '8a': {title:'Fine-textured glaciolacustrine deposits', detail:'Massive to well laminated', color:'#7cc8d8'},
-  '8b': {title:'Fine-textured glaciolacustrine deposits', detail:'Interbedded silt and clay and gritty, pebbly flow till and rainout deposits', color:'#7cc8d8'},
-  '7': {title:'Glaciofluvial deposits', detail:'River deposits and delta topset facies', color:'#c99630'},
-  '7a': {title:'Glaciofluvial deposits', detail:'Sandy deposits', color:'#c99630'},
-  '7b': {title:'Glaciofluvial deposits', detail:'Gravelly deposits', color:'#c99630'},
-  '6': {title:'Ice-contact stratified deposits', detail:'Sand and gravel, minor silt, clay and till', color:'#e4a031'},
-  '6a': {title:'Ice-contact stratified deposits', detail:'In moraines, eskers, kames and crevasse fills', color:'#e4a031'},
-  '6b': {title:'Ice-contact stratified deposits', detail:'In subaquatic fans', color:'#e4a031'},
-  '5': {title:'Till', detail:'Silty sand to sand-textured till', color:'#6ea847'},
-  '5a': {title:'Till', detail:'Silty sand to sand-textured till on Precambrian terrain', color:'#a7c85a'},
-  '5b': {title:'Till', detail:'Stone-poor, sandy silt to silty sand-textured till on Paleozoic terrain', color:'#97be49'},
-  '5c': {title:'Till', detail:'Stony, sandy silt to silty sand-textured till on Paleozoic terrain', color:'#7cb43e'},
-  '5d': {title:'Till', detail:'Clay to silt-textured till (derived from glaciolacustrine deposits or shale)', color:'#4aa64c'},
-  '5e': {title:'Till', detail:'Undifferentiated older tills, may include stratified deposits', color:'#138948'},
-  '4': {title:'Bedrock-drift complex in Paleozoic terrain', detail:'Primarily till cover', color:'#a268a9'},
-  '4a': {title:'Bedrock-drift complex in Paleozoic terrain', detail:'Primarily till cover', color:'#a268a9'},
-  '4b': {title:'Bedrock-drift complex in Paleozoic terrain', detail:'Primarily stratified drift cover', color:'#a268a9'},
-  '3': {title:'Paleozoic bedrock', detail:'Sedimentary (Paleozoic) bedrock', color:'#a66ca4'},
-  '2': {title:'Bedrock-drift complex in Precambrian terrain', detail:'Primarily till cover', color:'#de9c94'},
-  '2a': {title:'Bedrock-drift complex in Precambrian terrain', detail:'Primarily till cover', color:'#de9c94'},
-  '2b': {title:'Bedrock-drift complex in Precambrian terrain', detail:'Primarily stratified drift cover', color:'#de9c94'},
-  '1': {title:'Precambrian bedrock', detail:'Precambrian bedrock', color:'#de7e79'}
+  '21': {title:'Man-made deposits', detail:'Fill, sewage lagoon, landfill, urban development', color:'#6c2893'},
+  '20': {title:'Organic deposits', detail:'Peat, muck, marl', color:'#b2b1b1'},
+  '19': {title:'Modern alluvial deposits', detail:'Clay, silt, sand, gravel, may contain organic remains', color:'#b9652d'},
+  '18': {title:'Colluvial deposits', detail:'Boulders, scree, talus, undifferentiated landslide materials', color:'#811d8f'},
+  '17': {title:'Eolian deposits', detail:'Fine to very fine sand and silt', color:'#f7f2b8'},
+  '16': {title:'Coarse-textured marine deposits', detail:'Sand, gravel, minor silt and clay', color:'#e9d613'},
+  '16a': {title:'Coarse-textured marine deposits', detail:'Deltaic deposits', color:'#e9d613'},
+  '16b': {title:'Coarse-textured marine deposits', detail:'Littoral deposits', color:'#e9d613'},
+  '16c': {title:'Coarse-textured marine deposits', detail:'Foreshore and basinal deposits', color:'#e9d613'},
+  '15': {title:'Fine-textured marine deposits', detail:'Silt and clay, minor sand and gravel', color:'#2e3696'},
+  '14': {title:'Coarse-textured lacustrine deposits', detail:'Sand, gravel, minor silt and clay', color:'#f4ea18'},
+  '14a': {title:'Coarse-textured lacustrine deposits', detail:'Deltaic deposit', color:'#f4ea18'},
+  '14b': {title:'Coarse-textured lacustrine deposits', detail:'Littoral deposits', color:'#f4ea18'},
+  '14c': {title:'Coarse-textured lacustrine deposits', detail:'Foreshore and basinal deposits', color:'#f4ea18'},
+  '13': {title:'Fine-textured lacustrine deposits', detail:'Silt and clay, minor sand and gravel', color:'#4bbab6'},
+  '12': {title:'Older alluvial deposits', detail:'Clay, silt, sand, gravel, may contain organic remains', color:'#b9652d'},
+  '11': {title:'Coarse-textured glaciomarine deposits', detail:'Sand, gravel, minor silt and clay', color:'#e9d613'},
+  '11a': {title:'Coarse-textured glaciomarine deposits', detail:'Deltaic deposits', color:'#e9d613'},
+  '11b': {title:'Coarse-textured glaciomarine deposits', detail:'Littoral deposits', color:'#e9d613'},
+  '11c': {title:'Coarse-textured glaciomarine deposits', detail:'Foreshore and basinal deposits', color:'#e9d613'},
+  '10': {title:'Fine-textured glaciomarine deposits', detail:'Silt and clay, minor sand and gravel', color:'#57c7c6'},
+  '10a': {title:'Fine-textured glaciomarine deposits', detail:'Massive to well laminated', color:'#57c7c6'},
+  '10b': {title:'Fine-textured glaciomarine deposits', detail:'Interbedded silt and clay and gritty, pebbly flow till and rainout deposits', color:'#57c7c6'},
+  '9': {title:'Coarse-textured glaciolacustrine deposits', detail:'Sand, gravel, minor silt and clay', color:'#f4ea18'},
+  '9a': {title:'Coarse-textured glaciolacustrine deposits', detail:'Deltaic deposits', color:'#f4ea18'},
+  '9b': {title:'Coarse-textured glaciolacustrine deposits', detail:'Littoral deposits', color:'#f4ea18'},
+  '9c': {title:'Coarse-textured glaciolacustrine deposits', detail:'Foreshore and basinal deposits', color:'#f4ea18'},
+  '8': {title:'Fine-textured glaciolacustrine deposits', detail:'Silt and clay, minor sand and gravel', color:'#9eded4'},
+  '8a': {title:'Fine-textured glaciolacustrine deposits', detail:'Massive to well laminated', color:'#9eded4'},
+  '8b': {title:'Fine-textured glaciolacustrine deposits', detail:'Interbedded silt and clay and gritty, pebbly flow till and rainout deposits', color:'#9eded4'},
+  '7': {title:'Glaciofluvial deposits', detail:'River deposits and delta topset facies', color:'#fad465'},
+  '7a': {title:'Glaciofluvial deposits', detail:'Sandy deposits', color:'#fad465'},
+  '7b': {title:'Glaciofluvial deposits', detail:'Gravelly deposits', color:'#fad465'},
+  '6': {title:'Ice-contact stratified deposits', detail:'Sand and gravel, minor silt, clay and till', color:'#f69c19'},
+  '6a': {title:'Ice-contact stratified deposits', detail:'In moraines, eskers, kames and crevasse fills', color:'#f69c19'},
+  '6b': {title:'Ice-contact stratified deposits', detail:'In subaquatic fans', color:'#f69c19'},
+  '5': {title:'Till', detail:'Silty sand to sand-textured till on Precambrian terrain', color:'#9cd867'},
+  '5a': {title:'Till', detail:'Silty sand to sand-textured till on Precambrian terrain', color:'#9cd867'},
+  '5b': {title:'Till', detail:'Stone-poor, sandy silt to silty sand-textured till on Paleozoic terrain', color:'#8fcc26'},
+  '5c': {title:'Till', detail:'Stony, sandy silt to silty sand-textured till on Paleozoic terrain', color:'#94d226'},
+  '5d': {title:'Till', detail:'Clay to silt-textured till (derived from glaciolacustrine deposits or shale)', color:'#2aad43'},
+  '5e': {title:'Till', detail:'Undifferentiated older tills, may include stratified deposits', color:'#219b45'},
+  '4': {title:'Bedrock-drift complex in Paleozoic terrain', detail:'', color:'#d390cc'},
+  '4a': {title:'Bedrock-drift complex in Paleozoic terrain', detail:'Primarily till cover', color:'#d390cc'},
+  '4b': {title:'Bedrock-drift complex in Paleozoic terrain', detail:'Primarily stratified drift cover', color:'#d390cc'},
+  '3': {title:'Paleozoic bedrock', detail:'Sedimentary (Paleozoic) bedrock', color:'#d390cc'},
+  '2': {title:'Bedrock-drift complex in Precambrian terrain', detail:'', color:'#f8bec4'},
+  '2a': {title:'Bedrock-drift complex in Precambrian terrain', detail:'Primarily till cover', color:'#f8bec4'},
+  '2b': {title:'Bedrock-drift complex in Precambrian terrain', detail:'Primarily stratified drift cover', color:'#f8bec4'},
+  '1': {title:'Precambrian bedrock', detail:'Precambrian bedrock', color:'#f8bec4'}
 };
 
 export function extractNetworkLinks(kml=''){
@@ -123,7 +185,9 @@ export function normalizeMrd128Unit(value=''){
 
 export function getMrd128Legend(unit){
   const code=normalizeMrd128Unit(unit);
-  return code ? ({code,...MRD128_LEGEND[code]} || null) : null;
+  if(!code||!MRD128_LEGEND[code]) return null;
+  const parent=code.replace(/[a-z]$/,'');
+  return {code,...MRD128_LEGEND[code],material:parent!==code&&parent!=='5'?MRD128_LEGEND[parent]?.detail||'':''};
 }
 
 export function listMrd128Legend(){
