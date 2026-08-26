@@ -17,13 +17,7 @@ export function rewriteMrd128Href(href, baseUrl){
   const basePath=cachePathForMrd128Url(baseUrl);
   const childPath=cachePathForMrd128Url(absolute.href);
   const baseDir=basePath.split('/').slice(0,-1);
-  const child=childPath.split('/');
-  let i=0;
-  while(i<baseDir.length && i<child.length && baseDir[i]===child[i]) i++;
-  const up=baseDir.slice(i).map(()=> '..');
-  const down=child.slice(i);
-  const rel=[...up,...down].join('/') || './';
-  return rel.startsWith('.') ? rel : `./${rel}`;
+  return `${'../'.repeat(baseDir.length)}${childPath}`;
 }
 
 export function rewriteKmlLinks(kml, baseUrl){
