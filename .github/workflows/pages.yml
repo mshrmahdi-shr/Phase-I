@@ -18,6 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Run core tests
+        run: node --test tests/*.test.mjs
+      - name: Build local MRD128 cache
+        run: node scripts/cache-mrd128.mjs
       - uses: actions/configure-pages@v5
         with:
           enablement: true
