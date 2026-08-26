@@ -45,7 +45,7 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   t.after(()=>{map?.remove();dom.window.close();for(const [key,descriptor] of Object.entries(previous))descriptor?Object.defineProperty(globalThis,key,descriptor):delete globalThis[key];});
   await import('../app.js?source-integration');
   const choose=code=>[...document.querySelectorAll('.figure-row')].find(row=>row.querySelector('.figure-code').textContent===`FIGURE ${code}`).querySelector('button').click();
-  assert.equal($('projectNo').value,'FE 26-15876');assert.equal($('projectNo').placeholder,'26-15876');
+  assert.equal($('projectNo').value,'FE 26-15876');assert.equal($('projectNo').placeholder,'AB-12345');
   choose('C');
   const layers=()=>Object.values(map._layers).filter(layer=>layer instanceof L.TileLayer);
   assert.equal(layers().length,1);assert.match(layers()[0]._url,/toporama_en$/);

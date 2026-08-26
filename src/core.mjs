@@ -1,3 +1,5 @@
+import {normalizeCompanyProfile,snapshotCompanyProfile,validateCompanyProfile} from './company-profile.mjs';
+
 export function figureDefaults(){
   return {
     A:{title:'SITE LOCATION MAP',extentMeters:500,status:'Not Started'},
@@ -16,6 +18,7 @@ export function createProject({name='',projectNo='',address='',date='',company='
     siteBoundary:[], buildingBoundary:[], historical:[],
     geology:{surficial:null,bedrock:null},
     dpi:300,
+    companyProfileSnapshot:null,
     exportPreferences:{codes:[],sources:{A:'osm',B:'esri-imagery',C:'toporama',D:'osm',E:'osm'}},
     figures:figureDefaults(),
     createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()
@@ -82,7 +85,7 @@ export function restoreProject(value){
     const f={...defaults,...value.figures[code]};
     if(typeof f.title!=='string'||!Number.isFinite(f.extentMeters)||f.extentMeters<=0) throw new Error('The project contains invalid figure settings.');
     if(f.bounds!=null&&!validFigureBounds(f.bounds,p.location))throw new Error(`Figure ${code} has an invalid saved figure view.`);
-    if(code==='B'&&value.schemaVersion!==3&&f.extentMeters===250) f.extentMeters=100;
+    if(code==='B'&&(value.schemaVersion==null||value.schemaVersion<3)&&f.extentMeters===250) f.extentMeters=100;
     return [code,f];
   }));
   p.geology={surficial:null,bedrock:null,...(p.geology&&typeof p.geology==='object'?p.geology:{})};
@@ -95,7 +98,18 @@ export function restoreProject(value){
   const savedCodes=Array.isArray(value.exportPreferences?.codes)?value.exportPreferences.codes:[];
   p.exportPreferences={codes:Object.keys(figureDefaults()).filter(code=>savedCodes.includes(code)),
     sources:{A:'osm',B:'esri-imagery',C:'toporama',D:'osm',E:'osm'}};
-  p.schemaVersion=3;
+  if(value.companyProfileSnapshot==null){
+    p.companyProfileSnapshot=null;
+  }else{
+    try{
+      const profile=normalizeCompanyProfile(value.companyProfileSnapshot);
+      if(validateCompanyProfile(profile).length) throw new Error('missing required company profile fields');
+      p.companyProfileSnapshot=snapshotCompanyProfile(profile);
+    }catch(error){
+      throw new Error(`The project contains an invalid company profile snapshot: ${error.message}`);
+    }
+  }
+  p.schemaVersion=4;
   return p;
 }
 

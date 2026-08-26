@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import * as core from '../src/core.mjs';
 import { createProject, closeRing, pointInPolygon, figureDefaults, buildDxf, extractNetworkLinks, normalizeMrd128Unit, getMrd128Legend, kmlColorToCss } from '../src/core.mjs';
+import {emptyCompanyProfile,snapshotCompanyProfile} from '../src/company-profile.mjs';
 
 const mrd128 = fs.readFileSync(new URL('../data/mrd128.kml', import.meta.url), 'utf8');
 
@@ -15,6 +16,25 @@ test('createProject creates the five core figures with expected extents', () => 
   assert.equal(p.figures.B.extentMeters, 100);
   assert.equal(p.figures.D.extentMeters, 2000);
   assert.equal(p.figures.E.extentMeters, 20000);
+});
+
+test('new project keeps project number blank and restores a profile snapshot',()=>{
+  const p=createProject();
+  assert.equal(p.projectNo,'');
+  const validProfile={...emptyCompanyProfile(),companyName:'ABC Engineering',address:'1 Main St',
+    phone:'416-555-0100',email:'maps@example.com',website:'https://example.com',
+    logoAssetId:'logo-1',logoMime:'image/png',logoWidth:400,logoHeight:160};
+  p.companyProfileSnapshot=snapshotCompanyProfile(validProfile);
+  const restored=core.restoreProject(p);
+  assert.equal(restored.companyProfileSnapshot.companyName,'ABC Engineering');
+  assert.equal(restored.schemaVersion,4);
+});
+
+test('restoreProject gives legacy projects no profile snapshot and rejects invalid snapshots',()=>{
+  const legacy=createProject();
+  assert.equal(core.restoreProject(legacy).companyProfileSnapshot,null);
+  legacy.companyProfileSnapshot={companyName:'Unsafe'};
+  assert.throws(()=>core.restoreProject(legacy),/company profile snapshot/i);
 });
 
 test('closeRing appends the first point only when needed', () => {
