@@ -64,3 +64,21 @@ test('staged first-party executable and style URLs change as a release moves',as
   assert.match(html,/https:\/\/unpkg\.com\/leaflet@1\.9\.4\/dist\/leaflet\.js/);
   assert.match(html,/https:\/\/cdn\.jsdelivr\.net\/npm\/jszip@3\.10\.1\/dist\/jszip\.min\.js/);
 });
+
+test('release module transform versions side-effect imports with an importable apostrophe-safe revision',async t=>{
+  const {releaseModuleSource,relativeModuleSpecifiers}=await import('../scripts/build-site.mjs');
+  assert.equal(typeof releaseModuleSource,'function');
+  assert.equal(typeof relativeModuleSpecifiers,'function');
+  const output=await fs.mkdtemp(path.join(os.tmpdir(),'phase-i-release-module-'));
+  t.after(()=>fs.rm(output,{recursive:true,force:true}));
+  const entry=path.join(output,'entry.mjs'),dependency=path.join(output,'dependency.mjs');
+  await fs.writeFile(dependency,'globalThis.__releaseCacheSideEffect=true; export const answer=42;');
+  const revision="O'Brien\uD800",expected='?v=O%27Brien%EF%BF%BD';
+  const emitted=releaseModuleSource("import './dependency.mjs'; export {answer} from './dependency.mjs';",revision);
+  assert.deepEqual(relativeModuleSpecifiers(emitted),[`./dependency.mjs${expected}`,`./dependency.mjs${expected}`]);
+  await fs.writeFile(entry,emitted);
+  const previous=globalThis.__releaseCacheSideEffect;
+  t.after(()=>{if(previous===undefined)delete globalThis.__releaseCacheSideEffect;else globalThis.__releaseCacheSideEffect=previous;});
+  const loaded=await import(pathToFileURL(entry).href+'?entry');
+  assert.equal(loaded.answer,42);assert.equal(globalThis.__releaseCacheSideEffect,true);
+});

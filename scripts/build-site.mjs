@@ -2,15 +2,23 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 const root=fileURLToPath(new URL('../',import.meta.url));
+const relativeStaticModuleSpecifier=/\b(?:from\s*|import\s*)(['\"])(\.{1,2}\/[^'\"]+)\1/g;
 
+function releaseRevision(revision){
+  return encodeURIComponent(String(revision).toWellFormed()).replace(/'/g,'%27');
+}
 function releaseUrl(url,revision){
-  return `${url}${url.includes('?')?'&':'?'}v=${encodeURIComponent(String(revision))}`;
+  return `${url}${url.includes('?')?'&':'?'}v=${releaseRevision(revision)}`;
 }
 
-function releaseModuleSource(source,revision){
+export function relativeModuleSpecifiers(source){
+  return [...source.matchAll(relativeStaticModuleSpecifier)].map(([, ,specifier])=>specifier);
+}
+
+export function releaseModuleSource(source,revision){
   const versioned=url=>releaseUrl(url,revision);
   return source
-    .replace(/(\bfrom\s*['\"])(\.{1,2}\/[^'\"]+)(['\"])/g,(_,before,url,after)=>before+versioned(url)+after)
+    .replace(relativeStaticModuleSpecifier,(match,_quote,url)=>match.replace(url,versioned(url)))
     .replace(/(new URL\(\s*['\"])(\.\.\/(?:vendor|assets\/fonts)\/[^'\"]+)(['\"]\s*,\s*import\.meta\.url\s*\))/g,(_,before,url,after)=>before+versioned(url)+after);
 }
 
