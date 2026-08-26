@@ -29,3 +29,11 @@ export function rewriteKmlLinks(kml, baseUrl){
     }catch{return m}
   });
 }
+
+export function shouldFollowSurficialLink({name='',href=''}={}){
+  const n=String(name).trim().toLowerCase();
+  const h=String(href).trim().toLowerCase();
+  if(n==='surficial geology') return true;
+  if(!/\.(?:kml|kmz)(?:[?#].*)?$/.test(h)) return false;
+  return h.includes('/mrd128/polygons/') || h.includes('/mrd128-cache/polygons/') || h.includes('mrd128-cache/polygons/');
+}
