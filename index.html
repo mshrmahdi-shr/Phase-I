@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Phase I ESA</title>
+  <meta name="theme-color" content="#111827" />
+  <link rel="preconnect" href="https://unpkg.com" crossorigin>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">PHASE I ESA</div>
+      <h1>Mapping & Figure Generator</h1>
+    </div>
+    <div class="top-actions">
+      <button id="newProject" class="ghost">New Project</button>
+      <button id="saveProject" class="primary">Save</button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="panel project-panel">
+      <section>
+        <div class="section-heading"><h2>Project</h2><span id="saveState" class="badge">Local</span></div>
+        <label>Project name<input id="projectName" placeholder="Phase I ESA – 92 Orchard Road" /></label>
+        <div class="two-col">
+          <label>Project no.<input id="projectNo" placeholder="FE 26-15876" /></label>
+          <label>Date<input id="projectDate" type="date" /></label>
+        </div>
+        <label>Address
+          <div class="inline-input"><input id="address" placeholder="92 Orchard Road, Ajax, ON" /><button id="searchAddress" class="primary">Find</button></div>
+        </label>
+        <div id="searchStatus" class="helper">Uses OpenStreetMap/Nominatim for address lookup.</div>
+      </section>
+
+      <section>
+        <div class="section-heading"><h2>Site geometry</h2><span id="drawState" class="badge">Idle</span></div>
+        <div class="button-grid">
+          <button id="setSite">Set SITE</button>
+          <button id="drawSite">Draw Site Boundary</button>
+          <button id="drawBuilding">Draw Building</button>
+          <button id="finishDraw">Finish Draw</button>
+          <button id="undoPoint">Undo Point</button>
+          <button id="clearGeometry" class="danger-soft">Clear Geometry</button>
+        </div>
+        <p class="helper">On mobile, choose a drawing tool then tap map corners. Press Finish Draw to close the polygon.</p>
+      </section>
+
+      <section>
+        <div class="section-heading"><h2>Imagery</h2><span class="badge">High-res</span></div>
+        <label>Current / historical aerial<input id="uploadAerial" type="file" accept="image/*,.tif,.tiff" /></label>
+        <div class="two-col">
+          <label>Year<input id="aerialYear" type="number" min="1900" max="2100" placeholder="1960" /></label>
+          <label>DPI<select id="dpi"><option>300</option><option>600</option></select></label>
+        </div>
+        <button id="openEarth">Open site in Google Earth</button>
+        <div id="imageryStatus" class="helper">For archival aerials, upload the highest-resolution original available.</div>
+      </section>
+
+      <section>
+        <div class="section-heading"><h2>Geology</h2><span class="badge">KML / KMZ</span></div>
+        <label>Import geology layer<input id="uploadGeology" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" /></label>
+        <select id="geologyKind"><option value="surficial">Surficial geology</option><option value="bedrock">Bedrock geology</option></select>
+        <div id="geologyStatus" class="helper">KML works directly. KMZ is unpacked in-browser when JSZip is available.</div>
+      </section>
+
+      <section>
+        <div class="section-heading"><h2>Export</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
+        <div class="button-grid">
+          <button id="printA3" class="primary">Print A3 / PDF</button>
+          <button id="exportDxf">Export DXF</button>
+          <button id="exportJson">Export Project</button>
+          <label class="file-button">Import Project<input id="importJson" type="file" accept="application/json,.json" /></label>
+        </div>
+      </section>
+    </aside>
+
+    <section class="workspace">
+      <div class="map-toolbar">
+        <div class="segmented">
+          <button class="basemap active" data-map="street">Street</button>
+          <button class="basemap" data-map="satellite">Satellite</button>
+        </div>
+        <div class="coords" id="coords">No site selected</div>
+      </div>
+      <div id="map"></div>
+      <div class="map-note">Satellite layer is for interactive review. Final report imagery quality depends on the source imagery you upload or connect.</div>
+    </section>
+
+    <aside class="panel figures-panel">
+      <div class="section-heading"><h2>Figures</h2><span class="badge">A3</span></div>
+      <div id="figureList"></div>
+      <div class="legend-card">
+        <div class="section-heading"><h3>Detected geology</h3><span class="badge" id="geoUnitBadge">—</span></div>
+        <div id="geoLegend" class="helper">Import a geology KML/KMZ and set the site location.</div>
+      </div>
+      <div class="aerial-card">
+        <div class="section-heading"><h3>Historical aerials</h3><span class="badge" id="aerialCount">0</span></div>
+        <div id="aerialList" class="helper">No historical imagery added.</div>
+      </div>
+    </aside>
+  </main>
+
+  <section id="printSheet" class="print-sheet" aria-hidden="true">
+    <div class="sheet-map"><div id="printMapPlaceholder">Map preview is taken from the current interactive view.</div></div>
+    <div class="sheet-titleblock">
+      <div><b>PROJECT NAME AND ADDRESS</b><span id="printProject">—</span></div>
+      <div><b>PROJECT NO.</</b><span id="printNo">—</span></div>
+      <div><b>DATE</b><span id="printDate">—</span></div>
+      <div><b>SCALE</b><span>AS SHOWN</span></div>
+      <div><b>FIGURE</b><span id="printFigure">A</span></div>
+      <div><b>TITLE</b><span id="printTitle">SITE LOCATION MAP</span></div>
+    </div>
+  </section>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
