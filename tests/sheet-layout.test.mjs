@@ -32,6 +32,20 @@ test('segmented metric scale measures final ground width at map centre latitude'
   assert.match(equator.label,/km$/);
   assert.match(metricScale({west:0,east:.001,south:0,north:.001},1000).label,/m$/);
 });
+test('a saved figure view controls the A3 centre and contains the selected map extent',async()=>{
+  const {sheetGeometry}=await import('../src/sheet-layout.mjs');
+  const p=createProject();p.location={lat:43.7,lng:-79.3};
+  const selected={north:43.704,south:43.696,east:-79.291,west:-79.302};
+  p.figures.B.extentMeters=900;p.figures.B.bounds=selected;
+  const geometry=sheetGeometry(p,'B');
+  const epsilon=1e-10;
+  assert.ok(geometry.bounds.north+epsilon>=selected.north&&geometry.bounds.south-epsilon<=selected.south);
+  assert.ok(geometry.bounds.east+epsilon>=selected.east&&geometry.bounds.west-epsilon<=selected.west);
+  const centre=(geometry.bounds.east+geometry.bounds.west)/2;
+  assert.ok(centre>-79.299,'the saved, panned view must not be recentered on SITE');
+  p.figures.B.bounds={north:44,south:43.9,east:-79.1,west:-79.2};
+  assert.throws(()=>sheetGeometry(p,'B'),/SITE.*view/i);
+});
 test('Figure C has explicit Toporama WMS metadata with no street fallback',async()=>{
   const {sourceForFigure}=await import('../src/map-sources.mjs');
   const source=sourceForFigure('C');assert.equal(source.kind,'wms');

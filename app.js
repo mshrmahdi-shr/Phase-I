@@ -3,7 +3,7 @@ import {parsePolys,resolveLinks,readKmz,relevantFeatures,relevantUnits,siteFeatu
 import {createPreflight} from './print-preflight.mjs';
 import {createPrintSession,waitForMapTiles} from './src/print-session.mjs';
 import {sourceForFigure} from './src/map-sources.mjs';
-import {sheetGeometry,metricScale} from './src/sheet-layout.mjs';
+import {sheetGeometry,metricScale,captureFigureView} from './src/sheet-layout.mjs';
 import {loadBedrockCache} from './src/bedrock-cache.mjs';
 import {createExportDialog} from './src/export-selection.mjs';
 import {exportCombinedPdf} from './src/pdf-export.mjs';
@@ -66,7 +66,10 @@ $('searchAddress').onclick=async()=>{
 };
 function siteChanged(location){
   if(exportBusy)return;
-  project.location=location;locationRevision++;setMarker(location);detect();save();refreshPrint();
+  const moved=!project.location||project.location.lat!==location.lat||project.location.lng!==location.lng;
+  project.location=location;
+  if(moved)for(const figure of Object.values(project.figures))delete figure.bounds;
+  locationRevision++;setMarker(location);detect();renderFigures();save();refreshPrint();
 }
 function setMarker(p){
   siteMarker?.remove();
@@ -95,7 +98,7 @@ $('finishDraw').onclick=()=>{
   stopDrawing();redraw();save();
 };
 function redraw(){siteLayer?.remove();buildingLayer?.remove();if(project.siteBoundary?.length)siteLayer=L.polygon(project.siteBoundary.map(([x,y])=>[y,x]),{color:'#ef4444',weight:4,fill:false}).addTo(map);if(project.buildingBoundary?.length)buildingLayer=L.polygon(project.buildingBoundary.map(([x,y])=>[y,x]),{color:'#111827',weight:3,dashArray:'6 4',fillColor:'#fff',fillOpacity:.1}).addTo(map)}
-function renderFigures(){const h=$('figureList');h.innerHTML='';for(const [c,f] of Object.entries(project.figures)){const d=document.createElement('div');d.className='figure-row'+(c===active?' active':'');d.innerHTML=`<div class="figure-top"><div><div class="figure-code">FIGURE ${c}</div><div class="figure-title">${esc(f.title)}</div></div><span class="badge">${fmt(f.extentMeters)}</span></div><div class="figure-actions"><button>View</button><button>Use for A3</button></div>`;d.children[1].children[0].onclick=()=>selectFig(c,true);d.children[1].children[1].onclick=()=>selectFig(c,false);h.appendChild(d)}}
+function renderFigures(){const h=$('figureList');h.innerHTML='';for(const [c,f] of Object.entries(project.figures)){const d=document.createElement('div');d.className='figure-row'+(c===active?' active':'');d.innerHTML=`<div class="figure-top"><div><div class="figure-code">FIGURE ${c}</div><div class="figure-title">${esc(f.title)}</div></div><span class="badge" title="${f.bounds?'Saved A3 map span':'Default A3 map span'}">${fmt(f.extentMeters)}</span></div><div class="figure-actions"><button title="${f.bounds?'Restore the saved A3 map position and zoom':'Show the current A3 map extent'}">${f.bounds?'View saved':'View'}</button><button title="Save the current map position and zoom for A3/PDF">${f.bounds?'Update A3 view':'Use for A3'}</button></div>`;d.children[1].children[0].onclick=()=>selectFig(c,true);d.children[1].children[1].onclick=()=>useForA3(c);h.appendChild(d)}}
 function fmt(m){return m>=1000?`${m/1000} km`:`${m} m`;}
 function currentBounds(){const b=map.getBounds();return{north:b.getNorth(),south:b.getSouth(),east:b.getEast(),west:b.getWest()};}
 function requiredGeologyBounds(kind='surficial',includeView=false){
@@ -114,6 +117,16 @@ function selectFig(code,fit){
     if(custom){if(!geoReady[kind])status('geologyStatus','Reimport the custom geology file, or explicitly load the official source.','error');}
     else if(!geoReady[kind]||!containsBounds(geoCoverage[kind],requiredGeologyBounds(kind,true)))kind==='surficial'?loadMRD(false):loadOfficialBedrock(false);
   }
+  if(fit)status('mapSourceStatus',`Figure ${code} A3 view restored (${fmt(project.figures[code].extentMeters)}). Output source: ${sourceForFigure(code).label}.`,'ok');
+}
+function useForA3(code){
+  selectFig(code,false);
+  try{
+    const captured=captureFigureView(project,code,currentBounds());
+    project.figures[code]={...project.figures[code],...captured};
+    renderFigures();save();refreshPrint();preflight.refresh();
+    status('mapSourceStatus',`Figure ${code} A3 view saved (${fmt(captured.extentMeters)}). Click View saved to restore it.`,'ok');
+  }catch(error){status('mapSourceStatus',error.message,'error');}
 }
 function zoom(code,strict=false){
   if(!project.location)return;

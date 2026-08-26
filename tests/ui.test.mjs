@@ -59,6 +59,18 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   assert.match(layers()[0]._url,/World_Imagery/);
   await $('printA3').onclick();assert.match(layers()[0]._url,/tile.openstreetmap.org/);
   $('closePrint').click();
+  map.setView([43.651,-79.381],16,{animate:false});
+  const row=code=>[...document.querySelectorAll('.figure-row')].find(item=>item.querySelector('.figure-code').textContent===`FIGURE ${code}`);
+  row('B').querySelectorAll('button')[1].click();
+  const savedView=JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).figures.B;
+  assert.ok(savedView.bounds&&savedView.extentMeters>100,'Use for A3 must persist the visible map extent');
+  assert.notEqual(row('B').querySelector('.badge').textContent,'100 m');
+  assert.match($('mapSourceStatus').textContent,/Figure B.*saved/i);
+  choose('A');row('B').querySelectorAll('button')[0].click();
+  const restored=map.getBounds();
+  assert.ok(restored.getNorth()>=savedView.bounds.north&&restored.getSouth()<=savedView.bounds.south);
+  assert.ok(restored.getEast()>=savedView.bounds.east&&restored.getWest()<=savedView.bounds.west);
+  assert.match($('mapSourceStatus').textContent,/Figure B.*restored/i);
   $('exportPdf').click();assert.equal($('exportDialog').hidden,false);
   $('selectAllReady').click();assert.equal($('downloadPdf').textContent,'Download PDF (2 sheets)');
   $('cancelExport').click();
