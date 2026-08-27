@@ -14,6 +14,24 @@ function namedBlob(bytes,name,type=''){
 const fixture=async name=>new Uint8Array(await fs.readFile(new URL(`./fixtures/imagery/manual/${name}`,import.meta.url)));
 const pngFixture=()=>fixture('valid-3x2.png');
 const jpegFixture=orientation=>fixture(`valid-2x3-o${orientation}.jpg`);
+const progressiveFixture=name=>fixture(name);
+const concatBytes=parts=>{const length=parts.reduce((sum,part)=>sum+part.length,0),bytes=new Uint8Array(length);let offset=0;for(const part of parts){bytes.set(part,offset);offset+=part.length;}return bytes;};
+
+function removeNonemptyIdat(bytes){
+  const parts=[bytes.subarray(0,8)],view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);let offset=8;
+  while(offset<bytes.length){const length=view.getUint32(offset),end=offset+12+length,type=String.fromCharCode(...bytes.subarray(offset+4,offset+8));if(type!=='IDAT'||length===0)parts.push(bytes.subarray(offset,end));offset=end;}
+  return concatBytes(parts);
+}
+
+function firstJpegScanParts(bytes){
+  let offset=2;
+  while(offset<bytes.length){const markerStart=offset;if(bytes[offset++]!==0xff)throw new Error('Fixture marker prefix missing.');while(bytes[offset]===0xff)offset++;const marker=bytes[offset++],length=bytes[offset]<<8|bytes[offset+1],end=offset+length;if(marker===0xda)return {prefix:bytes.subarray(0,markerStart),sos:bytes.subarray(markerStart,end)};offset=end;}
+  throw new Error('Fixture SOS missing.');
+}
+
+function jpegWithScanCount(bytes,count){
+  const {prefix,sos}=firstJpegScanParts(bytes),parts=[prefix];for(let index=0;index<count;index++)parts.push(sos,Uint8Array.of(1));parts.push(Uint8Array.of(0xff,0xd9));return concatBytes(parts);
+}
 
 async function geotiffBlob({width=2,height=2,crs=4326,compression=1,values=new Uint8Array([0,64,128,255]),samples=1,
   photometric=samples===1?1:2,bits=Array(samples).fill(8),sampleFormat=Array(samples).fill(1),extraSamples=[],planar=1,metadata={},omit=[]}={}){
@@ -88,6 +106,39 @@ test('complete JPEG fixtures cover a non-swap orientation and every EXIF axis-sw
   }
   const browserOriented=await decodeManualImage(namedBlob(await jpegFixture(6),'browser-oriented.jpeg','image/jpeg'),{decodeBitmap:bitmapDecoder(3,2)});
   assert.deepEqual({width:browserOriented.width,height:browserOriented.height},{width:3,height:2},'browser decoders may return already-oriented dimensions');
+});
+
+test('complete progressive JPEG fixtures support multiple scans, inter-scan tables, stuffing, restart markers, fill bytes, and EXIF',async()=>{
+  const {decodeManualImage}=await manual(),cases=[
+    ['valid-progressive-2x3-o1.jpg',2,3,1],['valid-progressive-2x3-o6.jpg',3,2,6],['valid-progressive-32x24-restart.jpg',32,24,1]
+  ];
+  for(const [name,width,height,orientation] of cases){
+    const bytes=await progressiveFixture(name);assert.ok(bytes.reduce((sum,byte,index)=>sum+(byte===0xff&&bytes[index+1]===0xda),0)>1,'fixture contains multiple SOS scans');
+    const decoded=await decodeManualImage(namedBlob(bytes,name,'image/jpeg'),{decodeBitmap:bitmapDecoder(name.includes('o6')?2:width,name.includes('o6')?3:height)});
+    assert.deepEqual({width:decoded.width,height:decoded.height},{width,height});
+    if(name.includes('restart')){assert.ok(bytes.some((byte,index)=>byte===0xff&&bytes[index+1]>=0xd0&&bytes[index+1]<=0xd7));assert.ok(bytes.some((byte,index)=>byte===0xff&&bytes[index+1]===0));assert.ok(bytes.some((byte,index)=>byte===0xff&&bytes[index+1]===0xff));}
+    if(orientation===6)assert.deepEqual({width:decoded.width,height:decoded.height},{width:3,height:2});
+  }
+});
+
+test('PNG permits checksummed empty IDAT chunks among consecutive nonempty image data but rejects zero-only and truncated streams',async()=>{
+  const {decodeManualImage}=await manual(),bytes=await fixture('valid-3x2-empty-idat.png');let called=0;
+  const decoded=await decodeManualImage(namedBlob(bytes,'empty-idat.png','image/png'),{decodeBitmap:bitmapDecoder(3,2)});assert.deepEqual({width:decoded.width,height:decoded.height},{width:3,height:2});
+  await assert.rejects(decodeManualImage(namedBlob(removeNonemptyIdat(bytes),'zero-only.png','image/png'),{decodeBitmap:async()=>{called++;return {width:3,height:2};}}),/IDAT|image data|decoded/i);
+  await assert.rejects(decodeManualImage(namedBlob(bytes.subarray(0,bytes.length-3),'truncated-empty-idat.png','image/png'),{decodeBitmap:async()=>{called++;return {width:3,height:2};}}),/truncated|incomplete|invalid/i);
+  assert.equal(called,0);
+});
+
+test('JPEG rejects malformed inter-scan syntax and bounded marker or scan counts before browser decode',async()=>{
+  const {decodeManualImage}=await manual(),progressive=await progressiveFixture('valid-progressive-2x3-o1.jpg'),baseline=await jpegFixture(1);let called=0;
+  const decodeBitmap=async()=>{called++;return {width:2,height:3};};
+  const standalone=concatBytes([baseline.subarray(0,2),Uint8Array.of(0xff,0xd0),baseline.subarray(2)]);
+  const malformedDht=progressive.slice(),firstScan=malformedDht.findIndex((byte,index)=>byte===0xff&&malformedDht[index+1]===0xda),dht=malformedDht.findIndex((byte,index)=>index>firstScan&&byte===0xff&&malformedDht[index+1]===0xc4);malformedDht[dht+2]=0;malformedDht[dht+3]=1;
+  const comments=Array.from({length:4097},()=>Uint8Array.of(0xff,0xfe,0,2)),tooManyMarkers=concatBytes([baseline.subarray(0,2),...comments,baseline.subarray(2)]);
+  for(const [bytes,pattern] of [[standalone,/standalone|restart|marker/i],[malformedDht,/length|segment|DHT/i],[tooManyMarkers,/marker|segment.*limit|excess/i],[jpegWithScanCount(baseline,257),/scan.*limit|excess.*scan/i]])await assert.rejects(
+    decodeManualImage(namedBlob(bytes,'malformed.jpg','image/jpeg'),{decodeBitmap}),pattern
+  );
+  assert.equal(called,0);
 });
 
 test('plausible PNG/JPEG headers with corrupt bodies and decoder/header disagreement are rejected',async()=>{

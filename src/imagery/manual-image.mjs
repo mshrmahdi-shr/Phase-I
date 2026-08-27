@@ -1,6 +1,7 @@
 const PNG_SIGNATURE=[137,80,78,71,13,10,26,10];
 const PNG_CRC_TABLE=Uint32Array.from({length:256},(_,index)=>{let value=index;for(let bit=0;bit<8;bit++)value=value&1?0xedb88320^(value>>>1):value>>>1;return value>>>0;});
 const JPEG_SOF=new Set([0xc0,0xc1,0xc2,0xc3,0xc5,0xc6,0xc7,0xc9,0xca,0xcb,0xcd,0xce,0xcf]);
+const JPEG_MAX_MARKERS=1_000_000,JPEG_MAX_SEGMENTS=4_096,JPEG_MAX_SCANS=256;
 const TIFF_GUIDANCE='Convert it to a single-image, uncompressed 8-bit RGB or grayscale GeoTIFF in EPSG:4326, EPSG:3857, or NAD83 UTM zone 15-18, or use PNG/JPEG with a matching world file.';
 const SUPPORTED_CRS=new Set([4326,3857,26915,26916,26917,26918]);
 const DECIMAL=/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
@@ -59,20 +60,25 @@ function pngCrc(bytes,start,end,signal){
 
 function pngDimensions(bytes,signal){
   if(bytes.length<33)fail('PNG structure is incomplete or invalid.');
-  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);let offset=8,width=0,height=0,sawData=false,sawEnd=false,chunks=0;
+  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);let offset=8,width=0,height=0,colorType=-1,sawIdat=false,idatBytes=0,idatState=0,sawPalette=false,sawEnd=false,chunks=0;
   while(offset<bytes.length){
     if(offset>bytes.length-12)fail('PNG chunk structure is truncated.');
     const length=view.getUint32(offset),data=offset+8,end=data+length;
     if(!Number.isSafeInteger(end)||end>bytes.length-4)fail('PNG chunk length is invalid.');
     const type=String.fromCharCode(...bytes.subarray(offset+4,offset+8));chunks++;
     if(pngCrc(bytes,offset+4,end,signal)!==view.getUint32(end))fail(`PNG ${type} chunk CRC is invalid.`);
-    if(chunks===1){if(type!=='IHDR'||length!==13)fail('PNG IHDR is incomplete or invalid.');width=view.getUint32(data);height=view.getUint32(data+4);}
+    if(chunks===1){if(type!=='IHDR'||length!==13)fail('PNG IHDR is incomplete or invalid.');width=view.getUint32(data);height=view.getUint32(data+4);colorType=bytes[data+9];}
     else if(type==='IHDR')fail('PNG contains more than one IHDR.');
-    if(type==='IDAT'){if(!length)fail('PNG image data is empty.');sawData=true;}
+    if(type==='PLTE'){if(sawPalette||idatState!==0||length===0||length%3!==0||length>768||[0,4].includes(colorType))fail('PNG palette order or length is invalid.');sawPalette=true;}
+    if(type==='IDAT'){
+      if(idatState===2||(colorType===3&&!sawPalette))fail('PNG IDAT chunks are out of order.');
+      sawIdat=true;idatState=1;
+      if(idatBytes>Number.MAX_SAFE_INTEGER-length)fail('PNG image data length is unsafe.');idatBytes+=length;
+    }else if(idatState===1)idatState=2;
     if(type==='IEND'){if(length!==0||end+4!==bytes.length)fail('PNG IEND is invalid or has trailing bytes.');sawEnd=true;break;}
     offset=end+4;
   }
-  if(!width||!height||!sawData||!sawEnd)fail('PNG image data is incomplete or invalid.');
+  if(!width||!height||!sawIdat||idatBytes<8||!sawEnd)fail('PNG image data is incomplete or invalid.');
   return {width,height,orientation:1};
 }
 
@@ -92,40 +98,61 @@ function exifOrientation(segment){
 }
 
 function jpegDimensions(bytes,signal){
-  let offset=2,width=0,height=0,orientation=1,sawScan=false,sawEnd=false;
+  let offset=2,width=0,height=0,orientation=1,sawFrame=false,sawScan=false,sawEnd=false,inEntropy=false,scanBytes=0,markerCount=0,segmentCount=0,scanCount=0,restartInterval=0,nextRestart=0;let frameComponents=new Set();
+  const countMarker=()=>{if(++markerCount>JPEG_MAX_MARKERS)fail(`JPEG exceeds the ${JPEG_MAX_MARKERS} marker limit.`);};
+  const validDqt=data=>{let cursor=0;while(cursor<data.length){const table=data[cursor++],precision=table>>4;if(precision>1||(table&15)>3)return false;cursor+=precision?128:64;if(cursor>data.length)return false;}return cursor===data.length&&cursor>0;};
+  const validDht=data=>{let cursor=0;while(cursor<data.length){if(cursor+17>data.length)return false;const table=data[cursor++];if((table>>4)>1||(table&15)>3)return false;let values=0;for(let index=0;index<16;index++)values+=data[cursor+index];cursor+=16+values;if(cursor>data.length)return false;}return cursor===data.length&&cursor>0;};
   while(offset<bytes.length){
-    throwIfAborted(signal);
-    while(offset<bytes.length&&bytes[offset]===0xff)offset++;
-    if(offset>=bytes.length)break;
-    const marker=bytes[offset++];
-    if(marker===0xd9){sawEnd=true;break;}
-    if(marker===0x01||(marker>=0xd0&&marker<=0xd7))continue;
-    if(offset+2>bytes.length)fail('JPEG marker is truncated.');
-    const length=bytes[offset]<<8|bytes[offset+1];if(length<2||offset+length>bytes.length)fail('JPEG marker length is invalid.');
-    const data=bytes.subarray(offset+2,offset+length);
+    throwIfAborted(signal);let marker,fromEntropy=false;
+    if(inEntropy){
+      if(bytes[offset]!==0xff){scanBytes++;offset++;continue;}
+      while(offset<bytes.length&&bytes[offset]===0xff)offset++;
+      if(offset>=bytes.length)fail('JPEG entropy data is truncated after a marker prefix.');
+      marker=bytes[offset++];countMarker();
+      if(marker===0){scanBytes++;continue;}
+      if(marker>=0xd0&&marker<=0xd7){if(!restartInterval||scanBytes===0||marker!==0xd0+nextRestart)fail('JPEG restart marker is missing its interval, out of sequence, or has no preceding entropy data.');nextRestart=(nextRestart+1)%8;scanBytes=0;continue;}
+      if(marker===0x01)continue;
+      if(scanBytes===0)fail('JPEG scan contains no entropy-coded data.');
+      inEntropy=false;fromEntropy=true;
+    }else{
+      if(bytes[offset]!==0xff)fail('JPEG contains entropy bytes outside a scan.');
+      while(offset<bytes.length&&bytes[offset]===0xff)offset++;
+      if(offset>=bytes.length)fail('JPEG marker prefix is truncated.');
+      marker=bytes[offset++];countMarker();
+      if(marker===0||marker===0x01||marker>=0xd0&&marker<=0xd7)fail('JPEG contains an unexpected standalone or restart marker outside entropy data.');
+    }
+    if(marker===0xd9){if(!sawScan||offset!==bytes.length)fail('JPEG EOI is missing, premature, or followed by trailing data.');sawEnd=true;break;}
+    if(marker===0xd8)fail('JPEG contains an unexpected duplicate SOI marker.');
+    const lengthBearing=JPEG_SOF.has(marker)||[0xc4,0xcc,0xda,0xdb,0xdc,0xdd,0xfe].includes(marker)||marker>=0xe0&&marker<=0xef;
+    if(!lengthBearing)fail(`JPEG contains unsupported marker 0x${marker.toString(16).padStart(2,'0')}.`);
+    if(++segmentCount>JPEG_MAX_SEGMENTS)fail(`JPEG exceeds the ${JPEG_MAX_SEGMENTS} segment limit.`);
+    if(offset+2>bytes.length)fail('JPEG marker segment is truncated.');
+    const length=bytes[offset]<<8|bytes[offset+1];
+    if(length<2||offset>bytes.length-length)fail('JPEG marker segment length is invalid or truncated.');
+    const data=bytes.subarray(offset+2,offset+length);offset+=length;
     if(marker===0xe1)orientation=exifOrientation(data);
     if(JPEG_SOF.has(marker)){
+      if(sawFrame||sawScan)fail('JPEG contains multiple or misplaced frame headers.');
       if(data.length<6)fail('JPEG frame header is incomplete.');
-      height=data[1]<<8|data[2];width=data[3]<<8|data[4];
-    }
-    offset+=length;
-    if(marker===0xda){
-      let scanBytes=0;sawScan=true;
-      while(offset<bytes.length){
-        if((offset&0xfffff)===0)throwIfAborted(signal);
-        if(bytes[offset]!==0xff){scanBytes++;offset++;continue;}
-        while(offset<bytes.length&&bytes[offset]===0xff)offset++;
-        if(offset>=bytes.length)break;
-        const scanMarker=bytes[offset++];
-        if(scanMarker===0){scanBytes++;continue;}
-        if(scanMarker>=0xd0&&scanMarker<=0xd7)continue;
-        if(scanMarker===0xd9){sawEnd=true;break;}
-        fail('JPEG contains an unsupported or invalid scan marker.');
-      }
-      break;
+      const components=data[5];if(components<1||components>4||data.length!==6+components*3)fail('JPEG frame header component length is invalid.');
+      frameComponents=new Set();for(let index=0;index<components;index++)frameComponents.add(data[6+index*3]);if(frameComponents.size!==components)fail('JPEG frame repeats a component identifier.');
+      height=data[1]<<8|data[2];width=data[3]<<8|data[4];sawFrame=true;
+    }else if(marker===0xdb&&!validDqt(data))fail('JPEG DQT segment length or table structure is invalid.');
+    else if(marker===0xc4&&!validDht(data))fail('JPEG DHT segment length or table structure is invalid.');
+    else if(marker===0xdd){if(data.length!==2)fail('JPEG DRI segment must contain exactly two data bytes.');restartInterval=data[0]<<8|data[1];}
+    else if(marker===0xcc&&(data.length<2||data.length%2!==0))fail('JPEG DAC segment length is invalid.');
+    else if(marker===0xdc){
+      if(!fromEntropy||data.length!==2)fail('JPEG DNL is misplaced or has an invalid length.');
+      const lines=data[0]<<8|data[1];if(!lines||height&&height!==lines)fail('JPEG DNL conflicts with its frame dimensions.');height=lines;inEntropy=true;
+    }else if(marker===0xda){
+      if(!sawFrame)fail('JPEG scan appears before its frame header.');
+      const components=data[0];if(components<1||components>frameComponents.size||data.length!==4+components*2)fail('JPEG SOS component length is invalid.');
+      const selectors=new Set();for(let index=0;index<components;index++){const selector=data[1+index*2];if(!frameComponents.has(selector)||selectors.has(selector))fail('JPEG SOS references a missing or repeated frame component.');selectors.add(selector);}
+      if(++scanCount>JPEG_MAX_SCANS)fail(`JPEG exceeds the ${JPEG_MAX_SCANS} scan limit.`);
+      sawScan=true;inEntropy=true;scanBytes=0;nextRestart=0;
     }
   }
-  if(!width||!height||!sawScan||!sawEnd||offset!==bytes.length)fail('JPEG image data is incomplete or invalid.');
+  if(!width||!height||!sawFrame||!sawScan||!sawEnd||inEntropy||offset!==bytes.length)fail('JPEG image data is incomplete or invalid.');
   return {width,height,orientation};
 }
 
