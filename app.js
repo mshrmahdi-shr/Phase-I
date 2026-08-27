@@ -6,7 +6,7 @@ import {sourceForFigure} from './src/map-sources.mjs';
 import {sheetGeometry,metricScale,captureFigureView} from './src/sheet-layout.mjs';
 import {loadBedrockCache} from './src/bedrock-cache.mjs';
 import {createExportDialog} from './src/export-selection.mjs';
-import {exportCombinedPdf} from './src/pdf-export.mjs';
+import {exportCombinedPdf,planPdfExport} from './src/pdf-export.mjs';
 import {createAssetStore} from './src/asset-store.mjs';
 import {normalizeCompanyProfile} from './src/company-profile.mjs';
 import {createCompanyProfileDialog} from './src/company-ui.mjs';
@@ -284,7 +284,7 @@ function setExportBusy(value){
   }
 }
 async function exportBrandedPdf(args){const branding=await companyDialog.outputSnapshot(args.companyProfile);return exportCombinedPdf({...args,...branding});}
-exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf});
+exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport});
 $('exportPdf').onclick=()=>{if(!printSession.isOpen)exportDialog.open();};
 function refreshPrint(){
   const f=project.figures[active];

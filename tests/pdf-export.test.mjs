@@ -18,11 +18,40 @@ const companyProfile=()=>({schemaVersion:1,id:'company-1',companyName:'Acme Envi
   logoMime:'image/png',logoWidth:1,logoHeight:1,logoPlacement:{align:'left',scale:1},updatedAt:'2026-08-26T12:00:00Z'});
 const branding=()=>({companyProfile:companyProfile(),companyLogoDataUrl:png('L')});
 function compositor(log,disposed){return async({code,geometry})=>{log.push(code);return {dataUrl:png(code),width:1,height:1,bounds:geometry.bounds,dispose:()=>disposed.push(code)};};}
+function longSurficialDataset(count=28){
+  const features=Array.from({length:count},(_,index)=>({
+    name:`Official unit ${String(index+1).padStart(2,'0')}`,
+    description:'Official Quaternary geology description with deposits, sediments, landforms, and interpretive qualifiers preserved in full.',
+    unitCode:`UNIT-${String(index+1).padStart(2,'0')}`,color:'#5fa8d3',fillOpacity:.6,
+    polygon:[[-80,43],[-78,43],[-78,45],[-80,45],[-80,43]],holes:[],
+  }));
+  return {features,source:{name:'Ontario Geological Survey official surficial geology',credits:'Official unit descriptions reproduced without abbreviation.'},coverage:null};
+}
 function decodePdfText(raw){
   const cmap=new Map([...raw.matchAll(/<([0-9a-f]{4})><([0-9a-f]{4})>/gi)].map(m=>[m[1].toLowerCase(),String.fromCodePoint(parseInt(m[2],16))]));
   return [...raw.matchAll(/<([0-9a-f]+)>\s*Tj/gi)].map(m=>m[1].match(/.{4}/g).map(g=>cmap.get(g.toLowerCase())||'?').join('')).join('\n');
 }
 async function engine(){const {exportCombinedPdf}=await import('../src/pdf-export.mjs');return options=>exportCombinedPdf({...branding(),...options});}
+test('long Figure D legend creates complete continuation sheets with final physical numbering',async()=>{
+  const exportPdf=await engine(),log=[],disposed=[],surficial=longSurficialDataset();
+  const result=await exportPdf({project:project(),codes:['E','D','A'],datasets:{surficial,bedrock:datasets.bedrock},compose:compositor(log,disposed)});
+  assert.deepEqual(log,['A','D','E'],'only selected map pages compose, in figure order');
+  assert.deepEqual(disposed,log);assert.equal(result.pageCount,4,'one continuation increases three selected maps to four physical pages');
+  const raw=Buffer.from(await result.blob.arrayBuffer()).toString('latin1'),decoded=decodePdfText(raw);
+  assert.equal((raw.match(/\/Type \/Page\b/g)||[]).length,result.pageCount);
+  assert.ok(decoded.indexOf('FIGURE A')<decoded.indexOf('FIGURE D'));
+  assert.ok(decoded.indexOf('FIGURE D')<decoded.indexOf('LEGEND — CONTINUED'));
+  assert.ok(decoded.indexOf('LEGEND — CONTINUED')<decoded.lastIndexOf('FIGURE E'));
+  assert.equal((decoded.match(/Acme Environmental/g)||[]).length,result.pageCount,'company block is present on every physical page');
+  assert.equal((decoded.match(/Ontario Geological Survey official surficial geology/g)||[]).length,2,'Figure D source appears on its map and continuation');
+  for(let page=1;page<=result.pageCount;page+=1)assert.match(decoded,new RegExp(`Page ${page} of ${result.pageCount}`));
+  assert.ok((decoded.match(/LEGEND — CONTINUED/g)||[]).length>=1);
+  assert.equal((decoded.replace(/\s+/g,' ').match(/Official Quaternary geology description/g)||[]).length,surficial.features.length,'every complete official description is extractable');
+  for(const unit of surficial.features){
+    const occurrences=decoded.split(unit.unitCode).length-1;
+    assert.equal(occurrences,1,`${unit.unitCode} appears exactly once across the map and continuation pages`);
+  }
+});
 test('real PDF has only A/C/E pages in figure order, A3 media boxes, embedded text, and cleaned maps',async()=>{
   const exportPdf=await engine(),log=[],disposed=[];
   const result=await exportPdf({project:project(),codes:['E','A','C','A'],datasets,compose:compositor(log,disposed)});
@@ -57,13 +86,16 @@ test('empty selection, invalid data, text overflow, unsupported glyphs and unsaf
   await assert.rejects(exportPdf({project:p,codes:['A'],dpi:600,compose}),/choose 300/i);
   await assert.rejects(exportPdf({project:{...p,name:'Very long project '.repeat(100)},codes:['A'],compose}),/Figure A.*fit|overflow/i);
   await assert.rejects(exportPdf({project:{...p,name:'Unsupported 𠀀'},codes:['A'],compose}),/unsupported.*U\+20000/i);
+  const impossible=longSurficialDataset(1);impossible.features[0].unitCode='UNIT-LONG';impossible.features[0].description='x\n'.repeat(6000);
+  await assert.rejects(exportPdf({project:p,codes:['D'],datasets:{surficial:impossible},compose}),/Figure D.*Legend entry UNIT-LONG exceeds the supported text length/);
   assert.deepEqual(log,[]);
 });
 test('sheet C error prevents a result and disposes previously composed image',async()=>{
-  const exportPdf=await engine(),disposed=[];
-  await assert.rejects(exportPdf({project:project(),codes:['A','C'],compose:async args=>{
+  const exportPdf=await engine(),disposed=[];let result;
+  await assert.rejects(async()=>{result=await exportPdf({project:project(),codes:['A','C'],compose:async args=>{
     if(args.code==='C')throw Error('Toporama is unavailable');return {...await compositor([],disposed)(args)};
-  }}),/Figure C.*Toporama/);assert.deepEqual(disposed,['A']);
+  }});},/Figure C.*Toporama/);
+  assert.equal(result,undefined,'a failed source cannot yield a Blob result');assert.deepEqual(disposed,['A']);
 });
 test('cancellation during composition disposes image and never resolves a PDF; snapshot cannot drift',async()=>{
   const exportPdf=await engine(),p=project(),controller=new AbortController(),disposed=[];

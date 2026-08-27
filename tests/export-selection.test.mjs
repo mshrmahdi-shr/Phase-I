@@ -8,6 +8,10 @@ const project=()=>({...createProject({name:'Public QA',projectNo:'FE 26-15876',a
 const polygon={name:'Custom unit',description:'Custom description',unitCode:'55b',color:'#123456',fillOpacity:.6,
   polygon:[[-80,43],[-79,43],[-79,44],[-80,44],[-80,43]],holes:[]};
 const dataset=()=>({features:[structuredClone(polygon)],source:{id:'custom',name:'Custom bedrock.kml'},coverage:null});
+const surficialDataset=()=>({features:Array.from({length:28},(_,index)=>({...structuredClone(polygon),
+  name:`Official surficial unit ${index+1}`,unitCode:`S${index+1}`,
+  description:'Official Quaternary geology description with deposits, sediments, landforms, and interpretive qualifiers preserved in full.',
+})),source:{name:'Official surficial geology'},coverage:null});
 const companyProfile=()=>({schemaVersion:1,id:'company-1',companyName:'Acme Environmental',address:'22 King Street',phone:'416-555-0110',
   email:'hello@acme.test',website:'https://acme.test',preparedBy:'',reviewedBy:'',logoAssetId:'logo-1',logoMime:'image/png',
   logoWidth:320,logoHeight:160,logoPlacement:{align:'left',scale:1},updatedAt:'2026-08-26T12:00:00Z'});
@@ -61,6 +65,20 @@ test('real dialog selects ready rows only, clears, invalidates live selections, 
   assert.equal($('exportFigureE').checked,false);assert.equal($('exportFigureE').disabled,true);
   assert.deepEqual(p.exportPreferences.codes,['A','C']);
   $('cancelExport').click();assert.equal($('exportDialog').hidden,true);
+});
+
+test('selection reports planned Figure D continuation sheets without blocking the official legend',async()=>{
+  const {createExportDialog}=await import('../src/export-selection.mjs');
+  const {planPdfExport}=await import('../src/pdf-export.mjs');
+  const {document,$}=fixture(),p=project();p.exportPreferences={codes:['D']};
+  const state={project:p,datasets:{surficial:surficialDataset()},companyProfile:companyProfile()};
+  const dialog=createExportDialog({document,getState:()=>state,save(){},setBusy(){},
+    planPdf:planPdfExport,
+    exportPdf:async()=>{throw Error('unused');},download(){}});
+  dialog.open();await dialog.refresh();
+  assert.equal($('exportFigureD').disabled,false);
+  assert.equal($('exportReasonD').textContent,'Figure D will include 1 legend continuation sheet.');
+  assert.equal($('downloadPdf').textContent,'Download PDF (2 sheets)');
 });
 
 test('dialog snapshots input, prevents duplicates, reports per-phase progress, and downloads only a full result',async()=>{

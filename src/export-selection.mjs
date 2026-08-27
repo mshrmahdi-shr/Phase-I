@@ -46,17 +46,17 @@ export function downloadPdf(result,{document,signal}){
   }finally{link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 }
 
-export function createExportDialog({document,getState,save,setBusy,exportPdf,download=downloadPdf}){
+export function createExportDialog({document,getState,save,setBusy,exportPdf,planPdf=null,download=downloadPdf}){
   const byId=id=>document.getElementById(id),dialog=byId('exportDialog');
   const sheetCount=count=>`${count} ${count===1?'sheet':'sheets'}`;
-  let controller=null,returnFocus=null,background=[];
+  let controller=null,planning=null,planningController=null,planSummary=null,planGeneration=0,returnFocus=null,background=[];
   function persist(codes){
     const project=getState().project;
     if(JSON.stringify(project.exportPreferences?.codes)!==JSON.stringify(codes)){
       project.exportPreferences={...project.exportPreferences,codes};save();
     }
   }
-  function refresh(){
+  function render(){
     if(dialog.hidden||controller)return;
     const state=getState(),rows=exportRows(state),codes=selectedReadyCodes(rows,state.project.exportPreferences?.codes);
     persist(codes);
@@ -69,18 +69,37 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,dow
       const text=document.createElement('span'),title=document.createElement('strong'),detail=document.createElement('span');
       title.textContent=`Figure ${row.code} — ${row.title}`;
       detail.className='export-reason';detail.id=`exportReason${row.code}`;
-      detail.textContent=row.ready?`Ready · ${row.source.label}`:row.reasons.join(' ');
+      const continuations=planSummary?.continuationCounts?.[row.code]||0;
+      detail.textContent=!row.ready?row.reasons.join(' '):continuations?`Figure ${row.code} will include ${continuations} legend continuation ${continuations===1?'sheet':'sheets'}.`:`Ready · ${row.source.label}`;
+      if(continuations)detail.classList.add('export-continuation');
       checkbox.setAttribute('aria-describedby',detail.id);
       checkbox.onchange=()=>{
         const selected=new Set(getState().project.exportPreferences?.codes||[]);
         checkbox.checked?selected.add(row.code):selected.delete(row.code);
-        persist(selectedReadyCodes(exportRows(getState()),[...selected]));refresh();
+        persist(selectedReadyCodes(exportRows(getState()),[...selected]));render();
       };
       text.append(title,detail);label.append(checkbox,text);byId('exportRows').append(label);
     }
-    byId('downloadPdf').textContent=`Download PDF (${sheetCount(codes.length)})`;
+    const physicalCount=codes.length+codes.reduce((sum,code)=>sum+(planSummary?.continuationCounts?.[code]||0),0);
+    byId('downloadPdf').textContent=`Download PDF (${sheetCount(physicalCount)})`;
     byId('downloadPdf').disabled=!codes.length;
     if(focused?.startsWith('exportFigure'))byId(focused)?.focus();
+  }
+  function refresh(){
+    if(dialog.hidden||controller)return planning||Promise.resolve();
+    render();if(!planPdf)return Promise.resolve();
+    if(planning)return planning;
+    const state=getState(),rows=exportRows(state),codes=rows.filter(row=>row.ready).map(row=>row.code);
+    if(!codes.length){planSummary=null;render();return Promise.resolve();}
+    const generation=++planGeneration,pending=new AbortController();planningController=pending;
+    const snapshot=structuredClone({project:state.project,datasets:state.datasets||{},companyProfile:state.companyProfile,codes});
+    planning=Promise.resolve(planPdf({...snapshot,dpi:snapshot.project.dpi||300,signal:pending.signal})).then(summary=>{
+      if(generation!==planGeneration||pending.signal.aborted)return;
+      planSummary=summary;render();
+    }).catch(error=>{
+      if(generation===planGeneration&&!pending.signal.aborted){planSummary=null;byId('exportProgress').textContent=`Export planning blocked: ${error.message}`;}
+    }).finally(()=>{if(generation===planGeneration){planning=null;planningController=null;}});
+    return planning;
   }
   function open(){
     if(!dialog.hidden||controller)return;
@@ -89,17 +108,18 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,dow
     background.forEach(([node])=>node.inert=true);
     byId('exportProgress').textContent='Select the sheets to include. Source images are checked during export.';
     byId('cancelExport').textContent='Cancel';
-    byId('exportMeter').hidden=true;refresh();byId('selectAllReady').focus();
+    byId('exportMeter').hidden=true;planSummary=null;refresh();byId('selectAllReady').focus();
   }
   function close(){
     if(controller){controller.abort();byId('exportProgress').textContent='Cancelling export…';return;}
     if(dialog.hidden)return;
+    planGeneration++;planningController?.abort();planning=null;planningController=null;
     dialog.hidden=true;document.body.classList.remove('export-open');
     background.forEach(([node,inert])=>node.inert=inert);background=[];returnFocus?.focus();
   }
   async function start(){
     if(controller)return;
-    refresh();const state=getState(),codes=selectedReadyCodes(exportRows(state),state.project.exportPreferences?.codes);
+    render();const state=getState(),codes=selectedReadyCodes(exportRows(state),state.project.exportPreferences?.codes);
     if(!codes.length)return;
     const snapshot=structuredClone({project:state.project,datasets:state.datasets||{},companyProfile:state.companyProfile,codes});
     const pending=new AbortController();controller=pending;
@@ -122,11 +142,11 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,dow
       byId('exportProgress').textContent=pending.signal.aborted||error.name==='AbortError'?'Export cancelled. No PDF downloaded.':`Export blocked: ${error.message}`;
     }finally{
       controller=null;setBusy(false);disabled.forEach(([node,value])=>node.disabled=value);
-      byId('cancelExport').textContent='Close';byId('exportMeter').hidden=true;refresh();
+      byId('cancelExport').textContent='Close';byId('exportMeter').hidden=true;render();
     }
   }
-  byId('selectAllReady').onclick=()=>{persist(exportRows(getState()).filter(row=>row.ready).map(row=>row.code));refresh();};
-  byId('clearExport').onclick=()=>{persist([]);refresh();};
+  byId('selectAllReady').onclick=()=>{persist(exportRows(getState()).filter(row=>row.ready).map(row=>row.code));render();};
+  byId('clearExport').onclick=()=>{persist([]);render();};
   byId('cancelExport').onclick=close;byId('downloadPdf').onclick=start;
   document.addEventListener('keydown',event=>{
     if(dialog.hidden)return;

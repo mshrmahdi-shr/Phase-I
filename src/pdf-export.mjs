@@ -4,8 +4,10 @@ import {composeMap,throwIfAborted} from './map-compositor.mjs';
 import {relevantFeatures,relevantUnits,siteFeature,containsBounds} from './geology.mjs';
 import {validBoundary,validLocation} from './core.mjs';
 import {validatePrintRequirements} from './print-validation.mjs';
+import {planLegend} from './legend-layout.mjs';
 
 const FONT='DejaVuSans';
+const TITLE_ROWS=[18,26,117.4,34,23,28,20],LEGEND_SYMBOL_WIDTH=9,LEGEND_COLUMN_GAP=3;
 async function pdfLibrary(){
   if(typeof window==='undefined')return (await import('jspdf')).jsPDF;
   await import(new URL('../vendor/jspdf.umd.min.js',import.meta.url).href);
@@ -44,6 +46,10 @@ function textBlock(doc,text,box,size,{align='left',draw=true}={}){
   }
   return lines.length*leading;
 }
+function deepFreeze(value,seen=new WeakSet()){
+  if(!value||typeof value!=='object'||seen.has(value))return value;
+  seen.add(value);for(const child of Object.values(value))deepFreeze(child,seen);return Object.freeze(value);
+}
 function sourceText(source){return typeof source==='string'?source:[source?.name,source?.credits].filter(Boolean).join('. ');}
 function validateFeature(feature){
   for(const ring of [feature?.polygon,...(feature?.holes||[])]){
@@ -75,39 +81,106 @@ function drawScale(doc,geometry){
   for(let i=0;i<4;i++){doc.setFillColor(i%2?255:0);doc.rect(x+i*w/4,y,w/4,2,'FD');}
   doc.text(scale.labels[0],x,y+6);doc.text(scale.labels[1],x+w/2,y+6,{align:'center'});doc.text(scale.labels[2],x+w,y+6,{align:'center'});
 }
-function renderSheet(doc,project,sheet,index,count,{draw=true,companyProfile,companyLogoDataUrl}={}){
-  const g=sheet.geometry,t=g.titleFrame;let y=t.y;
-  const rows=[18,26,117.4,34,23,28,20],boxes=rows.map(height=>{const box={x:t.x,y,width:t.width,height};y+=height+2;return box;});
-  const inset=(box,top=2)=>({x:box.x+2,y:box.y+top,width:box.width-4,height:box.height-top-2});
-  function label(text,box){textBlock(doc,text,{...inset(box),height:4},6.5,{align:'center',draw});}
-  if(draw){doc.setDrawColor(17,17,17);doc.setLineWidth(.3);doc.rect(g.sheet.x,g.sheet.y,g.sheet.width,g.sheet.height);doc.setLineWidth(.25);doc.rect(g.mapFrame.x,g.mapFrame.y,g.mapFrame.width,g.mapFrame.height);for(const b of boxes)doc.rect(b.x,b.y,b.width,b.height);}
-  const brand=boxes[0],logoCell={x:brand.x+2,y:brand.y+2,width:18,height:brand.height-4};
-  const scale=companyProfile.logoPlacement.scale;
+function titleBoxes(geometry,rows=TITLE_ROWS){
+  const t=geometry.titleFrame;let y=t.y;
+  return rows.map(height=>{const box={x:t.x,y,width:t.width,height};y+=height+2;return box;});
+}
+function legendEntries(project,sheet){
+  return [
+    {name:'SITE',symbol:'site'},
+    ...(project.siteBoundary?.length?[{name:'Site boundary',symbol:'siteBoundary'}]:[]),
+    ...(project.buildingBoundary?.length?[{name:'Building boundary',symbol:'buildingBoundary'}]:[]),
+    ...sheet.units.map(unit=>({...unit,code:String(unit.unitCode||unit.name||'Geology unit')})),
+  ];
+}
+function legendText(entry){
+  if(entry.symbol)return entry.name;
+  return [...new Set([entry.code,entry.name,entry.description].filter(value=>typeof value==='string'&&value.trim()).map(value=>value.trim()))].join('\n');
+}
+function legendMeasure(doc){
+  return (entry,{fontSize,width})=>{
+    const textWidth=width-LEGEND_SYMBOL_WIDTH;
+    if(textWidth<=0)return Number.MAX_VALUE;
+    let lines;
+    try{lines=linesFor(doc,legendText(entry),textWidth,fontSize);}
+    catch(error){if(/^Text overflow:/i.test(error.message))return Number.MAX_VALUE;throw error;}
+    const textHeight=lines.length*fontSize*.352778*1.24;
+    return Math.max(textHeight,4)+2;
+  };
+}
+function mapLegendBox(sheet){
+  const box=titleBoxes(sheet.geometry)[2];
+  return {x:box.x+2,y:box.y+8,width:box.width-4,height:box.height-10,padding:0,gap:LEGEND_COLUMN_GAP};
+}
+function continuationLegendBox(sheet){
+  const frame=sheet.geometry.mapFrame;
+  return {x:frame.x+4,y:frame.y+15,width:frame.width-8,height:frame.height-23,padding:0,gap:8};
+}
+function legendBoxOptions(box){return {width:box.width,height:box.height,padding:box.padding,gap:box.gap};}
+function planSheetLegend(doc,project,sheet){
+  const entries=legendEntries(project,sheet),measure=legendMeasure(doc),mapBox=mapLegendBox(sheet);
+  const required=entries.findIndex(entry=>!entry.symbol),fixedCount=required<0?entries.length:required;
+  let map=null,included=0;
+  for(let count=fixedCount;count<=entries.length;count+=1){
+    let candidate;
+    try{candidate=planLegend({entries:entries.slice(0,count),measure,box:legendBoxOptions(mapBox)});}
+    catch(error){if(count===fixedCount)throw error;break;}
+    if(candidate.continuations.length)break;
+    map=candidate.map;included=count;
+  }
+  if(!map)throw new Error('Required legend symbols do not fit on the map page.');
+  const remaining=entries.slice(included),continuations=[];
+  if(remaining.length){
+    const planned=planLegend({entries:remaining,measure,box:legendBoxOptions(continuationLegendBox(sheet))});
+    continuations.push(planned.map,...planned.continuations.map(({title,...page})=>page));
+  }
+  return deepFreeze({map,continuations});
+}
+function columnDimensions(box,columnCount){
+  return {width:(box.width-box.padding*2-box.gap*(columnCount-1))/columnCount,height:box.height-box.padding*2};
+}
+function drawLegendEntry(doc,entry,x,y,width,fontSize,{draw=true}={}){
+  const height=legendMeasure(doc)(entry,{fontSize,width});
+  textBlock(doc,legendText(entry),{x:x+LEGEND_SYMBOL_WIDTH,y,width:width-LEGEND_SYMBOL_WIDTH,height:height-2},fontSize,{draw});
+  if(draw){
+    doc.setDrawColor(17,17,17);doc.setLineWidth(.2);
+    if(entry.symbol==='site'){doc.setFillColor(239,68,68);doc.circle(x+3,y+1.8,1.2,'F');}
+    else if(entry.symbol){doc.setDrawColor(entry.symbol==='siteBoundary'?'#ef4444':'#111111');doc.setLineWidth(entry.symbol==='siteBoundary'?.7:.45);doc.setLineDashPattern(entry.symbol==='buildingBoundary'?[1.2,.8]:[],0);doc.line(x,y+2,x+7,y+2);doc.setLineDashPattern([],0);}
+    else{doc.setFillColor(/^#[0-9a-f]{6}$/i.test(entry.color)?entry.color:'#5fa8d3');doc.rect(x,y+.4,6,3,'FD');}
+  }
+  return height;
+}
+function drawLegendPlan(doc,plan,box,{draw=true}={}){
+  const dimensions=columnDimensions(box,plan.columnCount);
+  plan.columns.forEach((entries,column)=>{
+    const x=box.x+box.padding+column*(dimensions.width+box.gap);let y=box.y+box.padding;
+    for(const entry of entries)y+=drawLegendEntry(doc,entry,x,y,dimensions.width,plan.fontSize,{draw});
+    if(y>box.y+box.height+.01)throw new Error('Legend plan exceeds its measured page box.');
+  });
+}
+function renderCompanyBlock(doc,box,companyProfile,companyLogoDataUrl,{draw=true}={}){
+  const logoCell={x:box.x+2,y:box.y+2,width:18,height:box.height-4},scale=companyProfile.logoPlacement.scale;
   if(scale<.5||scale>1.5)throw new Error('Company logo scale must be between 0.5 and 1.5 to fit the title block.');
   const ratio=companyProfile.logoWidth/companyProfile.logoHeight,maxWidth=Math.min(logoCell.width,17*scale),maxHeight=Math.min(logoCell.height,14*scale);
   let logoWidth=maxWidth,logoHeight=logoWidth/ratio;if(logoHeight>maxHeight){logoHeight=maxHeight;logoWidth=logoHeight*ratio;}
   const alignOffset=companyProfile.logoPlacement.align==='right'?logoCell.width-logoWidth:companyProfile.logoPlacement.align==='center'?(logoCell.width-logoWidth)/2:0;
   const logoX=logoCell.x+alignOffset,logoY=logoCell.y+(logoCell.height-logoHeight)/2;
-  const companyBox={x:brand.x+22,y:brand.y+2,width:brand.width-24,height:brand.height-4};
+  const companyBox={x:box.x+22,y:box.y+2,width:box.width-24,height:box.height-4};
   const companyHeight=textBlock(doc,companyProfile.companyName,{...companyBox,height:5.5},7,{draw});
   const contact=[companyProfile.address,[companyProfile.phone,companyProfile.email].filter(Boolean).join(' · '),companyProfile.website].filter(Boolean).join('\n');
   textBlock(doc,contact,{x:companyBox.x,y:companyBox.y+companyHeight+.4,width:companyBox.width,height:companyBox.height-companyHeight-.4},5.2,{draw});
   if(draw)doc.addImage(companyLogoDataUrl,companyProfile.logoMime==='image/png'?'PNG':'JPEG',logoX,logoY,logoWidth,logoHeight,'company-logo','FAST');
+}
+function creditsFor(sheet){const source=sourceForFigure(sheet.code);return [sourceText(sheet.dataset?.source),source.credits].filter(Boolean).join(' | ');}
+function renderMapPage(doc,project,page,index,count,{draw=true,companyProfile,companyLogoDataUrl}={}){
+  const sheet=page.sheet,g=sheet.geometry,t=g.titleFrame,boxes=titleBoxes(g);
+  const inset=(box,top=2)=>({x:box.x+2,y:box.y+top,width:box.width-4,height:box.height-top-2});
+  function label(text,box){textBlock(doc,text,{...inset(box),height:4},6.5,{align:'center',draw});}
+  if(draw){doc.setDrawColor(17,17,17);doc.setLineWidth(.3);doc.rect(g.sheet.x,g.sheet.y,g.sheet.width,g.sheet.height);doc.setLineWidth(.25);doc.rect(g.mapFrame.x,g.mapFrame.y,g.mapFrame.width,g.mapFrame.height);for(const b of boxes)doc.rect(b.x,b.y,b.width,b.height);}
+  renderCompanyBlock(doc,boxes[0],companyProfile,companyLogoDataUrl,{draw});
   label('NORTH',boxes[1]);
   if(draw){const x=t.x+t.width/2,ny=boxes[1].y;doc.setFontSize(11);doc.text('N',x,ny+11,{align:'center'});doc.setFillColor(17,17,17);doc.triangle(x,ny+13,x-3,ny+22,x,ny+20,'F');doc.setLineWidth(.25);doc.triangle(x,ny+13,x+3,ny+22,x,ny+20,'S');}
-  label('LEGEND',boxes[2]);let ly=boxes[2].y+8,legendBottom=boxes[2].y+boxes[2].height-2;
-  const legends=[{name:'SITE',symbol:'site'},...(project.siteBoundary?.length?[{name:'Site boundary',symbol:'siteBoundary'}]:[]),...(project.buildingBoundary?.length?[{name:'Building boundary',symbol:'buildingBoundary'}]:[]),...sheet.units];
-  for(const unit of legends){
-    const content=[unit.name,unit.description].filter(Boolean).join('\n');
-    const height=textBlock(doc,content,{x:t.x+11,y:ly,width:t.width-13,height:legendBottom-ly},7.5,{draw});
-    if(draw){
-      doc.setDrawColor(17,17,17);doc.setLineWidth(.2);
-      if(unit.symbol==='site'){doc.setFillColor(239,68,68);doc.circle(t.x+5,ly+1.8,1.2,'F');}
-      else if(unit.symbol){doc.setDrawColor(unit.symbol==='siteBoundary'?'#ef4444':'#111111');doc.setLineWidth(unit.symbol==='siteBoundary'?.7:.45);doc.setLineDashPattern(unit.symbol==='buildingBoundary'?[1.2,.8]:[],0);doc.line(t.x+2,ly+2,t.x+9,ly+2);doc.setLineDashPattern([],0);}
-      else{doc.setFillColor(/^#[0-9a-f]{6}$/i.test(unit.color)?unit.color:'#5fa8d3');doc.rect(t.x+2,ly+.4,6,3,'FD');}
-    }
-    ly+=Math.max(height,4)+2;
-  }
+  label('LEGEND',boxes[2]);drawLegendPlan(doc,page.legendPlan,mapLegendBox(sheet),{draw});
   label('PROJECT NAME AND ADDRESS',boxes[3]);
   const projectHeight=textBlock(doc,project.name,{...inset(boxes[3],7),height:15},11,{align:'center',draw});
   textBlock(doc,project.address,{...inset(boxes[3],8+projectHeight),height:boxes[3].height-projectHeight-10},8.5,{align:'center',draw});
@@ -117,8 +190,7 @@ function renderSheet(doc,project,sheet,index,count,{draw=true,companyProfile,com
     textBlock(doc,value,{x:t.x+27,y:boxes[5].y+2+i*8,width:38,height:7},8,{draw});
   }
   label('SOURCE',boxes[6]);
-  const source=sourceForFigure(sheet.code),credits=[sourceText(sheet.dataset?.source),source.credits].filter(Boolean).join(' | ');
-  textBlock(doc,credits,{...inset(boxes[6],6),height:12},6.5,{draw});
+  textBlock(doc,creditsFor(sheet),{...inset(boxes[6],6),height:12},6.5,{draw});
   if(draw){
     drawScale(doc,g);doc.setFontSize(6.5);doc.setTextColor(17,17,17);
     const bottom=g.mapFrame.y+g.mapFrame.height;
@@ -127,32 +199,85 @@ function renderSheet(doc,project,sheet,index,count,{draw=true,companyProfile,com
     doc.text(`${g.dpi} DPI composition; source detail is unchanged. ${sheet.code==='B'?'Imagery acquisition date not verified.':''}`,g.mapFrame.x+2,bottom-1.3);
   }
 }
-/** Returns a complete PDF only; downloading belongs to the UI after its final abort check. */
-export async function exportCombinedPdf({project,codes,datasets={},companyProfile,companyLogoDataUrl,dpi=300,onProgress=()=>{},signal,compose=composeMap}){
+function renderContinuationPage(doc,project,page,index,count,{draw=true,companyProfile,companyLogoDataUrl}={}){
+  const sheet=page.sheet,g=sheet.geometry,t=g.titleFrame,m=g.mapFrame;
+  const gap=2,rows=[18,44,42,30],used=rows.reduce((sum,row)=>sum+row,0)+gap*rows.length;
+  rows.push(t.height-used);const boxes=titleBoxes(g,rows);
+  const inset=(box,top=2)=>({x:box.x+2,y:box.y+top,width:box.width-4,height:box.height-top-2});
+  function label(text,box){textBlock(doc,text,{...inset(box),height:4},6.5,{align:'center',draw});}
+  if(draw){doc.setDrawColor(17,17,17);doc.setLineWidth(.3);doc.rect(g.sheet.x,g.sheet.y,g.sheet.width,g.sheet.height);doc.setLineWidth(.25);doc.rect(m.x,m.y,m.width,m.height);for(const box of boxes)doc.rect(box.x,box.y,box.width,box.height);doc.line(m.x,m.y+11,m.x+m.width,m.y+11);}
+  renderCompanyBlock(doc,boxes[0],companyProfile,companyLogoDataUrl,{draw});
+  label('PROJECT NAME AND ADDRESS',boxes[1]);
+  const projectHeight=textBlock(doc,project.name,{...inset(boxes[1],7),height:16},11,{align:'center',draw});
+  textBlock(doc,project.address,{...inset(boxes[1],8+projectHeight),height:boxes[1].height-projectHeight-10},8.5,{align:'center',draw});
+  label(`FIGURE ${sheet.code}`,boxes[2]);
+  textBlock(doc,project.figures[sheet.code].title,{...inset(boxes[2],7),height:14},9,{align:'center',draw});
+  textBlock(doc,'LEGEND — CONTINUED',{...inset(boxes[2],23),height:12},9,{align:'center',draw});
+  for(const [row,key,value] of [[0,'PROJECT NO.',project.projectNo],[1,'DATE',project.date],[2,'SHEET',`LEGEND CONT. ${page.continuationIndex}`]]){
+    textBlock(doc,key,{x:t.x+2,y:boxes[3].y+2+row*8,width:24,height:6},6.5,{draw});
+    textBlock(doc,value,{x:t.x+27,y:boxes[3].y+2+row*8,width:38,height:7},8,{draw});
+  }
+  label('SOURCE',boxes[4]);textBlock(doc,creditsFor(sheet),{...inset(boxes[4],7),height:boxes[4].height-9},6.5,{draw});
+  textBlock(doc,'LEGEND — CONTINUED',{x:m.x+4,y:m.y+2,width:m.width-8,height:7},12,{align:'center',draw});
+  drawLegendPlan(doc,page.legendPlan,continuationLegendBox(sheet),{draw});
+  if(draw){doc.setFontSize(6.5);doc.setTextColor(17,17,17);doc.text(`Figure ${sheet.code} · legend continuation ${page.continuationIndex}`,m.x+2,m.y+m.height-1.3);doc.text(`Page ${index+1} of ${count}`,m.x+m.width-2,m.y+m.height-1.3,{align:'right'});}
+}
+async function createDocument(signal){
+  const Constructor=await pdfLibrary();throwIfAborted(signal);
+  const doc=new Constructor({orientation:'landscape',unit:'mm',format:'a3',putOnlyUsedFonts:true,compress:false,precision:4});
+  doc.addFileToVFS('DejaVuSans.ttf',base64(await fontBytes(signal)));throwIfAborted(signal);
+  doc.addFont('DejaVuSans.ttf',FONT,'normal');doc.setFont(FONT);return doc;
+}
+async function preparePagePlan({project,codes,datasets={},companyProfile,companyLogoDataUrl,dpi=300,signal,requireLogo=false}){
   throwIfAborted(signal);
   if(!Array.isArray(codes)||!codes.length)throw new Error('Select at least one ready figure.');
   if(codes.some(code=>!['A','B','C','D','E'].includes(code)))throw new Error('Choose valid figures A-E.');
   const selected=[...new Set(codes)].sort(),snapshot=structuredClone({project,datasets,companyProfile,companyLogoDataUrl});
   const sheets=selected.map(code=>{try{return prepare(snapshot.project,code,snapshot.datasets,dpi,snapshot.companyProfile);}catch(error){throw new Error(`Figure ${code}: ${error.message}`,{cause:error});}});
-  if(typeof snapshot.companyLogoDataUrl!=='string'||!/^data:image\/(?:png|jpeg);base64,[a-z0-9+/]+=*$/i.test(snapshot.companyLogoDataUrl))throw new Error('A decoded PNG or JPEG company logo is required before exporting.');
-  const Constructor=await pdfLibrary();throwIfAborted(signal);
-  const doc=new Constructor({orientation:'landscape',unit:'mm',format:'a3',putOnlyUsedFonts:true,compress:false,precision:4});
-  doc.addFileToVFS('DejaVuSans.ttf',base64(await fontBytes(signal)));throwIfAborted(signal);
-  doc.addFont('DejaVuSans.ttf',FONT,'normal');doc.setFont(FONT);
-  let logoProperties;try{logoProperties=doc.getImageProperties(snapshot.companyLogoDataUrl);}catch(error){throw new Error('The company logo could not be decoded for the PDF.',{cause:error});}
-  if(logoProperties.width!==snapshot.companyProfile.logoWidth||logoProperties.height!==snapshot.companyProfile.logoHeight)throw new Error('The decoded company logo dimensions do not match the Company Profile.');
+  if(requireLogo&& (typeof snapshot.companyLogoDataUrl!=='string'||!/^data:image\/(?:png|jpeg);base64,[a-z0-9+/]+=*$/i.test(snapshot.companyLogoDataUrl)))throw new Error('A decoded PNG or JPEG company logo is required before exporting.');
+  const doc=await createDocument(signal);
+  if(requireLogo){
+    let properties;try{properties=doc.getImageProperties(snapshot.companyLogoDataUrl);}catch(error){throw new Error('The company logo could not be decoded for the PDF.',{cause:error});}
+    if(properties.width!==snapshot.companyProfile.logoWidth||properties.height!==snapshot.companyProfile.logoHeight)throw new Error('The decoded company logo dimensions do not match the Company Profile.');
+  }
   doc.setProperties({title:'Phase I ESA figures',subject:'Selected A3 landscape figure sheets',creator:'Phase I ESA'});
-  // Validate every text/legend before any remote imagery or partial page composition.
-  sheets.forEach((sheet,i)=>{try{renderSheet(doc,snapshot.project,sheet,i,sheets.length,{draw:false,companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});}catch(error){throw new Error(`Figure ${sheet.code}: ${error.message}`,{cause:error});}});
-  for(let i=0;i<sheets.length;i++){
-    const sheet=sheets[i];let image;
+  const pages=[];
+  for(const sheet of sheets){
+    let legend;
+    try{legend=planSheetLegend(doc,snapshot.project,sheet);}catch(error){throw new Error(`Figure ${sheet.code}: ${error.message}`,{cause:error});}
+    pages.push({kind:'map',code:sheet.code,sheet,legendPlan:legend.map});
+    legend.continuations.forEach((legendPlan,index)=>pages.push({kind:'legend',code:sheet.code,sheet,continuationIndex:index+1,entries:legendPlan.columns.flat(),legendPlan}));
+  }
+  const pagePlan=deepFreeze(pages);
+  pagePlan.forEach((page,index)=>{try{
+    const options={draw:false,companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl};
+    page.kind==='map'?renderMapPage(doc,snapshot.project,page,index,pagePlan.length,options):renderContinuationPage(doc,snapshot.project,page,index,pagePlan.length,options);
+  }catch(error){throw new Error(`Figure ${page.code}: ${error.message}`,{cause:error});}});
+  return {doc,pagePlan,selected,snapshot:deepFreeze(snapshot),mapCount:sheets.length};
+}
+export async function planPdfExport(options){
+  const {pagePlan,selected}=await preparePagePlan({...options,requireLogo:false});
+  const continuationCounts=Object.fromEntries(selected.map(code=>[code,pagePlan.filter(page=>page.kind==='legend'&&page.code===code).length]));
+  return deepFreeze({pageCount:pagePlan.length,continuationCounts});
+}
+/** Returns a complete PDF only; downloading belongs to the UI after its final abort check. */
+export async function exportCombinedPdf({project,codes,datasets={},companyProfile,companyLogoDataUrl,dpi=300,onProgress=()=>{},signal,compose=composeMap}){
+  const {doc,pagePlan,selected,snapshot,mapCount}=await preparePagePlan({project,codes,datasets,companyProfile,companyLogoDataUrl,dpi,signal,requireLogo:true});
+  let completedMaps=0;
+  for(let i=0;i<pagePlan.length;i++){
+    const page=pagePlan[i],sheet=page.sheet;let image;
     try{
-      throwIfAborted(signal);onProgress({phase:'sheet',code:sheet.code,completed:i,total:sheets.length});
-      image=await compose({project:snapshot.project,code:sheet.code,features:sheet.features,geometry:sheet.geometry,signal,onProgress});throwIfAborted(signal);
-      if(!image?.dataUrl||!(image.width>0&&image.height>0))throw new Error('Map composition did not return a complete image.');
+      throwIfAborted(signal);
+      if(page.kind==='map'){
+        onProgress({phase:'sheet',code:sheet.code,completed:completedMaps,total:mapCount});
+        image=await compose({project:snapshot.project,code:sheet.code,features:sheet.features,geometry:sheet.geometry,signal,onProgress});throwIfAborted(signal);
+        if(!image?.dataUrl||!(image.width>0&&image.height>0))throw new Error('Map composition did not return a complete image.');
+      }
       if(i)doc.addPage('a3','landscape');
-      const m=sheet.geometry.mapFrame;doc.addImage(image.dataUrl,undefined,m.x,m.y,m.width,m.height,`map-${sheet.code}-${i}`,'FAST');
-      renderSheet(doc,snapshot.project,sheet,i,sheets.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});
+      if(page.kind==='map'){
+        const m=sheet.geometry.mapFrame;doc.addImage(image.dataUrl,undefined,m.x,m.y,m.width,m.height,`map-${sheet.code}-${i}`,'FAST');
+        renderMapPage(doc,snapshot.project,page,i,pagePlan.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});completedMaps+=1;
+      }else renderContinuationPage(doc,snapshot.project,page,i,pagePlan.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});
     }catch(error){if(signal?.aborted||error.name==='AbortError')throw new DOMException('Export cancelled.','AbortError');throw new Error(`Figure ${sheet.code}: ${error.message}`,{cause:error});}
     finally{image?.dispose?.();}
     // Give the browser a chance to deliver cancellation between expensive page work.
@@ -161,6 +286,6 @@ export async function exportCombinedPdf({project,codes,datasets={},companyProfil
   throwIfAborted(signal);const buffer=doc.output('arraybuffer');
   await new Promise(resolve=>setTimeout(resolve,0));throwIfAborted(signal);
   const filename=`${(snapshot.project.projectNo||'phase-i').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}-figures-${selected.join('')}.pdf`;
-  const result={blob:new Blob([buffer],{type:'application/pdf'}),filename,pageCount:sheets.length};
-  onProgress({phase:'complete',completed:sheets.length,total:sheets.length});throwIfAborted(signal);return result;
+  const result={blob:new Blob([buffer],{type:'application/pdf'}),filename,pageCount:pagePlan.length};
+  onProgress({phase:'complete',completed:pagePlan.length,total:pagePlan.length});throwIfAborted(signal);return result;
 }
