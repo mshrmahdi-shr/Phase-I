@@ -6,7 +6,7 @@ import {containsBounds,siteFeature} from './geology.mjs';
 import {validateBedrockRing} from './bedrock.mjs';
 
 // Saved summaries are deliberately excluded: only currently loaded geometry counts.
-export function exportRows({project,datasets={}}){
+export function exportRows({project,datasets={},companyProfile}){
   return Object.entries(figureDefaults()).map(([code,defaults])=>{
     const kind=code==='D'?'surficial':code==='E'?'bedrock':null,dataset=datasets[kind];
     const reasons=[];let geometry,loaded=false,hit=null;
@@ -26,7 +26,7 @@ export function exportRows({project,datasets={}}){
         hit=siteFeature(dataset.features,project.location);
       }catch(error){reasons.push(`Invalid ${kind} geometry: ${error.message}`);}
     }
-    reasons.push(...validatePrintRequirements({project,figureCode:code,geologyLoaded:loaded,geologySiteUnit:hit?.name}).map(e=>e.message));
+    reasons.push(...validatePrintRequirements({project,companyProfile,figureCode:code,geologyLoaded:loaded,geologySiteUnit:hit?.name}).map(e=>e.message));
     if(project.buildingBoundary?.length&&!validBoundary(project.buildingBoundary))reasons.push('Correct the invalid building boundary.');
     if(code!=='B'&&project.siteBoundary?.length&&!validBoundary(project.siteBoundary))reasons.push('Correct the invalid site boundary.');
     return {code,title:project.figures?.[code]?.title||defaults.title,source:sourceForFigure(code),ready:reasons.length===0,reasons};
@@ -101,7 +101,7 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,dow
     if(controller)return;
     refresh();const state=getState(),codes=selectedReadyCodes(exportRows(state),state.project.exportPreferences?.codes);
     if(!codes.length)return;
-    const snapshot=structuredClone({project:state.project,datasets:state.datasets||{},codes});
+    const snapshot=structuredClone({project:state.project,datasets:state.datasets||{},companyProfile:state.companyProfile,codes});
     const pending=new AbortController();controller=pending;
     const controls=[...dialog.querySelectorAll('button,input')].filter(node=>node.id!=='cancelExport');
     const disabled=controls.map(node=>[node,node.disabled]);controls.forEach(node=>node.disabled=true);

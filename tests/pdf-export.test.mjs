@@ -13,12 +13,16 @@ function png(code){
   const header=Buffer.alloc(13);header.writeUInt32BE(1,0);header.writeUInt32BE(1,4);header[8]=8;header[9]=6;
   return 'data:image/png;base64,'+Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',deflateSync(Buffer.from([0,code.charCodeAt(0),100,150,128]))),chunk('IEND',Buffer.alloc(0))]).toString('base64');
 }
+const companyProfile=()=>({schemaVersion:1,id:'company-1',companyName:'Acme Environmental',address:'22 King Street',phone:'416-555-0110',
+  email:'hello@acme.test',website:'https://acme.test',preparedBy:'Pat Lee',reviewedBy:'Sam Roy',logoAssetId:'logo-1',
+  logoMime:'image/png',logoWidth:1,logoHeight:1,logoPlacement:{align:'left',scale:1},updatedAt:'2026-08-26T12:00:00Z'});
+const branding=()=>({companyProfile:companyProfile(),companyLogoDataUrl:png('L')});
 function compositor(log,disposed){return async({code,geometry})=>{log.push(code);return {dataUrl:png(code),width:1,height:1,bounds:geometry.bounds,dispose:()=>disposed.push(code)};};}
 function decodePdfText(raw){
   const cmap=new Map([...raw.matchAll(/<([0-9a-f]{4})><([0-9a-f]{4})>/gi)].map(m=>[m[1].toLowerCase(),String.fromCodePoint(parseInt(m[2],16))]));
   return [...raw.matchAll(/<([0-9a-f]+)>\s*Tj/gi)].map(m=>m[1].match(/.{4}/g).map(g=>cmap.get(g.toLowerCase())||'?').join('')).join('\n');
 }
-async function engine(){const {exportCombinedPdf}=await import('../src/pdf-export.mjs');return exportCombinedPdf;}
+async function engine(){const {exportCombinedPdf}=await import('../src/pdf-export.mjs');return options=>exportCombinedPdf({...branding(),...options});}
 test('real PDF has only A/C/E pages in figure order, A3 media boxes, embedded text, and cleaned maps',async()=>{
   const exportPdf=await engine(),log=[],disposed=[];
   const result=await exportPdf({project:project(),codes:['E','A','C','A'],datasets,compose:compositor(log,disposed)});
@@ -29,15 +33,22 @@ test('real PDF has only A/C/E pages in figure order, A3 media boxes, embedded te
   for(const [,w,h] of boxes){assert.ok(Math.abs(Number(w)*25.4/72-420)<.01);assert.ok(Math.abs(Number(h)*25.4/72-297)<.01);}
   assert.ok([...raw.matchAll(/([\d.]+) ([\d.]+) Td/g)].every(([,x,y])=>Number(x)>=7*72/25.4&&Number(y)>=7*72/25.4),'all text stays within the 7 mm page margins');
   assert.match(raw,/\/ToUnicode/);assert.match(raw,/\/FontFile2/);
-  assert.equal((raw.match(/\/Subtype \/Image/g)||[]).length,6,'each page has a unique color image and alpha image');
+  assert.ok((raw.match(/\/Subtype \/Image/g)||[]).length>=8,'the PDF embeds each map and the reusable company logo');
   assert.ok(!/\/JavaScript|\/Launch|\/URI\b/.test(raw),'user text never becomes executable PDF actions');
   assert.equal(result.filename,'26-123-figures-ACE.pdf');
   // Decode this PDF's uncompressed ToUnicode mapping and text operators (not a fixture PDF).
   const decoded=decodePdfText(raw);
   assert.match(decoded,/FIGURE A/);assert.match(decoded,/FIGURE C/);assert.match(decoded,/FIGURE E/);
   assert.match(decoded,/Page 1 of 3/);assert.match(decoded,/Page 3 of 3/);assert.match(decoded,/Café geological study/);
+  assert.match(decoded,/Acme Environmental/);assert.match(decoded,/hello@acme.test/);
   const finalBaseline=Number([...raw.matchAll(/([\d.]+) ([\d.]+) Td/g)].at(-1)[2]);
   assert.ok(finalBaseline>30&&finalBaseline<45,'footer sits wholly inside the map, clear of its bottom frame');
+});
+test('missing company profile or decoded logo blocks the complete PDF before map composition',async()=>{
+  const {exportCombinedPdf}=await import('../src/pdf-export.mjs'),log=[],compose=compositor(log,[]);
+  await assert.rejects(exportCombinedPdf({project:project(),codes:['A'],compose}),/company name|company profile/i);
+  await assert.rejects(exportCombinedPdf({project:project(),codes:['A'],companyProfile:companyProfile(),companyLogoDataUrl:'',compose}),/logo/i);
+  assert.deepEqual(log,[]);
 });
 test('empty selection, invalid data, text overflow, unsupported glyphs and unsafe DPI fail before map work',async()=>{
   const exportPdf=await engine(),log=[],compose=compositor(log,[]),p=project();

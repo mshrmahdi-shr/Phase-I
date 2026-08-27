@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validatePrintRequirements } from '../src/print-validation.mjs';
+import { validatePrintRequirements as validateRequirements } from '../src/print-validation.mjs';
+
+function baseCompany(){
+  return {schemaVersion:1,id:'company-1',companyName:'Acme Environmental',address:'22 King Street',phone:'416-555-0110',
+    email:'hello@acme.test',website:'https://acme.test',preparedBy:'',reviewedBy:'',logoAssetId:'logo-1',
+    logoMime:'image/png',logoWidth:320,logoHeight:160,logoPlacement:{align:'left',scale:1},updatedAt:'2026-08-26T12:00:00Z'};
+}
+const validatePrintRequirements=state=>validateRequirements({companyProfile:baseCompany(),...state});
 
 function baseProject(){
   return {
@@ -40,6 +47,15 @@ test('Figure E requires loaded bedrock polygons and a detected site unit', () =>
 
 test('complete Figure A project passes validation', () => {
   assert.deepEqual(validatePrintRequirements({project:baseProject(),figureCode:'A'}),[]);
+});
+
+test('every output requires field-specific company contact fields and decoded logo metadata',()=>{
+  const missing=validateRequirements({project:baseProject(),figureCode:'A',companyProfile:{}});
+  assert.deepEqual(missing.filter(error=>error.code.startsWith('company-')).map(error=>error.code),[
+    'company-name','company-address','company-phone','company-email','company-website','company-logo'
+  ]);
+  const invalidLogo=validateRequirements({project:baseProject(),figureCode:'A',companyProfile:{...baseCompany(),logoAssetId:'',logoMime:'',logoWidth:0,logoHeight:0}});
+  assert.equal(invalidLogo.some(error=>error.code==='company-logo'),true);
 });
 
 test('print rejects blank, null and out-of-range SITE coordinates', () => {

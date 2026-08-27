@@ -7,9 +7,18 @@ import {sheetGeometry,metricScale,captureFigureView} from './src/sheet-layout.mj
 import {loadBedrockCache} from './src/bedrock-cache.mjs';
 import {createExportDialog} from './src/export-selection.mjs';
 import {exportCombinedPdf} from './src/pdf-export.mjs';
-const $=id=>document.getElementById(id), STORAGE='phase-i-esa-project-v2', MRD='./data/mrd128.kml';
+import {createAssetStore} from './src/asset-store.mjs';
+import {normalizeCompanyProfile} from './src/company-profile.mjs';
+import {createCompanyProfileDialog} from './src/company-ui.mjs';
+const $=id=>document.getElementById(id), STORAGE='phase-i-esa-project-v2', COMPANY_STORAGE='phase-i-esa-company-profile-v1', MRD='./data/mrd128.kml';
 let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject()})();
-let active='A',draw=null,pts=[],siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,exportBusy=false;
+let active='A',draw=null,pts=[],siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,exportBusy=false,companyProfile=null,printBranding=null;
+const assetStore=createAssetStore();
+function loadCompanyProfile(){try{const saved=localStorage.getItem(COMPANY_STORAGE);return saved?normalizeCompanyProfile(JSON.parse(saved)):null;}catch{return null;}}
+function saveCompanyProfile(profile){const normalized=normalizeCompanyProfile(profile);localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized));return normalized;}
+const companyDialog=createCompanyProfileDialog({document,assetStore,loadProfile:loadCompanyProfile,saveProfile:saveCompanyProfile,Zip:JSZip,onChanged:profile=>{
+  companyProfile=profile;preflight?.refresh();exportDialog?.refresh();if(!printSession?.isOpen)refreshPrint();
+}});
 let locationRevision=0;
 const geoCoverage={surficial:null,bedrock:null},geoReady={surficial:false,bedrock:false},geoRequest={surficial:0,bedrock:0};
 // Imports supersede dataset commits, but only an official request owns its load button.
@@ -241,19 +250,19 @@ $('saveProject').onclick=save;
 $('newProject').onclick=()=>{if(confirm('Start a new local project? Export your current project first if you need a backup.')){localStorage.removeItem(STORAGE);localStorage.removeItem('phase-i-esa-project-v1');location.reload();}};
 $('exportJson').onclick=()=>dl(`${safe(project.name||'phase-i-project')}.json`,JSON.stringify(project,null,2),'application/json');
 $('importJson').onchange=async e=>{const file=e.target.files?.[0];if(!file||exportBusy)return;try{const imported=restoreProject(JSON.parse(await file.text()));if(exportBusy){status('saveMessage','Reimport the project after PDF export finishes.');return;}project=imported;if(save())location.reload();}catch(error){status('saveMessage',`Project import failed: ${error.message}`,'error');}};
-$('exportDxf').onclick=()=>dl(`${safe(project.name||'phase-i')}.dxf`,buildDxf(project),'application/dxf');
+$('exportDxf').onclick=async()=>{try{const branding=await companyDialog.outputSnapshot(companyProfile);dl(`${safe(project.name||'phase-i')}.dxf`,buildDxf(project,{companyProfile:branding.companyProfile}),'application/dxf');}catch(error){status('saveMessage',`DXF blocked: ${error.message}`,'error');await companyDialog.refresh();await companyDialog.open();}};
 function printState(){
   const kind=geologyKind(),hit=kind?siteFeature(geo[kind],project.location):null;
   let covered=true;try{if(kind&&project.location)covered=containsBounds(geoCoverage[kind],requiredGeologyBounds(kind));}catch{covered=false;}
-  return {project,figureCode:active,geologyLoaded:kind?geoReady[kind]&&covered&&geo[kind].length>0:true,geologySiteUnit:hit?.unitCode||hit?.name||null};
+  return {project,companyProfile:printBranding?.companyProfile||companyProfile,figureCode:active,geologyLoaded:kind?geoReady[kind]&&covered&&geo[kind].length>0:true,geologySiteUnit:hit?.unitCode||hit?.name||null};
 }
 preflight=createPreflight({document,getState:printState});
 printSession=createPrintSession({document,map,validate:()=>preflight.check(),fit:()=>zoom(active,true),render:()=>{renderGeo();refreshPrint();updateScale();},waitForTiles:()=>waitForMapTiles($('map')),onRestore:()=>{renderGeo();updateScale();}});
-$('printA3').onclick=()=>{if(exportBusy)return;stopDrawing();setBasemap(assignedBasemap());return printSession.open();};
-$('closePrint').onclick=()=>printSession.close();
+$('printA3').onclick=async()=>{if(exportBusy)return false;stopDrawing();setBasemap(assignedBasemap());try{printBranding=await companyDialog.outputSnapshot(companyProfile);renderCompanyBrand(printBranding);return await printSession.open();}catch(error){printBranding=null;status('saveMessage',`A3 output blocked: ${error.message}`,'error');await companyDialog.refresh();preflight.check();await companyDialog.open();return false;}};
+$('closePrint').onclick=()=>{printSession.close();printBranding=null;};
 $('confirmPrint').onclick=()=>{if(!$('confirmPrint').disabled&&preflight.check())window.print();};
-window.addEventListener('afterprint',()=>printSession.close());
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('exportDialog').hidden)printSession.close();});
+window.addEventListener('afterprint',()=>{printSession.close();printBranding=null;});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('exportDialog').hidden&&$('companyProfileDialog').hidden){printSession.close();printBranding=null;}});
 function datasets(){return Object.fromEntries(['surficial','bedrock'].map(kind=>[kind,{features:geoReady[kind]?geo[kind]:[],source:geoSource[kind],coverage:geoCoverage[kind]}]));}
 let busyControls=[],busyHandlers=[];
 function setExportBusy(value){
@@ -268,7 +277,8 @@ function setExportBusy(value){
     busyHandlers.forEach(([handler,enabled])=>{if(enabled)handler.enable();});busyHandlers=[];
   }
 }
-exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets()}),save,setBusy:setExportBusy,exportPdf:exportCombinedPdf});
+async function exportBrandedPdf(args){const branding=await companyDialog.outputSnapshot(args.companyProfile);return exportCombinedPdf({...args,...branding});}
+exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf});
 $('exportPdf').onclick=()=>{if(!printSession.isOpen)exportDialog.open();};
 function refreshPrint(){
   const f=project.figures[active];
@@ -282,5 +292,12 @@ function refreshPrint(){
   $('printSource').textContent=[source?[source.name,source.credits].filter(Boolean).join('. '):'',base,active==='B'?'Imagery acquisition date not verified.':''].filter(Boolean).join(' | ');
 }
 
+function renderCompanyBrand({companyProfile:profile,companyLogoDataUrl}){
+  $('printCompanyLogo').src=companyLogoDataUrl;$('printCompanyLogo').alt=`${profile.companyName} logo`;
+  $('printCompanyName').textContent=profile.companyName;
+  $('printCompanyContact').textContent=[profile.address,profile.phone,profile.email,profile.website].filter(Boolean).join(' · ');
+  $('printCompanyLogo').closest('.tb-brand').dataset.logoAlign=profile.logoPlacement.align;$('printCompanyLogo').style.transform=`scale(${profile.logoPlacement.scale})`;
+}
+
 function dl(n,t,ty){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:ty}));a.download=n;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}function safe(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}function esc(s=''){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
-sync();
+sync();await companyDialog.refresh();if(!companyProfile)await companyDialog.open();

@@ -55,11 +55,22 @@ test('figureDefaults returns stable labels and extents', () => {
   assert.equal(f.E.title, 'BEDROCK GEOLOGY');
 });
 
-test('buildDxf includes layer names and polygon vertices', () => {
-  const dxf = buildDxf({ siteBoundary: [[-79,43],[-79.1,43],[-79.1,43.1]], buildingBoundary: [] });
+test('buildDxf includes company/title text on separate layers without raster logo vectors', () => {
+  const companyProfile={...emptyCompanyProfile(),companyName:'Acme Engineering',address:'1 Main Street',phone:'555-0100',email:'info@acme.test',website:'https://acme.test',
+    logoAssetId:'logo-1',logoMime:'image/png',logoWidth:320,logoHeight:160};
+  const dxf = buildDxf({name:'Phase I Study',projectNo:'AB-12345',siteBoundary: [[-79,43],[-79.1,43],[-79.1,43.1]], buildingBoundary: [] },{companyProfile});
   assert.match(dxf, /SITE_BOUNDARY/);
   assert.match(dxf, /LWPOLYLINE/);
   assert.match(dxf, /10\n-79/);
+  assert.match(dxf,/8\nCOMPANY_TEXT\n[^]*1\nAcme Engineering/);
+  assert.match(dxf,/8\nTITLE_BLOCK\n[^]*1\nPhase I Study/);
+  assert.doesNotMatch(dxf,/IMAGE|logo-1|PNG/i);
+});
+
+test('buildDxf rejects missing company branding and overflowing title text',()=>{
+  assert.throws(()=>buildDxf({name:'Study'}),/company name|company profile/i);
+  const companyProfile={...emptyCompanyProfile(),companyName:'Acme',address:'1 Main',phone:'555',email:'a@b.test',website:'https://a.test',logoAssetId:'logo',logoMime:'image/png',logoWidth:1,logoHeight:1};
+  assert.throws(()=>buildDxf({name:'x'.repeat(300)}, {companyProfile}),/title.*fit|too long|overflow/i);
 });
 
 test('extractNetworkLinks finds MRD128 official polygon and raster links', () => {

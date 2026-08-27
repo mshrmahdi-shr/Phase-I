@@ -8,11 +8,14 @@ const project=()=>({...createProject({name:'Public QA',projectNo:'FE 26-15876',a
 const polygon={name:'Custom unit',description:'Custom description',unitCode:'55b',color:'#123456',fillOpacity:.6,
   polygon:[[-80,43],[-79,43],[-79,44],[-80,44],[-80,43]],holes:[]};
 const dataset=()=>({features:[structuredClone(polygon)],source:{id:'custom',name:'Custom bedrock.kml'},coverage:null});
+const companyProfile=()=>({schemaVersion:1,id:'company-1',companyName:'Acme Environmental',address:'22 King Street',phone:'416-555-0110',
+  email:'hello@acme.test',website:'https://acme.test',preparedBy:'',reviewedBy:'',logoAssetId:'logo-1',logoMime:'image/png',
+  logoWidth:320,logoHeight:160,logoPlacement:{align:'left',scale:1},updatedAt:'2026-08-26T12:00:00Z'});
 
 test('selection evaluates actual prerequisites, not active figure or saved geology badges',async()=>{
   const {exportRows,selectedReadyCodes}=await import('../src/export-selection.mjs');
   const p=project();p.geology={surficial:{count:10,siteUnit:'9c'},bedrock:{count:20,siteUnit:'55b'}};
-  const rows=exportRows({project:p,datasets:{},active:'E'});
+  const rows=exportRows({project:p,datasets:{},companyProfile:companyProfile(),active:'E'});
   assert.deepEqual(rows.filter(r=>r.ready).map(r=>r.code),['A','C']);
   assert.match(rows[1].reasons.join(' '),/Site Boundary/);
   assert.match(rows[3].reasons.join(' '),/Surficial|surficial/);
@@ -23,16 +26,16 @@ test('selection evaluates actual prerequisites, not active figure or saved geolo
 
 test('geology readiness checks the fitted batch footprint, actual geometry and SITE holes',async()=>{
   const {exportRows,selectedReadyCodes}=await import('../src/export-selection.mjs');
-  const p=project(),datasets={bedrock:dataset()};
-  let rows=exportRows({project:p,datasets});
+  const p=project(),datasets={bedrock:dataset()},company=companyProfile();
+  let rows=exportRows({project:p,datasets,companyProfile:company});
   assert.deepEqual(selectedReadyCodes(rows,['E','A','C']),['A','C','E']);
   datasets.bedrock.coverage={west:-79.39,east:-79.37,south:43.64,north:43.66};
-  rows=exportRows({project:p,datasets});assert.equal(rows[4].ready,false);assert.match(rows[4].reasons.join(' '),/extent|cover/);
+  rows=exportRows({project:p,datasets,companyProfile:company});assert.equal(rows[4].ready,false);assert.match(rows[4].reasons.join(' '),/extent|cover/);
   datasets.bedrock.coverage=null;
   datasets.bedrock.features[0].holes=[[[-79.4,43.6],[-79.3,43.6],[-79.3,43.7],[-79.4,43.7],[-79.4,43.6]]];
-  assert.equal(exportRows({project:p,datasets})[4].ready,false);
+  assert.equal(exportRows({project:p,datasets,companyProfile:company})[4].ready,false);
   datasets.bedrock.features[0].holes=[];datasets.bedrock.features[0].polygon.pop();
-  assert.equal(exportRows({project:p,datasets})[4].ready,false);
+  assert.equal(exportRows({project:p,datasets,companyProfile:company})[4].ready,false);
 });
 
 function fixture(){
@@ -43,7 +46,7 @@ function fixture(){
 
 test('real dialog selects ready rows only, clears, invalidates live selections, and safely displays text',async()=>{
   const {createExportDialog}=await import('../src/export-selection.mjs');
-  const {document,$}=fixture();const p=project(),state={project:p,datasets:{bedrock:dataset()}};
+  const {document,$}=fixture();const p=project(),state={project:p,datasets:{bedrock:dataset()},companyProfile:companyProfile()};
   p.figures.E.title='<img src=x onerror=alert(1)> فارسی';p.exportPreferences={codes:['E','C','A']};
   const dialog=createExportDialog({document,getState:()=>state,save(){},setBusy(){},exportPdf:async()=>{throw Error('unused');},download(){}});
   dialog.open();
@@ -64,11 +67,13 @@ test('dialog snapshots input, prevents duplicates, reports per-phase progress, a
   const {createExportDialog}=await import('../src/export-selection.mjs');
   const {document,$}=fixture();const p=project();p.exportPreferences={codes:['C','A']};
   let release,calls=0,input;const pending=new Promise(r=>release=r),busy=[],downloads=[];
-  const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{}}),save(){},setBusy:value=>busy.push(value),
+  const company=companyProfile();
+  const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:company}),save(){},setBusy:value=>busy.push(value),
     exportPdf:async args=>{calls++;input=args;await pending;return {blob:new Blob(['pdf']),filename:'fe-26-15876-figures-AC.pdf',pageCount:2};},download:r=>downloads.push(r)});
   dialog.open();const running=dialog.start();await dialog.start();
   assert.equal(calls,1);assert.equal($('downloadPdf').disabled,true);assert.equal($('cancelExport').disabled,false);
   p.name='Changed after start';assert.equal(input.project.name,'Public QA');assert.deepEqual(input.codes,['A','C']);
+  company.companyName='Changed Company';assert.equal(input.companyProfile.companyName,'Acme Environmental');
   input.onProgress({phase:'sheet',code:'C',completed:1,total:2});assert.match($('exportProgress').textContent,/2 of 2/);
   input.onProgress({phase:'imagery',code:'C',completed:3,total:4});assert.match($('exportProgress').textContent,/3 of 4.*source images/);
   release();await running;
@@ -81,14 +86,14 @@ test('Escape cancels work and a late successful result never downloads; failure 
   const {createExportDialog}=await import('../src/export-selection.mjs');
   const {document,dom,$}=fixture();const p=project();p.exportPreferences={codes:['A']};
   let release,input;const busy=[],downloads=[];
-  const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{}}),save(){},setBusy:value=>busy.push(value),
+  const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:companyProfile()}),save(){},setBusy:value=>busy.push(value),
     exportPdf:args=>{input=args;return new Promise(r=>release=r);},download:r=>downloads.push(r)});
   dialog.open();const running=dialog.start();
   document.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
   assert.equal(input.signal.aborted,true);release({blob:new Blob(['pdf']),filename:'x',pageCount:1});await running;
   assert.equal(downloads.length,0);assert.match($('exportProgress').textContent,/cancelled/i);assert.deepEqual(busy,[true,false]);
   dialog.close();
-  const failure=createExportDialog({document,getState:()=>({project:p,datasets:{}}),save(){},setBusy:value=>busy.push(value),exportPdf:async()=>{throw Error('Figure A: source unavailable');},download:r=>downloads.push(r)});
+  const failure=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:companyProfile()}),save(){},setBusy:value=>busy.push(value),exportPdf:async()=>{throw Error('Figure A: source unavailable');},download:r=>downloads.push(r)});
   failure.open();await failure.start();assert.match($('exportProgress').textContent,/Figure A: source unavailable/);assert.equal(failure.busy,false);assert.equal(downloads.length,0);
 });
 

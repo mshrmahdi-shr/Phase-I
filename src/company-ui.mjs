@@ -1,0 +1,255 @@
+import {emptyCompanyProfile,normalizeCompanyProfile,snapshotCompanyProfile,validateCompanyProfile} from './company-profile.mjs';
+import {commitCompanyTemplate,exportCompanyTemplate,inspectCompanyTemplate} from './company-template.mjs';
+
+const MAX_LOGO_BYTES=4*1024*1024;
+const MAX_LOGO_PIXELS=16_000_000;
+const FIELD_IDS={
+  companyName:'companyName',address:'companyAddress',phone:'companyPhone',email:'companyEmail',website:'companyWebsite',
+  preparedBy:'companyPreparedBy',reviewedBy:'companyReviewedBy'
+};
+const ERROR_IDS={companyName:'companyNameError',address:'companyAddressError',phone:'companyPhoneError',email:'companyEmailError',website:'companyWebsiteError',logoAssetId:'logoError',logoPlacement:'logoPlacementError'};
+
+function logoMime(bytes){
+  if(bytes.length>=8&&[137,80,78,71,13,10,26,10].every((byte,index)=>bytes[index]===byte))return 'image/png';
+  if(bytes.length>=3&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255)return 'image/jpeg';
+  return '';
+}
+
+async function bitmapDimensions(blob,document){
+  const createBitmap=document.defaultView?.createImageBitmap||globalThis.createImageBitmap;
+  if(typeof createBitmap==='function'){
+    let bitmap;
+    try{
+      bitmap=await createBitmap(blob);
+      return {width:bitmap.width,height:bitmap.height};
+    }catch(error){
+      throw new Error('The logo could not be decoded as a PNG or JPEG image.',{cause:error});
+    }finally{bitmap?.close?.();}
+  }
+  const ImageConstructor=document.defaultView?.Image;
+  const createUrl=globalThis.URL?.createObjectURL;
+  if(typeof ImageConstructor!=='function'||typeof createUrl!=='function')throw new Error('This browser cannot decode the selected logo. Use a current browser.');
+  const url=createUrl(blob);
+  try{
+    return await new Promise((resolve,reject)=>{
+      const image=new ImageConstructor();
+      image.onload=()=>resolve({width:image.naturalWidth,height:image.naturalHeight});
+      image.onerror=()=>reject(new Error('The logo could not be decoded as a PNG or JPEG image.'));
+      image.src=url;
+    });
+  }finally{globalThis.URL.revokeObjectURL(url);}
+}
+
+async function decodeLogo(blob,document){
+  if(!blob||!Number.isSafeInteger(blob.size)||typeof blob.arrayBuffer!=='function')throw new Error('Choose a PNG or JPEG logo file.');
+  if(blob.size<=0)throw new Error('The logo file is empty.');
+  if(blob.size>MAX_LOGO_BYTES)throw new Error('The logo must be 4 MiB or smaller.');
+  const bytes=new Uint8Array(await blob.arrayBuffer()),mime=logoMime(bytes);
+  if(!mime)throw new Error('The logo byte signature must be PNG or JPEG.');
+  if(blob.type&&blob.type!==mime)throw new Error('The logo file type does not match its PNG or JPEG byte signature.');
+  const {width,height}=await bitmapDimensions(new Blob([bytes],{type:mime}),document);
+  if(!Number.isSafeInteger(width)||!Number.isSafeInteger(height)||width<=0||height<=0)throw new Error('The decoded logo has invalid dimensions.');
+  if(width>Math.floor(MAX_LOGO_PIXELS/height))throw new Error('The decoded logo must not exceed 16 megapixels.');
+  return {blob:new Blob([bytes],{type:mime}),bytes,mime,width,height};
+}
+
+async function sha256(bytes){
+  if(!globalThis.crypto?.subtle)throw new Error('Secure logo hashing is unavailable in this browser.');
+  const digest=await globalThis.crypto.subtle.digest('SHA-256',bytes);
+  return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
+}
+
+function dataUrl(bytes,mime,document){
+  const encode=globalThis.btoa||document.defaultView?.btoa;
+  if(typeof encode!=='function')throw new Error('The logo could not be prepared for preview.');
+  let binary='';for(let index=0;index<bytes.length;index+=8192)binary+=String.fromCharCode(...bytes.subarray(index,index+8192));
+  return `data:${mime};base64,${encode(binary)}`;
+}
+
+function validProfile(value){
+  try{const profile=normalizeCompanyProfile(value);return validateCompanyProfile(profile).length?null:profile;}catch{return null;}
+}
+
+function downloadBlob({blob,filename},document){
+  const url=URL.createObjectURL(blob),link=document.createElement('a');
+  try{
+    link.href=url;link.download=filename;link.hidden=true;document.body.append(link);link.click();
+  }finally{link.remove();setTimeout(()=>URL.revokeObjectURL(url),0);}
+}
+
+export function createCompanyProfileDialog({document,assetStore,loadProfile,saveProfile,onChanged=()=>{},Zip=globalThis.JSZip}={}){
+  if(!document?.getElementById)throw new Error('A document is required for the Company Profile dialog.');
+  if(!assetStore||typeof assetStore.get!=='function'||typeof assetStore.put!=='function'||typeof assetStore.delete!=='function')throw new Error('A readable and writable asset store is required.');
+  if(typeof loadProfile!=='function'||typeof saveProfile!=='function')throw new Error('Company profile load and save functions are required.');
+  const byId=id=>document.getElementById(id),dialog=byId('companyProfileDialog'),form=byId('companyProfileForm');
+  let current=null,selectedLogo=null,importCandidate=null,returnFocus=null,background=[],destroyed=false;
+
+  function status(message,kind=''){
+    const node=byId('companyProfileStatus');node.textContent=message;node.dataset.kind=kind;
+  }
+  function fieldControl(field){return byId(FIELD_IDS[field]||({logoAssetId:'companyLogo',logoPlacement:'companyLogoScale'}[field]));}
+  function clearErrors(){for(const [field,id] of Object.entries(ERROR_IDS)){byId(id).textContent='';fieldControl(field)?.removeAttribute('aria-invalid');}}
+  function showErrors(errors){
+    clearErrors();
+    for(const error of errors){const node=byId(ERROR_IDS[error.field]),control=fieldControl(error.field);if(node)node.textContent=error.message;control?.setAttribute('aria-invalid','true');}
+    errors[0]&&fieldControl(errors[0].field)?.focus();
+  }
+  function placementPreview(){
+    const align=byId('companyLogoAlign').value,raw=Number(byId('companyLogoScale').value),scale=Number.isFinite(raw)?Math.min(1.5,Math.max(.5,raw)):1;
+    const box=byId('companyLogoPreview').parentElement;box.dataset.logoAlign=align;box.style.setProperty('--logo-scale',String(scale));
+    byId('companyLogoPreview').style.transform=`scale(${scale})`;
+  }
+  function fields(profile){
+    for(const [field,id] of Object.entries(FIELD_IDS))byId(id).value=profile?.[field]||'';
+    byId('companyLogoAlign').value=profile?.logoPlacement?.align||'left';
+    byId('companyLogoScale').value=String(profile?.logoPlacement?.scale||1);
+    placementPreview();
+  }
+  function previewLogo(url,alt){const image=byId('companyLogoPreview');image.src=url||'';image.alt=url?alt:'';image.hidden=!url;placementPreview();}
+  function profileFromForm(){
+    const old=current||emptyCompanyProfile(),value={...old,updatedAt:new Date().toISOString()};
+    for(const [field,id] of Object.entries(FIELD_IDS))value[field]=byId(id).value.trim();
+    value.logoPlacement={align:byId('companyLogoAlign').value,scale:Number(byId('companyLogoScale').value)};
+    if(selectedLogo){value.logoAssetId=selectedLogo.id;value.logoMime=selectedLogo.mime;value.logoWidth=selectedLogo.width;value.logoHeight=selectedLogo.height;}
+    return normalizeCompanyProfile(value);
+  }
+  async function storedLogo(profile){
+    const asset=await assetStore.get(profile.logoAssetId);
+    if(!asset)throw new Error('The saved company logo is missing. Upload the PNG or JPEG logo again.');
+    if(asset.metadata?.id!==profile.logoAssetId||asset.metadata?.mime!==profile.logoMime||asset.metadata?.width!==profile.logoWidth||asset.metadata?.height!==profile.logoHeight){
+      throw new Error('The saved company logo metadata does not match the profile. Upload the logo again.');
+    }
+    const decoded=await decodeLogo(asset.blob,document);
+    if(decoded.mime!==profile.logoMime||decoded.width!==profile.logoWidth||decoded.height!==profile.logoHeight)throw new Error('The saved company logo no longer matches its decoded dimensions. Upload the logo again.');
+    return decoded;
+  }
+  async function notify(profile){current=profile?snapshotCompanyProfile(profile):null;await onChanged(current);return current;}
+  async function refresh(){
+    clearErrors();selectedLogo=null;importCandidate=null;byId('companyImportPreview').hidden=true;
+    const loaded=validProfile(await loadProfile());
+    if(!loaded){fields(loaded);previewLogo('','');await notify(null);return null;}
+    try{
+      const decoded=await storedLogo(loaded);fields(loaded);previewLogo(dataUrl(decoded.bytes,decoded.mime,document),`${loaded.companyName} logo`);
+      return await notify(loaded);
+    }catch(error){
+      fields(loaded);previewLogo('','');byId('logoError').textContent=error.message;status(error.message,'error');await notify(null);return null;
+    }
+  }
+  async function open(){
+    if(destroyed||!dialog.hidden)return current;
+    if(!current)await refresh();
+    returnFocus=document.activeElement;dialog.hidden=false;document.body.classList.add('company-profile-open');
+    background=[...document.querySelectorAll('body > header, body > main, #exportDialog, #printPreview')].map(node=>[node,node.inert]);
+    background.forEach(([node])=>node.inert=true);byId('closeCompanyProfile').disabled=!current;
+    status(current?'Review and save your reusable company details.':'Complete every required field and add a decoded PNG or JPEG logo before creating outputs.');
+    byId('companyName').focus();return current;
+  }
+  function close(){
+    if(dialog.hidden||!current)return false;
+    dialog.hidden=true;document.body.classList.remove('company-profile-open');background.forEach(([node,inert])=>node.inert=inert);background=[];
+    returnFocus?.focus();return true;
+  }
+  async function finishSave(profile,newAsset,oldProfile=current){
+    let stored=false;
+    try{
+      if(newAsset){await assetStore.put(newAsset);stored=true;}
+      const result=await saveProfile(profile);if(result===false)throw new Error('Company profile metadata could not be saved.');
+    }catch(error){
+      if(stored)try{await assetStore.delete(profile.logoAssetId);}catch{}
+      throw error;
+    }
+    await notify(profile);
+    let cleanupWarning='';
+    if(oldProfile?.logoAssetId&&oldProfile.logoAssetId!==profile.logoAssetId){
+      try{await assetStore.delete(oldProfile.logoAssetId);}catch{cleanupWarning=' The older logo could not be cleaned up.';}
+    }
+    selectedLogo=null;byId('closeCompanyProfile').disabled=false;status(`Company profile saved.${cleanupWarning}`,'ok');
+    fields(profile);return profile;
+  }
+  async function submit(event){
+    event?.preventDefault?.();clearErrors();
+    let profile;
+    try{profile=profileFromForm();}catch(error){status(error.message,'error');return false;}
+    const errors=validateCompanyProfile(profile);if(errors.length){showErrors(errors);status('Correct the highlighted company profile fields.','error');return false;}
+    let newAsset=null;
+    if(selectedLogo){
+      newAsset={metadata:{id:selectedLogo.id,kind:'company-logo',mime:selectedLogo.mime,size:selectedLogo.blob.size,width:selectedLogo.width,height:selectedLogo.height,
+        sha256:selectedLogo.sha256,createdAt:selectedLogo.createdAt},blob:selectedLogo.blob};
+    }
+    try{await finishSave(profile,newAsset);close();return true;}catch(error){status(`Company profile was not replaced: ${error.message}`,'error');return false;}
+  }
+  async function selectLogo(event){
+    clearErrors();const file=event?.target?.files?.[0];if(!file)return;
+    try{
+      const decoded=await decodeLogo(file,document),id=`company-logo-${crypto.randomUUID()}`;
+      selectedLogo={...decoded,id,sha256:await sha256(decoded.bytes),createdAt:new Date().toISOString()};
+      previewLogo(dataUrl(decoded.bytes,decoded.mime,document),'Selected company logo preview');status('Logo decoded. Save the profile to use it on outputs.','ok');
+    }catch(error){selectedLogo=null;previewLogo('','');byId('logoError').textContent=error.message;status(error.message,'error');}
+  }
+  async function previewImport(event){
+    const file=event?.target?.files?.[0];if(!file)return false;
+    importCandidate=null;byId('companyImportPreview').hidden=true;
+    try{
+      const candidate=await inspectCompanyTemplate(file,{Zip}),decoded=await decodeLogo(candidate.logoBlob,document);
+      if(decoded.mime!==candidate.logoMetadata.mime||decoded.width!==candidate.logoMetadata.width||decoded.height!==candidate.logoMetadata.height){
+        throw new Error('The imported logo decoded dimensions do not match its template metadata.');
+      }
+      importCandidate={...candidate,logoBlob:decoded.blob};
+      byId('companyImportSummary').textContent=[candidate.profile.companyName,candidate.profile.address,candidate.profile.phone,candidate.profile.email,candidate.profile.website].join(' · ');
+      const image=byId('companyImportLogo');image.src=dataUrl(decoded.bytes,decoded.mime,document);image.alt=`${candidate.profile.companyName} imported logo`;
+      await open();byId('companyImportPreview').hidden=false;byId('confirmCompanyImport').focus();status('Review this company template, then confirm replacement.');return true;
+    }catch(error){status(`Company template import failed: ${error.message}`,'error');return false;}
+    finally{event.target.value='';}
+  }
+  async function confirmImport(){
+    if(!importCandidate)return false;const old=current;let profile;
+    try{
+      profile=await commitCompanyTemplate(importCandidate,{assetStore});
+      try{
+        const result=await saveProfile(profile);if(result===false)throw new Error('Company profile metadata could not be saved.');
+      }catch(error){try{await assetStore.delete(profile.logoAssetId);}catch{}throw error;}
+      await notify(profile);
+      let cleanupWarning='';if(old?.logoAssetId&&old.logoAssetId!==profile.logoAssetId){try{await assetStore.delete(old.logoAssetId);}catch{cleanupWarning=' The older logo could not be cleaned up.';}}
+      importCandidate=null;byId('companyImportPreview').hidden=true;fields(profile);byId('closeCompanyProfile').disabled=false;
+      const decoded=await storedLogo(profile);previewLogo(dataUrl(decoded.bytes,decoded.mime,document),`${profile.companyName} logo`);
+      status(`Imported company profile saved.${cleanupWarning}`,'ok');close();return true;
+    }catch(error){status(`Company profile was not replaced: ${error.message}`,'error');return false;}
+  }
+  async function exportTemplate(){
+    try{
+      const profile=current||await refresh();if(!profile)throw new Error('Complete and save the Company Profile first.');
+      downloadBlob(await exportCompanyTemplate({profile,assetStore,Zip}),document);status('Company template downloaded.','ok');return true;
+    }catch(error){status(`Company template export failed: ${error.message}`,'error');await open();return false;}
+  }
+  async function outputSnapshot(expected=current){
+    const profile=validProfile(expected);if(!profile){
+      const errors=validateCompanyProfile(expected||emptyCompanyProfile());
+      throw new Error(`Company profile is incomplete: ${errors.map(error=>error.message).join(' ')}`);
+    }
+    const decoded=await storedLogo(profile);
+    return {companyProfile:snapshotCompanyProfile(profile),companyLogoDataUrl:dataUrl(decoded.bytes,decoded.mime,document)};
+  }
+  function keydown(event){
+    if(dialog.hidden)return;
+    if(event.key==='Escape'){event.preventDefault();close();return;}
+    if(event.key!=='Tab')return;
+    const controls=[...dialog.querySelectorAll('button,input,select,textarea')].filter(node=>!node.disabled&&!node.hidden&&node.type!=='hidden'),first=controls[0],last=controls.at(-1);
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+  }
+
+  form.onsubmit=submit;byId('companyLogo').onchange=selectLogo;byId('closeCompanyProfile').onclick=close;
+  byId('companyLogoAlign').onchange=placementPreview;byId('companyLogoScale').oninput=placementPreview;
+  byId('editCompanyProfile').onclick=()=>open();byId('exportCompanyTemplate').onclick=exportTemplate;
+  const chooseImport=()=>byId('importCompanyTemplateFile').click();
+  byId('importCompanyTemplate').onclick=chooseImport;byId('importCompanyTemplateInDialog').onclick=chooseImport;byId('importCompanyTemplateFile').onchange=previewImport;
+  byId('confirmCompanyImport').onclick=confirmImport;byId('cancelCompanyImport').onclick=()=>{importCandidate=null;byId('companyImportPreview').hidden=true;status('Import cancelled. The saved company profile was not changed.');};
+  document.addEventListener('keydown',keydown);
+
+  return {open,close,refresh,outputSnapshot,destroy(){
+    if(destroyed)return;destroyed=true;document.removeEventListener('keydown',keydown);close();
+    for(const id of ['companyProfileForm','companyLogo','companyLogoAlign','companyLogoScale','closeCompanyProfile','editCompanyProfile','exportCompanyTemplate','importCompanyTemplate','importCompanyTemplateInDialog','importCompanyTemplateFile','confirmCompanyImport','cancelCompanyImport']){
+      const node=byId(id);if(node){node.onclick=null;node.onchange=null;node.onsubmit=null;}
+    }
+  }};
+}

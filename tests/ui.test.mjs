@@ -2,11 +2,30 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
 import fs from 'node:fs';
+import {deflateSync} from 'node:zlib';
 import {createProject} from '../src/core.mjs';
+import {IDBFactory} from 'fake-indexeddb';
+import {createAssetStore} from '../src/asset-store.mjs';
+
+const COMPANY_PROFILE={schemaVersion:1,id:'company-1',companyName:'Acme Environmental',address:'22 King Street',phone:'416-555-0110',
+  email:'hello@acme.test',website:'https://acme.test',preparedBy:'Pat Lee',reviewedBy:'Sam Roy',logoAssetId:'logo-ui',
+  logoMime:'image/png',logoWidth:1,logoHeight:1,logoPlacement:{align:'left',scale:1},updatedAt:'2026-08-26T12:00:00Z'};
+function pngChunk(type,data){
+  const crc=Buffer.alloc(4);let value=0xffffffff;
+  for(const byte of Buffer.concat([Buffer.from(type),data])){value^=byte;for(let i=0;i<8;i++)value=(value>>>1)^((value&1)?0xedb88320:0);}
+  crc.writeUInt32BE((value^0xffffffff)>>>0);
+  const length=Buffer.alloc(4);length.writeUInt32BE(data.length);return Buffer.concat([length,Buffer.from(type),data,crc]);
+}
+function pngBytes(){
+  const header=Buffer.alloc(13);header.writeUInt32BE(1,0);header.writeUInt32BE(1,4);header[8]=8;header[9]=6;
+  return new Uint8Array(Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),pngChunk('IHDR',header),pngChunk('IDAT',deflateSync(Buffer.from([0,25,100,150,128]))),pngChunk('IEND',Buffer.alloc(0))]));
+}
+const LOGO_BYTES=pngBytes();
 
 test('index exposes the core Phase I workflow controls', () => {
   const html=fs.readFileSync(new URL('../index.html', import.meta.url),'utf8');
-  for (const id of ['address','searchAddress','drawSite','drawBuilding','finishDraw','figureList','uploadAerial','uploadGeology','printA3','exportDxf']) {
+  for (const id of ['address','searchAddress','drawSite','drawBuilding','finishDraw','figureList','uploadAerial','uploadGeology','printA3','exportDxf',
+    'editCompanyProfile','exportCompanyTemplate','importCompanyTemplate','companyProfileDialog','printCompanyLogo','printCompanyName','printCompanyContact']) {
     assert.match(html,new RegExp(`id=["']${id}["']`),`missing #${id}`);
   }
 });
@@ -14,7 +33,7 @@ test('index exposes the core Phase I workflow controls', () => {
 test('print panel stays visible until all live requirements are corrected',async()=>{
   const {createPreflight}=await import('../print-preflight.mjs');
   const dom=new JSDOM('<button id="printA3"></button><div id="printValidation" hidden></div>');
-  let state={project:{},figureCode:'A'};
+  let state={project:{},figureCode:'A',companyProfile:COMPANY_PROFILE};
   const controller=createPreflight({document:dom.window.document,getState:()=>state});
   assert.equal(controller.check(),false);
   const panel=dom.window.document.getElementById('printValidation');
@@ -32,7 +51,7 @@ test('print panel stays visible until all live requirements are corrected',async
 test('app uses assigned sources, keeps Toporama on C, shows source failure, and shares a segmented scale',async t=>{
   const dom=new JSDOM(fs.readFileSync(new URL('../index.html',import.meta.url),'utf8'),{url:'https://example.test/',pretendToBeVisual:true});
   const previous={};
-  for(const key of ['window','document','navigator','localStorage','location','L','JSZip','DOMParser','Element','fetch'])previous[key]=Object.getOwnPropertyDescriptor(globalThis,key);
+  for(const key of ['window','document','navigator','localStorage','location','L','JSZip','DOMParser','Element','fetch','indexedDB','createImageBitmap'])previous[key]=Object.getOwnPropertyDescriptor(globalThis,key);
   for(const key of ['window','document','navigator','localStorage','location','DOMParser','Element'])Object.defineProperty(globalThis,key,{value:key==='window'?dom.window:dom.window[key],configurable:true,writable:true});
   const L=(await import('leaflet')).default;globalThis.L=L;globalThis.JSZip=(await import('jszip')).default;
   L.Browser.svg=true;
@@ -41,8 +60,15 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   Object.defineProperties(container,{clientWidth:{value:900},clientHeight:{value:650}});
   const p={...createProject({name:'QA',projectNo:'FE 26-15876',address:'Toronto',date:'2026-08-26'}),location:{lat:43.65,lng:-79.38}};
   localStorage.setItem('phase-i-esa-project-v2',JSON.stringify(p));
+  localStorage.setItem('phase-i-esa-company-profile-v1',JSON.stringify(COMPANY_PROFILE));
+  globalThis.indexedDB=new IDBFactory();
+  const companyAssets=createAssetStore({indexedDB:globalThis.indexedDB});
+  const logoBlob=new Blob([LOGO_BYTES],{type:'image/png'});
+  await companyAssets.put({metadata:{id:'logo-ui',kind:'company-logo',mime:'image/png',size:logoBlob.size,width:1,height:1,
+    sha256:'0'.repeat(64),createdAt:'2026-08-26T12:00:00Z'},blob:logoBlob});
+  globalThis.createImageBitmap=dom.window.createImageBitmap=async()=>({width:1,height:1,close(){}});
   globalThis.fetch=async()=>{throw Error('No network in this test');};
-  t.after(()=>{map?.remove();dom.window.close();for(const [key,descriptor] of Object.entries(previous))descriptor?Object.defineProperty(globalThis,key,descriptor):delete globalThis[key];});
+  t.after(async()=>{map?.remove();await companyAssets.close();dom.window.close();for(const [key,descriptor] of Object.entries(previous))descriptor?Object.defineProperty(globalThis,key,descriptor):delete globalThis[key];});
   await import('../app.js?source-integration');
   const choose=code=>[...document.querySelectorAll('.figure-row')].find(row=>row.querySelector('.figure-code').textContent===`FIGURE ${code}`).querySelector('button').click();
   assert.equal($('projectNo').value,'FE 26-15876');assert.equal($('projectNo').placeholder,'AB-12345');
@@ -58,6 +84,7 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   choose('A');document.querySelector('[data-map="satellite"]').click();
   assert.match(layers()[0]._url,/World_Imagery/);
   await $('printA3').onclick();assert.match(layers()[0]._url,/tile.openstreetmap.org/);
+  assert.equal($('printCompanyName').textContent,'Acme Environmental');assert.match($('printCompanyContact').textContent,/hello@acme.test/);assert.match($('printCompanyLogo').src,/^data:image\/png;base64,/);
   $('closePrint').click();
   map.setView([43.651,-79.381],16,{animate:false});
   const row=code=>[...document.querySelectorAll('.figure-row')].find(item=>item.querySelector('.figure-code').textContent===`FIGURE ${code}`);
@@ -110,16 +137,18 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
     // Select the engine's Node jsPDF loading branch; the source-root app does
     // not have build-generated vendor files. Restore the browser immediately.
     const browser=globalThis.window;delete globalThis.window;
-    const exporting=$('downloadPdf').onclick();globalThis.window=browser;
+    const exporting=$('downloadPdf').onclick();
     try{
-      await imageryStarted;releaseLoad();await loading;
+      const first=await Promise.race([imageryStarted.then(()=> 'imagery'),exporting.then(()=> 'export-finished')]);
+      assert.equal(first,'imagery',`export ended before imagery started: ${$('exportProgress').textContent}`);
+      globalThis.window=browser;releaseLoad();await loading;
       assert.equal($('loadBedrock').disabled,true,'editing stays locked while exporting');
       $('cancelExport').click();await exporting;
       assert.equal($('loadBedrock').disabled,false,'a load completed during export must not leave its button disabled');
       assert.equal($('projectName').disabled,false);assert.match($('exportProgress').textContent,/cancelled/i);
       assert.equal($('drawState').textContent,'Drawing site','cancellation must preserve unfinished editor drawing');
       assert.ok(Object.values(map._layers).some(layer=>layer instanceof L.Polyline&&!(layer instanceof L.Polygon)&&layer.getLatLngs().length===1));
-    }finally{releaseLoad();$('cancelExport').click();await exporting;dom.window.HTMLCanvasElement.prototype.getContext=nativeContext;}
+    }finally{globalThis.window=browser;releaseLoad();$('cancelExport').click();await exporting;dom.window.HTMLCanvasElement.prototype.getContext=nativeContext;}
 
     function deferred(){let resolve;const promise=new Promise(done=>resolve=done);return {promise,resolve};}
     function gateOfficialRequests(gates){

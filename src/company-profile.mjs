@@ -84,6 +84,7 @@ export function validateCompanyProfile(value,{requireLogo=true}={}){
     if(!profile[field].trim()) errors.push({field,message:`Enter the company ${field.replace(/[A-Z]/g,letter=>` ${letter.toLowerCase()}`)}.`});
   }
   if(requireLogo&&!profile.logoAssetId) errors.push({field:'logoAssetId',message:'Upload a decoded PNG or JPEG logo.'});
+  if(profile.logoPlacement.scale<.5||profile.logoPlacement.scale>1.5)errors.push({field:'logoPlacement',message:'Choose a logo scale from 0.5 to 1.5.'});
   return errors;
 }
 

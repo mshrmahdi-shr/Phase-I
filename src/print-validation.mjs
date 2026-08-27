@@ -1,4 +1,5 @@
 import {validLocation,validBoundary} from './core.mjs';
+import {validateCompanyProfile} from './company-profile.mjs';
 function hasText(v){return typeof v==='string'&&v.trim().length>0}
 function validDate(v){
   if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
@@ -6,7 +7,7 @@ function validDate(v){
   return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===v;
 }
 
-export function validatePrintRequirements({project={},figureCode='A',geologyLoaded=false,geologySiteUnit=null}={}){
+export function validatePrintRequirements({project={},companyProfile={},figureCode='A',geologyLoaded=false,geologySiteUnit=null}={}){
   const errors=[];
   if(!hasText(project.name))errors.push({code:'project-name',message:'Enter a project name.'});
   if(!hasText(project.projectNo))errors.push({code:'project-number',message:'Enter the project number.'});
@@ -14,6 +15,18 @@ export function validatePrintRequirements({project={},figureCode='A',geologyLoad
   if(!hasText(project.address))errors.push({code:'address',message:'Enter the property address.'});
   if(!validLocation(project.location))errors.push({code:'location',message:'Locate the property on the map using Find or Set SITE.'});
   if(!['A','B','C','D','E'].includes(figureCode))errors.push({code:'figure',message:'Select a valid figure before printing.'});
+
+  const companyCodes={companyName:'company-name',address:'company-address',phone:'company-phone',email:'company-email',website:'company-website',logoAssetId:'company-logo',logoPlacement:'company-logo-placement'};
+  try{
+    for(const error of validateCompanyProfile(companyProfile))errors.push({code:companyCodes[error.field]||'company-profile',message:error.message});
+    if(hasText(companyProfile.companyName)&&companyProfile.companyName.length>160)errors.push({code:'company-name-fit',message:'Shorten the company name so it fits the output title block.'});
+    const contact=[companyProfile.address,companyProfile.phone,companyProfile.email,companyProfile.website].filter(value=>typeof value==='string').join(' | ');
+    if(contact.length>500||[companyProfile.address,companyProfile.phone,companyProfile.email,companyProfile.website].some(value=>typeof value==='string'&&value.length>220)){
+      errors.push({code:'company-contact-fit',message:'Shorten the company contact details so they fit the output title block.'});
+    }
+  }catch(error){
+    errors.push({code:'company-logo',message:`Correct the Company Profile logo: ${error.message}`});
+  }
 
   if(figureCode==='B'&&!validBoundary(project.siteBoundary)){
     errors.push({code:'site-boundary',message:'Draw and finish the Site Boundary before printing Figure B.'});

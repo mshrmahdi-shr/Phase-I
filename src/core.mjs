@@ -141,8 +141,31 @@ function dxfPolyline(layer, points){
   return s;
 }
 
-export function buildDxf({siteBoundary=[],buildingBoundary=[]}={}){
-  return `0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n${dxfPolyline('SITE_BOUNDARY',siteBoundary)}${dxfPolyline('BUILDING_BOUNDARY',buildingBoundary)}0\nENDSEC\n0\nEOF\n`;
+function dxfText(layer,value,x,y,height=2.5){
+  const content=String(value??'').replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\s+/g,' ').trim();
+  if(!content)return '';
+  return `0\nTEXT\n8\n${layer}\n10\n${x}\n20\n${y}\n40\n${height}\n1\n${content}\n`;
+}
+
+export function buildDxf({siteBoundary=[],buildingBoundary=[],name='',projectNo=''}={}, {companyProfile}={}){
+  let company;
+  try{company=normalizeCompanyProfile(companyProfile||{});}catch(error){throw new Error(`Company profile is invalid: ${error.message}`,{cause:error});}
+  const companyErrors=validateCompanyProfile(company);
+  if(companyErrors.length)throw new Error(`Company profile is incomplete: ${companyErrors.map(error=>error.message).join(' ')}`);
+  const title=String(name??'').trim();
+  if(title.length>180)throw new Error('Project title is too long to fit the DXF title block.');
+  const contacts=[company.address,company.phone,company.email,company.website];
+  if(company.companyName.length>160||contacts.some(value=>value.length>220)||contacts.join(' | ').length>500){
+    throw new Error('Company contact text is too long to fit the DXF title block.');
+  }
+  const origin=siteBoundary[0]||buildingBoundary[0]||[0,0],x=origin[0],y=origin[1];
+  const text=[
+    dxfText('COMPANY_TEXT',company.companyName,x,y+12,3.5),
+    dxfText('COMPANY_TEXT',contacts.join(' | '),x,y+8,2.2),
+    dxfText('TITLE_BLOCK',title,x,y+4,3),
+    dxfText('TITLE_BLOCK',projectNo,x,y,2.5)
+  ].join('');
+  return `0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n${dxfPolyline('SITE_BOUNDARY',siteBoundary)}${dxfPolyline('BUILDING_BOUNDARY',buildingBoundary)}${text}0\nENDSEC\n0\nEOF\n`;
 }
 
 const MRD128_LEGEND = {

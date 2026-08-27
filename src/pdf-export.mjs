@@ -53,7 +53,7 @@ function validateFeature(feature){
     if(last[0]!==ox||last[1]!==oy||!Number.isFinite(area)||area===0)throw new Error('The geology dataset contains an invalid polygon.');
   }
 }
-function prepare(project,code,datasets,dpi){
+function prepare(project,code,datasets,dpi,companyProfile){
   const geometry=sheetGeometry(project,code,dpi),kind=code==='D'?'surficial':code==='E'?'bedrock':null,dataset=kind?datasets[kind]:null;
   let features=[],units=[];
   if(kind){
@@ -63,7 +63,7 @@ function prepare(project,code,datasets,dpi){
     features=relevantFeatures(dataset.features,geometry.bounds);units=relevantUnits(features,geometry.bounds);
   }
   for(const key of ['siteBoundary','buildingBoundary'])if(project[key]?.length&&!validBoundary(project[key]))throw new Error('The project contains an invalid boundary.');
-  const errors=validatePrintRequirements({project,figureCode:code,geologyLoaded:!!features.length,geologySiteUnit:siteFeature(features,project.location)?.name});
+  const errors=validatePrintRequirements({project,companyProfile,figureCode:code,geologyLoaded:!!features.length,geologySiteUnit:siteFeature(features,project.location)?.name});
   if(errors.length)throw new Error(errors.map(e=>e.message).join(' '));
   return {code,geometry,features,units,dataset};
 }
@@ -75,14 +75,24 @@ function drawScale(doc,geometry){
   for(let i=0;i<4;i++){doc.setFillColor(i%2?255:0);doc.rect(x+i*w/4,y,w/4,2,'FD');}
   doc.text(scale.labels[0],x,y+6);doc.text(scale.labels[1],x+w/2,y+6,{align:'center'});doc.text(scale.labels[2],x+w,y+6,{align:'center'});
 }
-function renderSheet(doc,project,sheet,index,count,{draw=true}={}){
+function renderSheet(doc,project,sheet,index,count,{draw=true,companyProfile,companyLogoDataUrl}={}){
   const g=sheet.geometry,t=g.titleFrame;let y=t.y;
   const rows=[18,26,117.4,34,23,28,20],boxes=rows.map(height=>{const box={x:t.x,y,width:t.width,height};y+=height+2;return box;});
   const inset=(box,top=2)=>({x:box.x+2,y:box.y+top,width:box.width-4,height:box.height-top-2});
   function label(text,box){textBlock(doc,text,{...inset(box),height:4},6.5,{align:'center',draw});}
   if(draw){doc.setDrawColor(17,17,17);doc.setLineWidth(.3);doc.rect(g.sheet.x,g.sheet.y,g.sheet.width,g.sheet.height);doc.setLineWidth(.25);doc.rect(g.mapFrame.x,g.mapFrame.y,g.mapFrame.width,g.mapFrame.height);for(const b of boxes)doc.rect(b.x,b.y,b.width,b.height);}
-  textBlock(doc,'PHASE I ESA',{...inset(boxes[0],3),height:7},16,{align:'center',draw});
-  textBlock(doc,'ENVIRONMENTAL SITE ASSESSMENT',{...inset(boxes[0],12),height:3},6,{align:'center',draw});
+  const brand=boxes[0],logoCell={x:brand.x+2,y:brand.y+2,width:18,height:brand.height-4};
+  const scale=companyProfile.logoPlacement.scale;
+  if(scale<.5||scale>1.5)throw new Error('Company logo scale must be between 0.5 and 1.5 to fit the title block.');
+  const ratio=companyProfile.logoWidth/companyProfile.logoHeight,maxWidth=Math.min(logoCell.width,17*scale),maxHeight=Math.min(logoCell.height,14*scale);
+  let logoWidth=maxWidth,logoHeight=logoWidth/ratio;if(logoHeight>maxHeight){logoHeight=maxHeight;logoWidth=logoHeight*ratio;}
+  const alignOffset=companyProfile.logoPlacement.align==='right'?logoCell.width-logoWidth:companyProfile.logoPlacement.align==='center'?(logoCell.width-logoWidth)/2:0;
+  const logoX=logoCell.x+alignOffset,logoY=logoCell.y+(logoCell.height-logoHeight)/2;
+  const companyBox={x:brand.x+22,y:brand.y+2,width:brand.width-24,height:brand.height-4};
+  const companyHeight=textBlock(doc,companyProfile.companyName,{...companyBox,height:5.5},7,{draw});
+  const contact=[companyProfile.address,[companyProfile.phone,companyProfile.email].filter(Boolean).join(' · '),companyProfile.website].filter(Boolean).join('\n');
+  textBlock(doc,contact,{x:companyBox.x,y:companyBox.y+companyHeight+.4,width:companyBox.width,height:companyBox.height-companyHeight-.4},5.2,{draw});
+  if(draw)doc.addImage(companyLogoDataUrl,companyProfile.logoMime==='image/png'?'PNG':'JPEG',logoX,logoY,logoWidth,logoHeight,'company-logo','FAST');
   label('NORTH',boxes[1]);
   if(draw){const x=t.x+t.width/2,ny=boxes[1].y;doc.setFontSize(11);doc.text('N',x,ny+11,{align:'center'});doc.setFillColor(17,17,17);doc.triangle(x,ny+13,x-3,ny+22,x,ny+20,'F');doc.setLineWidth(.25);doc.triangle(x,ny+13,x+3,ny+22,x,ny+20,'S');}
   label('LEGEND',boxes[2]);let ly=boxes[2].y+8,legendBottom=boxes[2].y+boxes[2].height-2;
@@ -118,19 +128,22 @@ function renderSheet(doc,project,sheet,index,count,{draw=true}={}){
   }
 }
 /** Returns a complete PDF only; downloading belongs to the UI after its final abort check. */
-export async function exportCombinedPdf({project,codes,datasets={},dpi=300,onProgress=()=>{},signal,compose=composeMap}){
+export async function exportCombinedPdf({project,codes,datasets={},companyProfile,companyLogoDataUrl,dpi=300,onProgress=()=>{},signal,compose=composeMap}){
   throwIfAborted(signal);
   if(!Array.isArray(codes)||!codes.length)throw new Error('Select at least one ready figure.');
   if(codes.some(code=>!['A','B','C','D','E'].includes(code)))throw new Error('Choose valid figures A-E.');
-  const selected=[...new Set(codes)].sort(),snapshot=structuredClone({project,datasets});
-  const sheets=selected.map(code=>{try{return prepare(snapshot.project,code,snapshot.datasets,dpi);}catch(error){throw new Error(`Figure ${code}: ${error.message}`,{cause:error});}});
+  const selected=[...new Set(codes)].sort(),snapshot=structuredClone({project,datasets,companyProfile,companyLogoDataUrl});
+  const sheets=selected.map(code=>{try{return prepare(snapshot.project,code,snapshot.datasets,dpi,snapshot.companyProfile);}catch(error){throw new Error(`Figure ${code}: ${error.message}`,{cause:error});}});
+  if(typeof snapshot.companyLogoDataUrl!=='string'||!/^data:image\/(?:png|jpeg);base64,[a-z0-9+/]+=*$/i.test(snapshot.companyLogoDataUrl))throw new Error('A decoded PNG or JPEG company logo is required before exporting.');
   const Constructor=await pdfLibrary();throwIfAborted(signal);
   const doc=new Constructor({orientation:'landscape',unit:'mm',format:'a3',putOnlyUsedFonts:true,compress:false,precision:4});
   doc.addFileToVFS('DejaVuSans.ttf',base64(await fontBytes(signal)));throwIfAborted(signal);
   doc.addFont('DejaVuSans.ttf',FONT,'normal');doc.setFont(FONT);
+  let logoProperties;try{logoProperties=doc.getImageProperties(snapshot.companyLogoDataUrl);}catch(error){throw new Error('The company logo could not be decoded for the PDF.',{cause:error});}
+  if(logoProperties.width!==snapshot.companyProfile.logoWidth||logoProperties.height!==snapshot.companyProfile.logoHeight)throw new Error('The decoded company logo dimensions do not match the Company Profile.');
   doc.setProperties({title:'Phase I ESA figures',subject:'Selected A3 landscape figure sheets',creator:'Phase I ESA'});
   // Validate every text/legend before any remote imagery or partial page composition.
-  sheets.forEach((sheet,i)=>{try{renderSheet(doc,snapshot.project,sheet,i,sheets.length,{draw:false});}catch(error){throw new Error(`Figure ${sheet.code}: ${error.message}`,{cause:error});}});
+  sheets.forEach((sheet,i)=>{try{renderSheet(doc,snapshot.project,sheet,i,sheets.length,{draw:false,companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});}catch(error){throw new Error(`Figure ${sheet.code}: ${error.message}`,{cause:error});}});
   for(let i=0;i<sheets.length;i++){
     const sheet=sheets[i];let image;
     try{
@@ -139,7 +152,7 @@ export async function exportCombinedPdf({project,codes,datasets={},dpi=300,onPro
       if(!image?.dataUrl||!(image.width>0&&image.height>0))throw new Error('Map composition did not return a complete image.');
       if(i)doc.addPage('a3','landscape');
       const m=sheet.geometry.mapFrame;doc.addImage(image.dataUrl,undefined,m.x,m.y,m.width,m.height,`map-${sheet.code}-${i}`,'FAST');
-      renderSheet(doc,snapshot.project,sheet,i,sheets.length);
+      renderSheet(doc,snapshot.project,sheet,i,sheets.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});
     }catch(error){if(signal?.aborted||error.name==='AbortError')throw new DOMException('Export cancelled.','AbortError');throw new Error(`Figure ${sheet.code}: ${error.message}`,{cause:error});}
     finally{image?.dispose?.();}
     // Give the browser a chance to deliver cancellation between expensive page work.

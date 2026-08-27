@@ -42,9 +42,14 @@ test('Pages staging includes app modules but excludes repository and test depend
   await buildSite({output,revision:'test-commit'});
   assert.ok((await fs.readFile(path.join(output,'app.js'),'utf8')).length>0);
   assert.ok((await fs.stat(path.join(output,'src/geology.mjs'))).isFile());
+  assert.ok((await fs.stat(path.join(output,'src/company-ui.mjs'))).isFile());
   for(const name of ['vendor/jspdf.umd.min.js','vendor/jspdf.LICENSE','assets/fonts/DejaVuSans.ttf','assets/fonts/LICENSE.txt'])assert.ok((await fs.stat(path.join(output,name))).isFile(),name);
   assert.equal(JSON.parse(await fs.readFile(path.join(output,'version.json'),'utf8')).revision,'test-commit');
   for(const name of ['.git','node_modules','tests','scripts','.superpowers','work','reference.pdf'])await assert.rejects(()=>fs.access(path.join(output,name)));
+  const staged=[];
+  const walk=async directory=>{for(const entry of await fs.readdir(directory,{withFileTypes:true})){const file=path.join(directory,entry.name);entry.isDirectory()?await walk(file):staged.push(path.relative(output,file));}};
+  await walk(output);
+  assert.equal(staged.some(name=>/\.phasei-(?:template|project)\.zip$/i.test(name)),false,'user template/project archives must never be staged');
 });
 
 test('staged first-party executable and style URLs change as a release moves',async t=>{
