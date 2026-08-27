@@ -1,0 +1,15 @@
+{
+  "spatialReference": {"wkid": 102100, "latestWkid": 3857},
+  "fullExtent": {
+    "xmin": -8869931.9307,
+    "ymin": 5395816.8838,
+    "xmax": -8802055.8621,
+    "ymax": 5451532.5866,
+    "spatialReference": {"wkid": 102100, "latestWkid": 3857}
+  },
+  "capabilities": "Map",
+  "supportedImageFormatTypes": "PNG32,PNG24,PNG,JPG",
+  "maxImageWidth": 4096,
+  "maxImageHeight": 4096,
+  "copyrightText": "City of Toronto"
+}
