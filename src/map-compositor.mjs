@@ -1,7 +1,18 @@
 import {sourceForFigure} from './map-sources.mjs';
-import {mapPoint,MAX_RASTER_PIXELS} from './sheet-layout.mjs';
+import {mapPoint,MAX_RASTER_PIXELS,unprojectPoint} from './sheet-layout.mjs';
+import {arcGisExportUrl} from './imagery/arcgis-client.mjs';
+import {validateImageryProvider,validateProviderUrl} from './imagery/provider-registry.mjs';
+import {placementCanvasTransform,placementCorners,projectWebMercator,validatePlacement} from './imagery/placement.mjs';
+import {historicalCode,historicalSheetGeometry} from './historical-layout.mjs';
+import {ONTARIO_IMAGERY_PROVIDER} from './imagery/providers/ontario.mjs';
+import {TORONTO_IMAGERY_PROVIDER} from './imagery/providers/toronto.mjs';
+import {OTTAWA_IMAGERY_PROVIDER} from './imagery/providers/ottawa.mjs';
 
 const WORLD=2*Math.PI*6378137,MAX_TILES=36;
+const DEFAULT_HISTORICAL_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
+const MAX_HISTORICAL_TILES=64,MAX_IMAGE_BYTES=16_000_000,MAX_TOTAL_IMAGE_BYTES=64_000_000;
+const HISTORICAL_ASSET_FIELDS=['createdAt','height','id','kind','mime','sha256','size','width'];
+const HISTORICAL_ASSET_MIMES=new Set(['image/png','image/jpeg','image/tiff']);
 export function throwIfAborted(signal){if(signal?.aborted)throw new DOMException('Export cancelled.','AbortError');}
 export function imageryPlan(code,geometry){
   const source=sourceForFigure(code),b=geometry.projected,{width,height}=geometry.raster;
@@ -114,4 +125,118 @@ export async function composeMap({project,code,features=[],geometry,signal,onPro
     const dataUrl=canvas.toDataURL('image/jpeg',.94);if(!dataUrl.startsWith('data:image/jpeg'))throw new Error('Map canvas encoding failed.');
     return {dataUrl,width,height,bounds:geometry.bounds,dispose};
   }catch(error){dispose();throw error;}finally{signal?.removeEventListener('abort',cancel);}
+}
+
+function containsBounds(coverage,bounds){return bounds.west>=coverage.west&&bounds.east<=coverage.east&&bounds.south>=coverage.south&&bounds.north<=coverage.north;}
+function exactKeys(value,keys){return value&&typeof value==='object'&&!Array.isArray(value)&&Object.getPrototypeOf(value)===Object.prototype&&Reflect.ownKeys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key)&&Object.getOwnPropertyDescriptor(value,key)?.enumerable&&Object.hasOwn(Object.getOwnPropertyDescriptor(value,key),'value'));}
+function same(left,right){return JSON.stringify(left)===JSON.stringify(right);}
+function providerMap(providers=DEFAULT_HISTORICAL_PROVIDERS){
+  if(!Array.isArray(providers))throw new Error('Historical imagery providers must be an array.');
+  const result=new Map();for(const provider of providers){validateImageryProvider(provider);if(result.has(provider.id))throw new Error(`Duplicate historical imagery provider: ${provider.id}.`);result.set(provider.id,provider);}return result;
+}
+function checkedHistorical({project,item,geometry}){
+  const expected=historicalSheetGeometry(project,item,geometry?.dpi);
+  for(const key of ['code','itemId','bounds','projected','raster'])if(!same(expected[key],geometry?.[key]))throw new Error(`${historicalCode(item)}: composition geometry no longer matches the approved crop.`);
+  return expected;
+}
+function officialProvider(project,item,providers){
+  const provider=providerMap(providers).get(item.providerId),code=historicalCode(item);
+  if(item.mode!=='official'||item.policy!=='exportable'||item.placement!==null||item.assetId!==null||!item.officialExport)throw new Error(`${code}: only approved official exportable imagery can use the official compositor.`);
+  if(!provider)throw new Error(`${code}: the saved official provider is no longer registered.`);
+  if(provider.policy!=='exportable')throw new Error(`${code}: the current provider policy no longer permits export.`);
+  let covers=false;try{covers=provider.covers(project.location)===true;}catch{}
+  if(!covers||!containsBounds(provider.coverage,item.bounds))throw new Error(`${code}: the current official provider coverage does not include SITE and the approved crop.`);
+  if(item.licenseUrl!==provider.licenseUrl)throw new Error(`${code}: the saved licence no longer matches the current provider policy.`);
+  validateProviderUrl(item.sourceUrl,provider,{label:`${code} source URL`});validateProviderUrl(item.licenseUrl,provider,{label:`${code} licence URL`});validateProviderUrl(item.officialExport.url,provider,{label:`${code} export URL`});
+  const exportUrl=new URL(item.officialExport.url);
+  if(exportUrl.search||exportUrl.hash||!/\/MapServer\/export\/?$/.test(exportUrl.pathname)||item.officialExport.kind!=='arcgis-export')throw new Error(`${code}: the approved ArcGIS export descriptor is unsupported.`);
+  for(const key of ['maxWidth','maxHeight'])if(!Number.isSafeInteger(item.officialExport[key])||item.officialExport[key]<256)throw new Error(`${code}: the current official export dimensions are unsafe.`);
+  return provider;
+}
+
+export function historicalImageryPlan({project,item,geometry,providers}={}){
+  checkedHistorical({project,item,geometry});const provider=officialProvider(project,item,providers),descriptor=item.officialExport,{width,height}=geometry.raster;
+  const columns=Math.ceil(width/descriptor.maxWidth),rows=Math.ceil(height/descriptor.maxHeight);
+  if(columns*rows>MAX_HISTORICAL_TILES)throw new Error(`${historicalCode(item)}: the official source would require too many bounded export pieces.`);
+  const requests=[],serviceUrl=descriptor.url.replace(/\/export\/?$/,'');
+  for(let row=0,y=0;row<rows;row++){
+    const tileHeight=Math.min(descriptor.maxHeight,height-y);
+    for(let column=0,x=0;column<columns;column++){
+      const tileWidth=Math.min(descriptor.maxWidth,width-x),west=geometry.projected.west+(geometry.projected.east-geometry.projected.west)*x/width,east=geometry.projected.west+(geometry.projected.east-geometry.projected.west)*(x+tileWidth)/width;
+      const north=geometry.projected.north-(geometry.projected.north-geometry.projected.south)*y/height,south=geometry.projected.north-(geometry.projected.north-geometry.projected.south)*(y+tileHeight)/height;
+      const [westLng,southLat]=unprojectPoint([west,south]),[eastLng,northLat]=unprojectPoint([east,north]),bounds={west:westLng,south:southLat,east:eastLng,north:northLat};
+      let url=arcGisExportUrl({serviceUrl,bounds,width:tileWidth,height:tileHeight,maxWidth:descriptor.maxWidth,maxHeight:descriptor.maxHeight});
+      if(descriptor.layer!==null&&descriptor.layer!==undefined){const parsed=new URL(url);parsed.searchParams.set('layers',`show:${descriptor.layer}`);url=parsed.href;}
+      validateProviderUrl(url,provider,{label:`${historicalCode(item)} bounded export URL`});
+      requests.push({url,x,y,width:tileWidth,height:tileHeight,expectedWidth:tileWidth,expectedHeight:tileHeight,bounds});x+=tileWidth;
+    }
+    y+=tileHeight;
+  }
+  return requests;
+}
+
+async function abortable(promise,signal){
+  throwIfAborted(signal);if(!signal)return promise;
+  return new Promise((resolve,reject)=>{const abort=()=>{signal.removeEventListener('abort',abort);reject(new DOMException('Export cancelled.','AbortError'));};signal.addEventListener('abort',abort,{once:true});Promise.resolve(promise).then(value=>{signal.removeEventListener('abort',abort);resolve(value);},error=>{signal.removeEventListener('abort',abort);reject(error);});if(signal.aborted)abort();});
+}
+async function sha256(blob,signal){
+  if(!globalThis.crypto?.subtle)throw new Error('Historical imagery integrity verification requires Web Crypto.');
+  const bytes=await abortable(blob.arrayBuffer(),signal),digest=await abortable(globalThis.crypto.subtle.digest('SHA-256',bytes),signal);
+  return [...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,'0')).join('');
+}
+function validateHistoricalAsset(asset,item){
+  const code=historicalCode(item);
+  if(!exactKeys(asset,['blob','metadata'])||!exactKeys(asset.metadata,HISTORICAL_ASSET_FIELDS))throw new Error(`${code}: the saved file is not a strict historical imagery asset.`);
+  const metadata=asset.metadata;
+  if(metadata.id!==item.assetId||metadata.kind!=='historical-image')throw new Error(`${code}: the saved asset belongs to another feature.`);
+  if(!(asset.blob instanceof Blob)||!HISTORICAL_ASSET_MIMES.has(metadata.mime)||asset.blob.type!==metadata.mime||asset.blob.size!==metadata.size||!Number.isSafeInteger(metadata.size)||metadata.size<=0||metadata.size>MAX_IMAGE_BYTES)throw new Error(`${code}: historical asset metadata does not match its Blob.`);
+  if(!Number.isSafeInteger(metadata.width)||metadata.width<=0||!Number.isSafeInteger(metadata.height)||metadata.height<=0||metadata.width>Math.floor(MAX_RASTER_PIXELS/metadata.height))throw new Error(`${code}: historical asset dimensions are invalid.`);
+  if(!/^[a-f0-9]{64}$/.test(metadata.sha256)||typeof metadata.createdAt!=='string'||Number.isNaN(Date.parse(metadata.createdAt)))throw new Error(`${code}: historical asset integrity metadata is invalid.`);
+  if(item.mode!=='manual'||item.providerId!==null||item.officialExport!==null||item.assetId===null||!item.placement)throw new Error(`${code}: the approved manual imagery record is invalid.`);
+  if(metadata.width!==item.placement.sourceWidth||metadata.height!==item.placement.sourceHeight)throw new Error(`${code}: historical asset dimensions do not match the immutable placement.`);
+  return asset;
+}
+function pointInConvex(point,polygon){let sign=0;for(let index=0;index<polygon.length;index++){const a=polygon[index],b=polygon[(index+1)%polygon.length],cross=(b[0]-a[0])*(point[1]-a[1])-(b[1]-a[1])*(point[0]-a[0]);if(Math.abs(cross)<1e-6)continue;const next=Math.sign(cross);if(sign&&next!==sign)return false;sign=next;}return true;}
+function validateManualCrop(project,item){
+  const code=historicalCode(item);validatePlacement(item.placement,{location:project.location});const corners=placementCorners(item.placement),crop=[[item.bounds.west,item.bounds.north],[item.bounds.east,item.bounds.north],[item.bounds.east,item.bounds.south],[item.bounds.west,item.bounds.south]].map(projectWebMercator);
+  if(crop.some(point=>!pointInConvex(point,corners)))throw new Error(`${code}: the approved crop is outside the immutable manual placement.`);
+}
+export async function loadHistoricalAssetSnapshot({project,item,assetStore,signal}={}){
+  if(!assetStore||typeof assetStore.get!=='function')throw new Error(`${historicalCode(item)}: a historical asset store is required.`);
+  validateManualCrop(project,item);const asset=await abortable(assetStore.get(item.assetId),signal);throwIfAborted(signal);
+  if(!asset)throw new Error(`${historicalCode(item)}: Missing historical image asset. Restore the project package or re-add the image.`);
+  validateHistoricalAsset(asset,item);if(await sha256(asset.blob,signal)!==asset.metadata.sha256)throw new Error(`${historicalCode(item)}: historical asset hash verification failed.`);
+  return {metadata:{...asset.metadata},blob:asset.blob};
+}
+
+/** Independently composes the exact approved historical crop and shared project overlays. */
+export async function composeHistoricalImage({project,item,geometry,assetStore,providers,signal,onProgress=()=>{},fetchImpl=globalThis.fetch,requestTimeoutMs=30000}={}){
+  throwIfAborted(signal);checkedHistorical({project,item,geometry});let requests=null,asset=null;
+  if(item.mode==='official')requests=historicalImageryPlan({project,item,geometry,providers});else asset=await loadHistoricalAssetSnapshot({project,item,assetStore,signal});
+  throwIfAborted(signal);if(typeof document==='undefined')throw new Error('Historical image composition requires a browser canvas.');
+  const {width,height}=geometry.raster;if(!(width>0&&height>0)||width*height>MAX_RASTER_PIXELS)throw new Error('Unsafe historical canvas size; choose 300 DPI.');
+  const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;const preview=document.createElement('div'),caption=document.createElement('div'),code=historicalCode(item);
+  preview.setAttribute('aria-label',`Composing ${code}`);Object.assign(preview.style,{position:'fixed',right:'16px',bottom:'16px',zIndex:'7000',width:'240px',background:'white',color:'#111',padding:'6px',border:'1px solid #475569',font:'11px sans-serif',pointerEvents:'none'});
+  Object.assign(canvas.style,{display:'block',width:'240px',height:`${240*height/width}px`});caption.textContent=`${code} · ${item.title}`;preview.append(canvas,caption);document.body.append(preview);
+  let disposed=false;const dispose=()=>{if(!disposed){disposed=true;canvas.width=canvas.height=0;preview.remove();}},controller=new AbortController(),cancel=()=>controller.abort();signal?.addEventListener('abort',cancel,{once:true});
+  try{
+    const ctx=canvas.getContext('2d');if(!ctx)throw new Error('The browser could not allocate a historical image canvas.');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,width,height);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+    if(requests){
+      let cursor=0,complete=0,totalBytes=0,firstError;
+      async function worker(){while(cursor<requests.length&&!controller.signal.aborted){const request=requests[cursor++];let image;const timeout=setTimeout(()=>{firstError??=new Error(`${code}: official image request timed out. Check your connection and retry.`);controller.abort();},Math.max(1,Math.min(45000,requestTimeoutMs||30000)));try{
+        throwIfAborted(controller.signal);const response=await fetchImpl(request.url,{mode:'cors',credentials:'omit',redirect:'error',signal:controller.signal});if(!response.ok)throw new Error(`${code}: official image request failed (HTTP ${response.status}).`);
+        if(!/^image\/(png|jpeg|webp)/i.test(response.headers.get('content-type')||''))throw new Error(`${code}: the official service returned an error instead of an image.`);
+        const blob=await response.blob();if(blob.size>MAX_IMAGE_BYTES||(totalBytes+=blob.size)>MAX_TOTAL_IMAGE_BYTES)throw new Error(`${code}: official image responses exceed the safe memory limit.`);
+        image=await decodeImage(blob,controller.signal);throwIfAborted(controller.signal);if(image.width!==request.expectedWidth||image.height!==request.expectedHeight)throw new Error(`${code}: the official service returned unexpected image dimensions.`);
+        ctx.drawImage(image,request.x,request.y,request.width,request.height);onProgress({phase:'imagery',code,completed:++complete,total:requests.length});
+      }catch(error){firstError??=error;controller.abort();}finally{clearTimeout(timeout);image?.close?.();}}}
+      await Promise.all(Array.from({length:Math.min(4,requests.length)},worker));throwIfAborted(signal);if(firstError)throw firstError;
+    }else{
+      let image;try{image=await decodeImage(asset.blob,controller.signal);throwIfAborted(controller.signal);if(image.width!==asset.metadata.width||image.height!==asset.metadata.height)throw new Error(`${code}: decoded asset dimensions do not match its integrity metadata.`);
+        const [a,b,c,d,e,f]=placementCanvasTransform(item.placement),scaleX=width/(geometry.projected.east-geometry.projected.west),scaleY=height/(geometry.projected.north-geometry.projected.south);
+        ctx.save();ctx.setTransform(a*scaleX,-b*scaleY,c*scaleX,-d*scaleY,(e-geometry.projected.west)*scaleX,(geometry.projected.north-f)*scaleY);ctx.drawImage(image,0,0);ctx.restore();onProgress({phase:'imagery',code,completed:1,total:1});
+      }finally{image?.close?.();}
+    }
+    paintMapOverlays(ctx,{project,geometry});throwIfAborted(signal);const dataUrl=canvas.toDataURL('image/jpeg',.94);if(!dataUrl.startsWith('data:image/jpeg'))throw new Error('Historical image canvas encoding failed.');return {dataUrl,width,height,bounds:{...geometry.bounds},dispose};
+  }catch(error){dispose();if(signal?.aborted||error?.name==='AbortError')throw new DOMException('Export cancelled.','AbortError');throw error;}finally{signal?.removeEventListener('abort',cancel);}
 }

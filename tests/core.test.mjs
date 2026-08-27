@@ -267,3 +267,18 @@ test('export preferences restore only known figure codes and sources without rew
   assert.equal(core.restoreProject(p).geology.bedrock.source.id,'custom');
   assert.equal(core.restoreProject(p).geology.bedrock.name,'My supplied geology.kmz');
 });
+
+test('typed PDF selection restores valid historical IDs while retaining the legacy figure codes adapter',()=>{
+  const first='74f14168-4de6-4c5f-88f4-87db8ec731c2',second='9833e469-c7e8-4ef1-84f1-b89c608c2126',stamp='2026-08-27T12:00:00.000Z';
+  const item=(id,sequence)=>({id,year:1972,sequence,title:`Flight ${sequence}`,mode:'official',providerId:'toronto',
+    sourceUrl:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer',licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto',policy:'exportable',resolutionMeters:null,
+    bounds:{north:43.66,south:43.64,east:-79.37,west:-79.39},placement:null,assetId:null,
+    officialExport:{kind:'arcgis-export',url:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096},createdAt:stamp,updatedAt:stamp});
+  const p=createProject();p.location={lat:43.65,lng:-79.38};p.historical=[item(first,1),item(second,2)];p.historicalSequenceCounters={'1972':2};
+  p.exportPreferences={...p.exportPreferences,codes:['C','A'],selection:[{kind:'historical',id:second},{kind:'figure',code:'C'},{kind:'historical',id:first},{kind:'figure',code:'C'},{kind:'historical',id:'3caa1022-b2e7-4c63-8ca8-12f4845e1be1'}]};
+  const restored=core.restoreProject(JSON.parse(JSON.stringify(p)));
+  assert.deepEqual(restored.exportPreferences.codes,['A','C']);
+  assert.deepEqual(restored.exportPreferences.selection,[{kind:'figure',code:'C'},{kind:'historical',id:first},{kind:'historical',id:second}]);
+  delete p.exportPreferences.selection;
+  assert.deepEqual(core.restoreProject(JSON.parse(JSON.stringify(p))).exportPreferences.selection,[{kind:'figure',code:'A'},{kind:'figure',code:'C'}]);
+});

@@ -15,6 +15,7 @@ import {createHistoricalImageryUI,migrateLegacyHistoricalImagery} from './src/hi
 import {ONTARIO_IMAGERY_PROVIDER} from './src/imagery/providers/ontario.mjs';
 import {TORONTO_IMAGERY_PROVIDER} from './src/imagery/providers/toronto.mjs';
 import {OTTAWA_IMAGERY_PROVIDER} from './src/imagery/providers/ottawa.mjs';
+const HISTORICAL_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
 const $=id=>document.getElementById(id), STORAGE='phase-i-esa-project-v2', COMPANY_STORAGE='phase-i-esa-company-profile-v1', MRD='./data/mrd128.kml';
 const DRAWING_BINDINGS=Symbol.for('phase-i-esa.drawing-bindings');
 document[DRAWING_BINDINGS]?.abort();
@@ -294,7 +295,7 @@ function setExportBusy(value){
   }
 }
 async function exportBrandedPdf(args){const branding=await companyDialog.outputSnapshot(args.companyProfile);return exportCombinedPdf({...args,...branding});}
-exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport});
+exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile,providers:HISTORICAL_PROVIDERS,assetStore}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport});
 $('exportPdf').onclick=()=>{if(!printSession.isOpen)return exportDialog.open();};
 function refreshPrint(){
   const f=project.figures[active];
@@ -321,7 +322,7 @@ try{
   const migration=await migrateLegacyHistoricalImagery({project,assetStore,saveProject:persistHistoricalProject});
   if(!migration.migrated)project=migration.project;else status('imageryStatus','Legacy historical imagery was validated and moved to IndexedDB. Export Project for a fresh backup.','ok');
 }catch(error){status('imageryStatus',error.message,'error');status('saveMessage','Legacy imagery was not changed. Export Project now to preserve the original data before retrying.','error');}
-historicalUI=createHistoricalImageryUI({document,map,L,assetStore,providers:[ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER],getProject:()=>project,
+historicalUI=createHistoricalImageryUI({document,map,L,assetStore,providers:HISTORICAL_PROVIDERS,getProject:()=>project,
   saveProject:persistHistoricalProject,isAssetReferencedOutsideHistorical:id=>(companyProfile||loadCompanyProfile())?.logoAssetId===id,onChanged:()=>{preflight?.refresh();exportDialog?.refresh();}});
 const openHistorical=()=>{if(exportBusy)return;drawingController.cancel();historicalUI.open();};
 $('manageHistorical').onclick=openHistorical;$('manageHistoricalHeader').onclick=openHistorical;

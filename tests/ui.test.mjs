@@ -32,6 +32,13 @@ test('index exposes the core Phase I workflow controls', () => {
   assert.match(html,/Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels\./);
 });
 
+test('app wires the current historical provider registry and asset store into PDF planning',()=>{
+  const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
+  assert.match(source,/const HISTORICAL_PROVIDERS=Object\.freeze\(\[ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER\]\)/);
+  assert.match(source,/getState:\(\)=>\(\{project,datasets:datasets\(\),companyProfile,providers:HISTORICAL_PROVIDERS,assetStore\}\)/);
+  assert.match(source,/providers:HISTORICAL_PROVIDERS,getProject:/);
+});
+
 test('print panel stays visible until all live requirements are corrected',async()=>{
   const {createPreflight}=await import('../print-preflight.mjs');
   const dom=new JSDOM('<button id="printA3"></button><div id="printValidation" hidden></div>');

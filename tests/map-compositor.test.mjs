@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createProject} from '../src/core.mjs';
 import {JSDOM} from 'jsdom';
+import {createHash} from 'node:crypto';
+import {TORONTO_IMAGERY_PROVIDER} from '../src/imagery/providers/toronto.mjs';
 
 test('imagery request plans stay bounded, use final projected WMS extent, and require no unrelated tiles',async()=>{
   const {sheetGeometry}=await import('../src/sheet-layout.mjs');
@@ -97,4 +99,64 @@ test('map overlays retain holes, distinguish site/building outlines and anchor S
   assert.equal(strokes[1].color,'#ef4444');assert.deepEqual(strokes[1].dash,[]);
   assert.equal(strokes[2].color,'#111111');assert.equal(strokes[2].dash.length,2);assert.ok(strokes[1].width>strokes[2].width);
   assert.deepEqual(labels,['SITE']);assert.ok(Math.abs(points[0][0]-geometry.raster.width/2)<.001);assert.ok(Math.abs(points[0][1]-geometry.raster.height/2)<.1);
+});
+
+const historicalBounds={west:-79.405,south:43.632,east:-79.355,north:43.668};
+function historicalProject(item){return {...createProject(),location:{lat:43.65,lng:-79.38},historical:[item],historicalSequenceCounters:{'1972':1},
+  siteBoundary:[[-79.39,43.64],[-79.37,43.64],[-79.37,43.66],[-79.39,43.66],[-79.39,43.64]],buildingBoundary:[]};}
+function officialHistorical(overrides={}){return {id:'6f9719eb-3083-4bdb-a35b-d638a6efac19',year:1972,sequence:1,title:'Toronto flight',mode:'official',providerId:'toronto',
+  sourceUrl:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer',licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto',policy:'exportable',resolutionMeters:.2,bounds:{...historicalBounds},placement:null,assetId:null,
+  officialExport:{kind:'arcgis-export',url:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer/export',layer:null,maxWidth:1024,maxHeight:900},createdAt:'2026-08-27T12:00:00.000Z',updatedAt:'2026-08-27T12:00:00.000Z',...overrides};}
+
+test('official historical plans stay inside the current provider root and tile only the final crop',async()=>{
+  const {historicalSheetGeometry}=await import('../src/historical-layout.mjs');
+  const {historicalImageryPlan}=await import('../src/map-compositor.mjs');
+  const item=officialHistorical(),p=historicalProject(item),geometry=historicalSheetGeometry(p,item,150);
+  const plan=historicalImageryPlan({project:p,item,geometry,providers:[TORONTO_IMAGERY_PROVIDER]});
+  assert.ok(plan.length>1&&plan.length<=64);
+  let pixels=0;
+  for(const request of plan){
+    const url=new URL(request.url);assert.equal(url.origin,'https://gis.toronto.ca');assert.ok(url.pathname.startsWith('/arcgis/rest/services/basemap/'));
+    const [width,height]=url.searchParams.get('size').split(',').map(Number);
+    assert.equal(width,request.expectedWidth);assert.equal(height,request.expectedHeight);assert.ok(width<=1024&&height<=900);pixels+=width*height;
+    assert.equal(url.searchParams.get('bboxSR'),'3857');assert.equal(url.searchParams.get('imageSR'),'3857');
+  }
+  assert.equal(pixels,geometry.raster.width*geometry.raster.height,'requests cover exactly the final raster viewport once');
+  assert.throws(()=>historicalImageryPlan({project:p,item:{...item,officialExport:{...item.officialExport,url:'https://evil.test/MapServer/export'}},geometry,providers:[TORONTO_IMAGERY_PROVIDER]}),/official provider|root|approved/i);
+  assert.throws(()=>historicalImageryPlan({project:p,item:{...item,bounds:{...item.bounds,east:-78}},geometry,providers:[TORONTO_IMAGERY_PROVIDER]}),/approved|coverage|crop/i);
+});
+
+test('manual historical composition verifies the strict asset hash and applies its immutable affine',async t=>{
+  const {historicalSheetGeometry}=await import('../src/historical-layout.mjs');
+  const {composeHistoricalImage}=await import('../src/map-compositor.mjs');
+  const {placementFromExtent}=await import('../src/imagery/placement.mjs');
+  const bytes=new Uint8Array([1,2,3,4]),assetId='237589d9-3d5d-4817-9d0a-a5fb2d151286';
+  const placement=placementFromExtent({bounds:{west:-79.5,south:43.58,east:-79.3,north:43.72},width:2,height:2,rotationDegrees:17});
+  const item={...officialHistorical({mode:'manual',providerId:null,sourceUrl:null,licenseUrl:null,attribution:'Municipal archive <safe>',resolutionMeters:null,placement,assetId,officialExport:null})};
+  const p=historicalProject(item),geometry=historicalSheetGeometry(p,item,150),hash=createHash('sha256').update(bytes).digest('hex');
+  const asset={metadata:{id:assetId,kind:'historical-image',mime:'image/png',size:bytes.length,width:2,height:2,sha256:hash,createdAt:'2026-08-27T12:00:00.000Z'},blob:new Blob([bytes],{type:'image/png'})};
+  const transforms=[],draws=[];let canvas,closed=0;
+  const dom=new JSDOM('<!doctype html><body></body>');
+  dom.window.HTMLCanvasElement.prototype.getContext=function(){canvas=this;return {fillRect(){},drawImage(...args){draws.push(args);},beginPath(){},moveTo(){},lineTo(){},closePath(){},fill(){},stroke(){},arc(){},setLineDash(){},strokeText(){},fillText(){},save(){},restore(){},setTransform(...args){transforms.push(args);}};};
+  dom.window.HTMLCanvasElement.prototype.toDataURL=()=> 'data:image/jpeg;base64,AAAA';
+  const previous={document:globalThis.document,createImageBitmap:globalThis.createImageBitmap};globalThis.document=dom.window.document;globalThis.createImageBitmap=async()=>({width:2,height:2,close(){closed++;}});
+  t.after(()=>{for(const [key,value] of Object.entries(previous)){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}dom.window.close();});
+  const image=await composeHistoricalImage({project:p,item,geometry,assetStore:{get:async()=>asset},providers:[TORONTO_IMAGERY_PROVIDER]});
+  assert.deepEqual(image.bounds,historicalBounds);assert.equal(draws.length,1);assert.equal(transforms.length,1);assert.ok(transforms[0].some(value=>Math.abs(value)>.001));assert.equal(closed,1);
+  image.dispose();image.dispose();assert.equal(canvas.width,0);assert.equal(dom.window.document.body.children.length,0);
+  for(const tampered of [{...asset,metadata:{...asset.metadata,sha256:'0'.repeat(64)}},{...asset,metadata:{...asset.metadata,kind:'company-logo'}}]){
+    await assert.rejects(composeHistoricalImage({project:p,item,geometry,assetStore:{get:async()=>tampered}}),/hash|integrity|another feature/i);
+  }
+});
+
+test('historical source failure aborts sibling tiles and disposes the independent surface',async t=>{
+  const {historicalSheetGeometry}=await import('../src/historical-layout.mjs');
+  const {composeHistoricalImage}=await import('../src/map-compositor.mjs');
+  const item=officialHistorical(),p=historicalProject(item),geometry=historicalSheetGeometry(p,item,150),dom=new JSDOM('<!doctype html><body></body>');let canvas,aborted=0;
+  dom.window.HTMLCanvasElement.prototype.getContext=function(){canvas=this;return {fillRect(){}};};
+  const previous=globalThis.document;globalThis.document=dom.window.document;t.after(()=>{if(previous===undefined)delete globalThis.document;else globalThis.document=previous;dom.window.close();});
+  let request=0;
+  const fetchImpl=async(url,{signal})=>{request++;if(request===1)return {ok:false,status:503,headers:new Headers()};return new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>{aborted++;reject(new DOMException('Cancelled','AbortError'));},{once:true});});};
+  await assert.rejects(composeHistoricalImage({project:p,item,geometry,providers:[TORONTO_IMAGERY_PROVIDER],fetchImpl}),/HTTP 503|request failed/i);
+  assert.ok(aborted>0);assert.equal(canvas.width,0);assert.equal(canvas.height,0);assert.equal(dom.window.document.body.children.length,0);
 });

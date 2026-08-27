@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {deflateSync,crc32} from 'node:zlib';
 import {createProject} from '../src/core.mjs';
 import {JSDOM} from 'jsdom';
+import {TORONTO_IMAGERY_PROVIDER} from '../src/imagery/providers/toronto.mjs';
 
 const project=()=>({...createProject({name:'Café geological study',projectNo:'26-123',address:'Toronto',date:'2026-08-26'}),location:{lat:43.7,lng:-79.3}});
 const feature={name:'Custom bedrock',description:'User supplied unit',unitCode:'54a',color:'#aaaaaa',fillOpacity:.6,polygon:[[-80,43],[-78,43],[-78,45],[-80,45],[-80,43]],holes:[]};
@@ -150,4 +151,49 @@ test('geology prerequisites check final sheet coverage, SITE holes and closed no
   }
   await assert.rejects(exportPdf({project:p,codes:['E'],datasets:{bedrock:{...datasets.bedrock,coverage:{west:-79.31,east:-79.29,south:43.69,north:43.71}}},compose}),/Figure E.*cover.*final sheet/);
   await assert.rejects(exportPdf({project:p,codes:['E'],datasets:{bedrock:{...datasets.bedrock,features:[{...feature,holes:[[[-79.4,43.6],[-79.2,43.6],[-79.2,43.8],[-79.4,43.8],[-79.4,43.6]]]}]}},compose}),/Figure E.*SITE/);
+});
+
+function approvedOfficial(id,sequence,title){return {id,year:1972,sequence,title,mode:'official',providerId:'toronto',
+  sourceUrl:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer',licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto <archive>',policy:'exportable',resolutionMeters:.2,
+  bounds:{west:-79.405,south:43.682,east:-79.195,north:43.718},placement:null,assetId:null,
+  officialExport:{kind:'arcgis-export',url:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096},
+  createdAt:'2026-08-27T12:00:00.000Z',updatedAt:'2026-08-27T12:00:00.000Z'};}
+
+test('real combined PDF orders A-B-D, geology continuation, then same-year historical sheets with branding and source text',async()=>{
+  const exportPdf=await engine(),p=project(),first=approvedOfficial('74f14168-4de6-4c5f-88f4-87db8ec731c2',1,'First 1972 flight'),second=approvedOfficial('9833e469-c7e8-4ef1-84f1-b89c608c2126',2,'Second 1972 flight');
+  p.historical=[second,first];p.historicalSequenceCounters={'1972':2};p.siteBoundary=[[-79.4,43.69],[-79.2,43.69],[-79.2,43.71],[-79.4,43.71],[-79.4,43.69]];
+  const figures=[],historical=[],disposed=[];
+  const result=await exportPdf({project:p,datasets:{surficial:longSurficialDataset()},providers:[TORONTO_IMAGERY_PROVIDER],
+    selection:[{kind:'historical',id:second.id},{kind:'figure',code:'D'},{kind:'figure',code:'B'},{kind:'historical',id:first.id},{kind:'figure',code:'A'}],
+    compose:compositor(figures,disposed),composeHistorical:async({item,geometry})=>{historical.push(`${item.year}:${item.sequence}`);return {dataUrl:png(String(item.sequence)),width:1,height:1,bounds:geometry.bounds,dispose:()=>disposed.push(`H${item.sequence}`)};}});
+  assert.deepEqual(figures,['A','B','D']);assert.deepEqual(historical,['1972:1','1972:2']);assert.deepEqual(disposed,['A','B','D','H1','H2']);assert.equal(result.pageCount,6);
+  const raw=Buffer.from(await result.blob.arrayBuffer()).toString('latin1'),decoded=decodePdfText(raw);
+  assert.equal((raw.match(/\/MediaBox \[0 0 ([\d.]+) ([\d.]+)\]/g)||[]).length,6);
+  for(const token of ['H-1972-1','H-1972-2','First 1972 flight','Second 1972 flight','Year: 1972','Resolution: 0.2 m','Attribution: City of Toronto <archive>','Licence: https://open.toronto.ca/open-data-licence/','Acme Environmental'])assert.ok(decoded.includes(token),`missing PDF text: ${token}`);
+  assert.ok(decoded.indexOf('FIGURE A')<decoded.indexOf('FIGURE B'));assert.ok(decoded.indexOf('FIGURE B')<decoded.indexOf('FIGURE D'));assert.ok(decoded.lastIndexOf('LEGEND — CONTINUED')<decoded.indexOf('H-1972-1'));assert.ok(decoded.indexOf('H-1972-1')<decoded.indexOf('H-1972-2'));
+  for(let page=1;page<=6;page++)assert.match(decoded,new RegExp(`Page ${page} of 6`));
+});
+
+test('historical export snapshots item metadata, disposes every completed image, and returns no partial Blob on failure',async()=>{
+  const exportPdf=await engine(),p=project(),first=approvedOfficial('74f14168-4de6-4c5f-88f4-87db8ec731c2',1,'Immutable title'),second=approvedOfficial('9833e469-c7e8-4ef1-84f1-b89c608c2126',2,'Failure title');
+  p.historical=[first,second];p.historicalSequenceCounters={'1972':2};const disposed=[],seen=[];let result;
+  await assert.rejects(async()=>{result=await exportPdf({project:p,providers:[TORONTO_IMAGERY_PROVIDER],selection:[{kind:'figure',code:'A'},{kind:'historical',id:first.id},{kind:'historical',id:second.id}],
+    compose:compositor([],disposed),composeHistorical:async({item,geometry})=>{seen.push(item.title);p.historical[0].title='Changed during export';if(item.id===second.id)throw Error('official archive failed');return {dataUrl:png('H'),width:1,height:1,bounds:geometry.bounds,dispose:()=>disposed.push('H1')};}});},/H-1972-2.*official archive failed/i);
+  assert.equal(result,undefined);assert.deepEqual(seen,['Immutable title','Failure title']);assert.deepEqual(disposed,['A','H1']);
+});
+
+test('cancellation during a historical sheet disposes its image and returns no PDF Blob',async()=>{
+  const exportPdf=await engine(),p=project(),item=approvedOfficial('74f14168-4de6-4c5f-88f4-87db8ec731c2',1,'Cancelled flight'),controller=new AbortController(),disposed=[];p.historical=[item];p.historicalSequenceCounters={'1972':1};let result;
+  await assert.rejects(async()=>{result=await exportPdf({project:p,providers:[TORONTO_IMAGERY_PROVIDER],selection:[{kind:'historical',id:item.id}],signal:controller.signal,
+    composeHistorical:async({geometry})=>{controller.abort();return {dataUrl:png('H'),width:1,height:1,bounds:geometry.bounds,dispose:()=>disposed.push('H')};}});},{name:'AbortError'});
+  assert.equal(result,undefined);assert.deepEqual(disposed,['H']);
+});
+
+test('missing manual historical asset blocks before any map composition',async()=>{
+  const exportPdf=await engine(),p=project(),log=[];
+  const placement={center:[-8835500,5412500],groundWidth:40000,groundHeight:30000,sourceWidth:2,sourceHeight:2,rotationDegrees:0};
+  const item={...approvedOfficial('74f14168-4de6-4c5f-88f4-87db8ec731c2',1,'Manual archive'),mode:'manual',providerId:null,sourceUrl:null,licenseUrl:null,attribution:'Private archive',resolutionMeters:null,placement,assetId:'237589d9-3d5d-4817-9d0a-a5fb2d151286',officialExport:null};
+  p.historical=[item];p.historicalSequenceCounters={'1972':1};
+  await assert.rejects(exportPdf({project:p,selection:[{kind:'figure',code:'A'},{kind:'historical',id:item.id}],assetStore:{get:async()=>null},compose:compositor(log,[]),composeHistorical:async()=>{throw Error('must not compose');}}),/H-1972-1.*missing.*asset/i);
+  assert.deepEqual(log,[],'all required assets are snapshotted before remote composition starts');
 });

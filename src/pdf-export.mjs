@@ -1,10 +1,12 @@
 import {sheetGeometry} from './sheet-layout.mjs';
 import {sourceForFigure} from './map-sources.mjs';
-import {composeMap,throwIfAborted} from './map-compositor.mjs';
+import {composeHistoricalImage,composeMap,historicalImageryPlan,loadHistoricalAssetSnapshot,throwIfAborted} from './map-compositor.mjs';
 import {relevantFeatures,relevantUnits,siteFeature,containsBounds} from './geology.mjs';
 import {validBoundary,validLocation} from './core.mjs';
 import {validatePrintRequirements} from './print-validation.mjs';
 import {planLegend} from './legend-layout.mjs';
+import {createAssetStore} from './asset-store.mjs';
+import {historicalCode,historicalSheetGeometry,orderedHistoricalItems} from './historical-layout.mjs';
 
 const FONT='DejaVuSans';
 const TITLE_ROWS=[18,26,117.4,34,23,28,20],LEGEND_SYMBOL_WIDTH=9,LEGEND_COLUMN_GAP=3;
@@ -49,6 +51,25 @@ function textBlock(doc,text,box,size,{align='left',draw=true}={}){
 function deepFreeze(value,seen=new WeakSet()){
   if(!value||typeof value!=='object'||seen.has(value))return value;
   seen.add(value);for(const child of Object.values(value))deepFreeze(child,seen);return Object.freeze(value);
+}
+function exactSelection(value,fields){
+  if(!value||typeof value!=='object'||Array.isArray(value)||(Object.getPrototypeOf(value)!==Object.prototype&&Object.getPrototypeOf(value)!==null))return false;
+  const keys=Reflect.ownKeys(value);if(keys.some(key=>typeof key!=='string')||keys.length!==fields.length||fields.some(field=>!keys.includes(field)))return false;
+  return keys.every(key=>{const descriptor=Object.getOwnPropertyDescriptor(value,key);return descriptor?.enumerable&&Object.hasOwn(descriptor,'value');});
+}
+function normalizeSelection(project,codes,selection){
+  const raw=selection===undefined?(Array.isArray(codes)?codes.map(code=>({kind:'figure',code})):[]):selection;
+  if(!Array.isArray(raw)||!raw.length)throw new Error('Select at least one ready sheet.');
+  const figures=new Set(),historical=new Set(),items=new Map((project?.historical||[]).map(item=>[item.id,item]));
+  for(const entry of raw){
+    if(exactSelection(entry,['kind','code'])&&entry.kind==='figure'&&['A','B','C','D','E'].includes(entry.code)){figures.add(entry.code);continue;}
+    if(exactSelection(entry,['kind','id'])&&entry.kind==='historical'&&typeof entry.id==='string'){
+      if(!items.has(entry.id))throw new Error('A selected approved historical item is missing from the project.');historical.add(entry.id);continue;
+    }
+    throw new Error('Choose valid Figure A-E or approved historical sheet selections.');
+  }
+  const figureCodes=['A','B','C','D','E'].filter(code=>figures.has(code)),historicalItems=orderedHistoricalItems(project).filter(item=>historical.has(item.id));
+  return {selection:[...figureCodes.map(code=>({kind:'figure',code})),...historicalItems.map(item=>({kind:'historical',id:item.id}))],figureCodes,historicalItems};
 }
 function sourceText(source){return typeof source==='string'?source:[source?.name,source?.credits].filter(Boolean).join('. ');}
 function validateFeature(feature){
@@ -222,70 +243,71 @@ function renderContinuationPage(doc,project,page,index,count,{draw=true,companyP
   drawLegendPlan(doc,page.legendPlan,continuationLegendBox(sheet),{draw});
   if(draw){doc.setFontSize(6.5);doc.setTextColor(17,17,17);doc.text(`Figure ${sheet.code} · legend continuation ${page.continuationIndex}`,m.x+2,m.y+m.height-1.3);doc.text(`Page ${index+1} of ${count}`,m.x+m.width-2,m.y+m.height-1.3,{align:'right'});}
 }
+function historicalResolution(value){return value===null?'Not published':`${Number(value.toPrecision(6))} m`;}
+function renderHistoricalPage(doc,project,page,index,count,{draw=true,companyProfile,companyLogoDataUrl}={}){
+  const {geometry:g,item,code}=page,m=g.mapFrame,t=g.titleFrame,gap=2,widths=[104,96,132],used=widths.reduce((sum,value)=>sum+value,0)+gap*3;
+  const boxes=[];let x=t.x;for(const width of [...widths,t.width-used]){boxes.push({x,y:t.y,width,height:t.height});x+=width+gap;}
+  if(draw){doc.setFillColor(255,255,255);doc.setDrawColor(17,17,17);doc.setLineWidth(.3);doc.rect(g.sheet.x,g.sheet.y,g.sheet.width,g.sheet.height);doc.rect(m.x,m.y,m.width,m.height);doc.rect(t.x,t.y,t.width,t.height,'FD');for(const box of boxes)doc.rect(box.x,box.y,box.width,box.height);}
+  renderCompanyBlock(doc,boxes[0],companyProfile,companyLogoDataUrl,{draw});
+  textBlock(doc,project.name,{x:boxes[1].x+2,y:boxes[1].y+2,width:boxes[1].width-4,height:7},8,{draw});
+  textBlock(doc,project.address,{x:boxes[1].x+2,y:boxes[1].y+10,width:boxes[1].width-4,height:10},6,{draw});
+  textBlock(doc,`Project no.: ${project.projectNo}\nDate: ${project.date}`,{x:boxes[1].x+2,y:boxes[1].y+22,width:boxes[1].width-4,height:13},6.5,{draw});
+  const licence=item.mode==='official'?item.licenseUrl:'Manual permission acknowledged';
+  textBlock(doc,`Year: ${item.year}\nSource: ${item.title}\nResolution: ${historicalResolution(item.resolutionMeters)}\nAttribution: ${item.attribution}\nLicence: ${licence}`,
+    {x:boxes[2].x+2,y:boxes[2].y+2,width:boxes[2].width-4,height:boxes[2].height-4},5.2,{draw});
+  textBlock(doc,code,{x:boxes[3].x+1,y:boxes[3].y+5,width:boxes[3].width-2,height:10},9,{align:'center',draw});
+  textBlock(doc,'HISTORICAL\nIMAGERY',{x:boxes[3].x+1,y:boxes[3].y+18,width:boxes[3].width-2,height:14},6,{align:'center',draw});
+  if(draw){
+    const sx=m.x+5,sy=m.y+17,sw=g.scale.pixelWidth/g.raster.width*m.width;doc.setFillColor(255,255,255);doc.rect(sx-2,sy-10,sw+14,16,'F');doc.setFontSize(6.5);doc.setTextColor(17,17,17);doc.text('Approximate ground scale',sx,sy-6);doc.setDrawColor(0,0,0);doc.setLineWidth(.2);for(let segment=0;segment<4;segment++){doc.setFillColor(segment%2?255:0);doc.rect(sx+segment*sw/4,sy-3,sw/4,2,'FD');}doc.text(g.scale.labels[0],sx,sy+3);doc.text(g.scale.labels[1],sx+sw/2,sy+3,{align:'center'});doc.text(g.scale.labels[2],sx+sw,sy+3,{align:'center'});
+    const nx=m.x+m.width-13,ny=m.y+8;doc.setFillColor(255,255,255);doc.rect(nx-8,ny-5,16,24,'F');doc.setFontSize(9);doc.text('N',nx,ny,{align:'center'});doc.setFillColor(17,17,17);doc.triangle(nx,ny+2,nx-3,ny+13,nx,ny+11,'F');doc.setLineWidth(.25);doc.triangle(nx,ny+2,nx+3,ny+13,nx,ny+11,'S');
+    doc.setFillColor(255,255,255);doc.rect(m.x+m.width-32,m.y+1,30,5,'F');doc.setFontSize(6.5);doc.text(`Page ${index+1} of ${count}`,m.x+m.width-3,m.y+4.5,{align:'right'});
+  }
+}
 async function createDocument(signal){
   const Constructor=await pdfLibrary();throwIfAborted(signal);
   const doc=new Constructor({orientation:'landscape',unit:'mm',format:'a3',putOnlyUsedFonts:true,compress:false,precision:4});
   doc.addFileToVFS('DejaVuSans.ttf',base64(await fontBytes(signal)));throwIfAborted(signal);
   doc.addFont('DejaVuSans.ttf',FONT,'normal');doc.setFont(FONT);return doc;
 }
-async function preparePagePlan({project,codes,datasets={},companyProfile,companyLogoDataUrl,dpi=300,signal,requireLogo=false}){
-  throwIfAborted(signal);
-  if(!Array.isArray(codes)||!codes.length)throw new Error('Select at least one ready figure.');
-  if(codes.some(code=>!['A','B','C','D','E'].includes(code)))throw new Error('Choose valid figures A-E.');
-  const selected=[...new Set(codes)].sort(),snapshot=structuredClone({project,datasets,companyProfile,companyLogoDataUrl});
-  const sheets=selected.map(code=>{try{return prepare(snapshot.project,code,snapshot.datasets,dpi,snapshot.companyProfile);}catch(error){throw new Error(`Figure ${code}: ${error.message}`,{cause:error});}});
-  if(requireLogo&& (typeof snapshot.companyLogoDataUrl!=='string'||!/^data:image\/(?:png|jpeg);base64,[a-z0-9+/]+=*$/i.test(snapshot.companyLogoDataUrl)))throw new Error('A decoded PNG or JPEG company logo is required before exporting.');
-  const doc=await createDocument(signal);
-  if(requireLogo){
-    let properties;try{properties=doc.getImageProperties(snapshot.companyLogoDataUrl);}catch(error){throw new Error('The company logo could not be decoded for the PDF.',{cause:error});}
-    if(properties.width!==snapshot.companyProfile.logoWidth||properties.height!==snapshot.companyProfile.logoHeight)throw new Error('The decoded company logo dimensions do not match the Company Profile.');
-  }
-  doc.setProperties({title:'Phase I ESA figures',subject:'Selected A3 landscape figure sheets',creator:'Phase I ESA'});
-  const pages=[];
-  for(const sheet of sheets){
-    let legend;
-    try{legend=planSheetLegend(doc,snapshot.project,sheet);}catch(error){throw new Error(`Figure ${sheet.code}: ${error.message}`,{cause:error});}
-    pages.push({kind:'map',code:sheet.code,sheet,legendPlan:legend.map});
-    legend.continuations.forEach((legendPlan,index)=>pages.push({kind:'legend',code:sheet.code,sheet,continuationIndex:index+1,entries:legendPlan.columns.flat(),legendPlan}));
-  }
-  const pagePlan=deepFreeze(pages);
-  pagePlan.forEach((page,index)=>{try{
-    const options={draw:false,companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl};
-    page.kind==='map'?renderMapPage(doc,snapshot.project,page,index,pagePlan.length,options):renderContinuationPage(doc,snapshot.project,page,index,pagePlan.length,options);
-  }catch(error){throw new Error(`Figure ${page.code}: ${error.message}`,{cause:error});}});
-  return {doc,pagePlan,selected,snapshot:deepFreeze(snapshot),mapCount:sheets.length};
+async function preparePagePlan({project,codes,selection,datasets={},companyProfile,companyLogoDataUrl,dpi=300,signal,requireLogo=false,providers,assetStore}){
+  throwIfAborted(signal);const normalized=normalizeSelection(project,codes,selection),snapshot=structuredClone({project,datasets,companyProfile,companyLogoDataUrl});
+  const selected=normalized.figureCodes,sheets=selected.map(code=>{try{return prepare(snapshot.project,code,snapshot.datasets,dpi,snapshot.companyProfile);}catch(error){throw new Error(`Figure ${code}: ${error.message}`,{cause:error});}});
+  const historicalItems=normalized.historicalItems.map(selectedItem=>snapshot.project.historical.find(item=>item.id===selectedItem.id)),historicalSheets=[];
+  let ownedStore=null,store=assetStore;const historicalAssets=new Map();
+  try{
+    if(historicalItems.some(item=>item.mode==='manual')&&!store){ownedStore=createAssetStore();store=ownedStore;}
+    for(const item of historicalItems){
+      const code=historicalCode(item);try{
+        const errors=validatePrintRequirements({project:snapshot.project,companyProfile:snapshot.companyProfile,figureCode:'A'});if(errors.length)throw new Error(errors.map(error=>error.message).join(' '));
+        const geometry=historicalSheetGeometry(snapshot.project,item,dpi);if(item.mode==='official')historicalImageryPlan({project:snapshot.project,item,geometry,providers});else historicalAssets.set(item.assetId,await loadHistoricalAssetSnapshot({project:snapshot.project,item,assetStore:store,signal}));historicalSheets.push({item,geometry,code});
+      }catch(error){if(error?.name==='AbortError')throw error;throw new Error(`${code}: ${error.message}`,{cause:error});}
+    }
+  }finally{await ownedStore?.close?.();}
+  if(requireLogo&&(typeof snapshot.companyLogoDataUrl!=='string'||!/^data:image\/(?:png|jpeg);base64,[a-z0-9+/]+=*$/i.test(snapshot.companyLogoDataUrl)))throw new Error('A decoded PNG or JPEG company logo is required before exporting.');
+  const doc=await createDocument(signal);if(requireLogo){let properties;try{properties=doc.getImageProperties(snapshot.companyLogoDataUrl);}catch(error){throw new Error('The company logo could not be decoded for the PDF.',{cause:error});}if(properties.width!==snapshot.companyProfile.logoWidth||properties.height!==snapshot.companyProfile.logoHeight)throw new Error('The decoded company logo dimensions do not match the Company Profile.');}
+  doc.setProperties({title:'Phase I ESA figures and historical imagery',subject:'Selected A3 landscape figure sheets',creator:'Phase I ESA'});const pages=[];
+  for(const sheet of sheets){let legend;try{legend=planSheetLegend(doc,snapshot.project,sheet);}catch(error){throw new Error(`Figure ${sheet.code}: ${error.message}`,{cause:error});}pages.push({kind:'map',code:sheet.code,sheet,legendPlan:legend.map});legend.continuations.forEach((legendPlan,index)=>pages.push({kind:'legend',code:sheet.code,sheet,continuationIndex:index+1,entries:legendPlan.columns.flat(),legendPlan}));}
+  for(const sheet of historicalSheets)pages.push({kind:'historical',...sheet});const pagePlan=deepFreeze(pages);
+  pagePlan.forEach((page,index)=>{try{const options={draw:false,companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl};if(page.kind==='map')renderMapPage(doc,snapshot.project,page,index,pagePlan.length,options);else if(page.kind==='legend')renderContinuationPage(doc,snapshot.project,page,index,pagePlan.length,options);else renderHistoricalPage(doc,snapshot.project,page,index,pagePlan.length,options);}catch(error){const label=page.kind==='historical'?page.code:`Figure ${page.code}`;throw new Error(`${label}: ${error.message}`,{cause:error});}});
+  const snapshotStore=Object.freeze({async get(id){const asset=historicalAssets.get(id);return asset?{metadata:{...asset.metadata},blob:asset.blob}:null;}});
+  return {doc,pagePlan,selected,normalizedSelection:deepFreeze(normalized.selection),snapshot:deepFreeze(snapshot),mapCount:sheets.length+historicalSheets.length,historicalAssetStore:snapshotStore};
 }
-export async function planPdfExport(options){
-  const {pagePlan,selected}=await preparePagePlan({...options,requireLogo:false});
-  const continuationCounts=Object.fromEntries(selected.map(code=>[code,pagePlan.filter(page=>page.kind==='legend'&&page.code===code).length]));
-  return deepFreeze({pageCount:pagePlan.length,continuationCounts});
-}
+export async function planPdfExport(options){const {pagePlan,selected}=await preparePagePlan({...options,requireLogo:false});const continuationCounts=Object.fromEntries(selected.map(code=>[code,pagePlan.filter(page=>page.kind==='legend'&&page.code===code).length]));return deepFreeze({pageCount:pagePlan.length,continuationCounts});}
+
 /** Returns a complete PDF only; downloading belongs to the UI after its final abort check. */
-export async function exportCombinedPdf({project,codes,datasets={},companyProfile,companyLogoDataUrl,dpi=300,onProgress=()=>{},signal,compose=composeMap}){
-  const {doc,pagePlan,selected,snapshot,mapCount}=await preparePagePlan({project,codes,datasets,companyProfile,companyLogoDataUrl,dpi,signal,requireLogo:true});
-  let completedMaps=0;
+export async function exportCombinedPdf({project,codes,selection,datasets={},companyProfile,companyLogoDataUrl,dpi=300,onProgress=()=>{},signal,providers,assetStore,compose=composeMap,composeHistorical=composeHistoricalImage}){
+  const prepared=await preparePagePlan({project,codes,selection,datasets,companyProfile,companyLogoDataUrl,dpi,signal,requireLogo:true,providers,assetStore}),{doc,pagePlan,selected,normalizedSelection,snapshot,mapCount,historicalAssetStore}=prepared;let completedMaps=0;
   for(let i=0;i<pagePlan.length;i++){
-    const page=pagePlan[i],sheet=page.sheet;let image;
-    try{
-      throwIfAborted(signal);
-      if(page.kind==='map'){
-        onProgress({phase:'sheet',code:sheet.code,completed:completedMaps,total:mapCount});
-        image=await compose({project:snapshot.project,code:sheet.code,features:sheet.features,geometry:sheet.geometry,signal,onProgress});throwIfAborted(signal);
-        if(!image?.dataUrl||!(image.width>0&&image.height>0))throw new Error('Map composition did not return a complete image.');
-      }
-      if(i)doc.addPage('a3','landscape');
-      if(page.kind==='map'){
-        const m=sheet.geometry.mapFrame;doc.addImage(image.dataUrl,undefined,m.x,m.y,m.width,m.height,`map-${sheet.code}-${i}`,'FAST');
-        renderMapPage(doc,snapshot.project,page,i,pagePlan.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});completedMaps+=1;
-      }else renderContinuationPage(doc,snapshot.project,page,i,pagePlan.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});
-    }catch(error){if(signal?.aborted||error.name==='AbortError')throw new DOMException('Export cancelled.','AbortError');throw new Error(`Figure ${sheet.code}: ${error.message}`,{cause:error});}
-    finally{image?.dispose?.();}
-    // Give the browser a chance to deliver cancellation between expensive page work.
+    const page=pagePlan[i],sheet=page.sheet;let image;try{
+      throwIfAborted(signal);if(page.kind==='map'){onProgress({phase:'sheet',code:sheet.code,completed:completedMaps,total:mapCount});image=await compose({project:snapshot.project,code:sheet.code,features:sheet.features,geometry:sheet.geometry,signal,onProgress});throwIfAborted(signal);}
+      if(page.kind==='historical'){onProgress({phase:'sheet',code:page.code,completed:completedMaps,total:mapCount});image=await composeHistorical({project:snapshot.project,item:page.item,geometry:page.geometry,assetStore:historicalAssetStore,providers,signal,onProgress});throwIfAborted(signal);}
+      if(image&&(!image.dataUrl||!(image.width>0&&image.height>0)))throw new Error('Map composition did not return a complete image.');if(i)doc.addPage('a3','landscape');
+      if(page.kind==='map'){const m=sheet.geometry.mapFrame;doc.addImage(image.dataUrl,undefined,m.x,m.y,m.width,m.height,`map-${sheet.code}-${i}`,'FAST');renderMapPage(doc,snapshot.project,page,i,pagePlan.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});completedMaps++;}
+      else if(page.kind==='historical'){const m=page.geometry.mapFrame;doc.addImage(image.dataUrl,undefined,m.x,m.y,m.width,m.height,`map-${page.code}-${i}`,'FAST');renderHistoricalPage(doc,snapshot.project,page,i,pagePlan.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});completedMaps++;}
+      else renderContinuationPage(doc,snapshot.project,page,i,pagePlan.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});
+    }catch(error){if(signal?.aborted||error.name==='AbortError')throw new DOMException('Export cancelled.','AbortError');const label=page.kind==='historical'?page.code:`Figure ${page.code}`;throw new Error(`${label}: ${error.message}`,{cause:error});}finally{image?.dispose?.();}
     await new Promise(resolve=>setTimeout(resolve,0));
   }
-  throwIfAborted(signal);const buffer=doc.output('arraybuffer');
-  await new Promise(resolve=>setTimeout(resolve,0));throwIfAborted(signal);
-  const filename=`${(snapshot.project.projectNo||'phase-i').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}-figures-${selected.join('')}.pdf`;
-  const result={blob:new Blob([buffer],{type:'application/pdf'}),filename,pageCount:pagePlan.length};
-  onProgress({phase:'complete',completed:pagePlan.length,total:pagePlan.length});throwIfAborted(signal);return result;
+  throwIfAborted(signal);const buffer=doc.output('arraybuffer');await new Promise(resolve=>setTimeout(resolve,0));throwIfAborted(signal);const historicalLabels=pagePlan.filter(page=>page.kind==='historical').map(page=>page.code),tag=`${selected.join('')}${historicalLabels.length?`${selected.length?'-':''}${historicalLabels.join('-')}`:''}`;
+  const filename=`${(snapshot.project.projectNo||'phase-i').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}-figures-${tag}.pdf`,result={blob:new Blob([buffer],{type:'application/pdf'}),filename,pageCount:pagePlan.length,selection:normalizedSelection};onProgress({phase:'complete',completed:pagePlan.length,total:pagePlan.length});throwIfAborted(signal);return result;
 }

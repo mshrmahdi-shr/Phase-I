@@ -149,7 +149,7 @@ export function createProject({name='',projectNo='',address='',date='',company='
     geology:{surficial:null,bedrock:null},
     dpi:300,
     companyProfileSnapshot:null,
-    exportPreferences:{codes:[],sources:{A:'osm',B:'esri-imagery',C:'toporama',D:'osm',E:'osm'}},
+    exportPreferences:{codes:[],selection:[],sources:{A:'osm',B:'esri-imagery',C:'toporama',D:'osm',E:'osm'}},
     figures:figureDefaults(),
     createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()
   };
@@ -227,8 +227,22 @@ export function restoreProject(value){
       p.geology[kind]={...metadata,source:{id:'custom',name:`Custom import: ${metadata.name}`}};
     }
   }
-  const savedCodes=Array.isArray(value.exportPreferences?.codes)?value.exportPreferences.codes:[];
-  p.exportPreferences={codes:Object.keys(figureDefaults()).filter(code=>savedCodes.includes(code)),
+  const figureCodes=Object.keys(figureDefaults()),savedCodes=Array.isArray(value.exportPreferences?.codes)?value.exportPreferences.codes:[];
+  const codes=figureCodes.filter(code=>savedCodes.includes(code));
+  const rawSelection=Array.isArray(value.exportPreferences?.selection)?value.exportPreferences.selection:codes.map(code=>({kind:'figure',code}));
+  const selectedFigures=new Set(),selectedHistorical=new Set(),historicalIds=new Set(p.historical.map(item=>item.id));
+  for(const entry of rawSelection){
+    if(!entry||typeof entry!=='object'||Array.isArray(entry)||(Object.getPrototypeOf(entry)!==Object.prototype&&Object.getPrototypeOf(entry)!==null))continue;
+    const keys=Reflect.ownKeys(entry);if(keys.some(key=>typeof key!=='string'))continue;
+    const values={};let safe=true;
+    for(const key of keys){const descriptor=Object.getOwnPropertyDescriptor(entry,key);if(!descriptor||!Object.hasOwn(descriptor,'value')||!descriptor.enumerable){safe=false;break;}values[key]=descriptor.value;}
+    if(!safe)continue;
+    if(keys.length===2&&keys.includes('kind')&&values.kind==='figure'&&keys.includes('code')&&figureCodes.includes(values.code))selectedFigures.add(values.code);
+    if(keys.length===2&&keys.includes('kind')&&values.kind==='historical'&&keys.includes('id')&&historicalIds.has(values.id))selectedHistorical.add(values.id);
+  }
+  const selection=[...figureCodes.filter(code=>selectedFigures.has(code)).map(code=>({kind:'figure',code})),
+    ...p.historical.filter(item=>selectedHistorical.has(item.id)).sort((a,b)=>a.year-b.year||a.sequence-b.sequence||a.id.localeCompare(b.id,'en')).map(item=>({kind:'historical',id:item.id}))];
+  p.exportPreferences={codes,selection,
     sources:{A:'osm',B:'esri-imagery',C:'toporama',D:'osm',E:'osm'}};
   if(value.companyProfileSnapshot==null){
     p.companyProfileSnapshot=null;
