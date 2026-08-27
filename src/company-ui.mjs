@@ -82,16 +82,30 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
   if(!assetStore||typeof assetStore.get!=='function'||typeof assetStore.put!=='function'||typeof assetStore.delete!=='function')throw new Error('A readable and writable asset store is required.');
   if(typeof loadProfile!=='function'||typeof saveProfile!=='function')throw new Error('Company profile load and save functions are required.');
   const byId=id=>document.getElementById(id),dialog=byId('companyProfileDialog'),form=byId('companyProfileForm');
-  let current=null,selectedLogo=null,logoSelectionError=null,importCandidate=null,returnFocus=null,background=[],destroyed=false;
-  let logoGeneration=0,importGeneration=0,pendingLogo=null,pendingImport=null;
+  let current=null,selectedLogo=null,logoSelectionError=null,importCandidate=null,returnFocus=null,background=[],destroyed=false,mutation=null;
+  let logoGeneration=0,importGeneration=0,refreshGeneration=0,lifecycleGeneration=0,pendingLogo=null,pendingImport=null;
 
   function status(message,kind=''){
     const node=byId('companyProfileStatus');node.textContent=message;node.dataset.kind=kind;
   }
   function updateBusy(){
-    const busy=Boolean(pendingLogo||pendingImport);
+    const preparing=Boolean(pendingLogo||pendingImport),mutating=Boolean(mutation),busy=preparing||mutating;
+    form.setAttribute('aria-busy',String(busy));
+    for(const id of [...Object.values(FIELD_IDS),'companyLogo','companyLogoAlign','companyLogoScale','importCompanyTemplateFile','importCompanyTemplateInDialog'])byId(id).disabled=mutating;
     byId('saveCompanyProfile').disabled=busy;
     byId('confirmCompanyImport').disabled=busy||!importCandidate;
+    byId('cancelCompanyImport').disabled=busy;
+    byId('closeCompanyProfile').disabled=mutating||!current;
+  }
+  function startMutation(kind,message,work){
+    if(destroyed)return Promise.resolve(false);
+    if(mutation)return mutation.kind===kind?mutation.promise:Promise.resolve(false);
+    const record={kind,promise:null,retryFocus:null};mutation=record;refreshGeneration++;status(message);
+    record.promise=Promise.resolve().then(()=>work(record)).finally(()=>{
+      if(mutation===record){mutation=null;updateBusy();if(record.retryFocus&&!destroyed&&!dialog.hidden)byId(record.retryFocus)?.focus();}
+    });
+    updateBusy();
+    return record.promise;
   }
   function fieldControl(field){return byId(FIELD_IDS[field]||({logoAssetId:'companyLogo',logoPlacement:'companyLogoScale'}[field]));}
   function clearErrors(){for(const [field,id] of Object.entries(ERROR_IDS)){byId(id).textContent='';fieldControl(field)?.removeAttribute('aria-invalid');}}
@@ -131,19 +145,26 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
   }
   async function notify(profile){current=profile?snapshotCompanyProfile(profile):null;await onChanged(current);return current;}
   async function refresh(){
+    if(destroyed||mutation)return current;
+    const ticket=++refreshGeneration;
     logoGeneration++;importGeneration++;pendingLogo=pendingImport=null;clearErrors();selectedLogo=null;logoSelectionError=null;importCandidate=null;updateBusy();byId('companyImportPreview').hidden=true;
     const loaded=validProfile(await loadProfile());
+    if(destroyed||ticket!==refreshGeneration)return current;
     if(!loaded){fields(loaded);previewLogo('','');await notify(null);return null;}
     try{
-      const decoded=await storedLogo(loaded);fields(loaded);previewLogo(dataUrl(decoded.bytes,decoded.mime,document),`${loaded.companyName} logo`);
+      const decoded=await storedLogo(loaded);if(destroyed||ticket!==refreshGeneration)return current;
+      fields(loaded);previewLogo(dataUrl(decoded.bytes,decoded.mime,document),`${loaded.companyName} logo`);
       return await notify(loaded);
     }catch(error){
+      if(destroyed||ticket!==refreshGeneration)return current;
       fields(loaded);previewLogo('','');byId('logoError').textContent=error.message;status(error.message,'error');await notify(null);return null;
     }
   }
   async function open(){
-    if(destroyed||!dialog.hidden)return current;
+    if(destroyed||mutation||!dialog.hidden)return current;
+    const ticket=lifecycleGeneration;
     if(!current)await refresh();
+    if(destroyed||mutation||ticket!==lifecycleGeneration||!dialog.hidden)return current;
     returnFocus=document.activeElement;dialog.hidden=false;document.body.classList.add('company-profile-open');
     background=[...document.querySelectorAll('body > header, body > main, #exportDialog, #printPreview')].map(node=>[node,node.inert]);
     background.forEach(([node])=>node.inert=true);byId('closeCompanyProfile').disabled=!current;
@@ -155,7 +176,7 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
     returnFocus?.focus();returnFocus=null;
   }
   function close(){
-    if(dialog.hidden||!current)return false;
+    if(mutation||dialog.hidden||!current)return false;
     releaseDialog();return true;
   }
   async function finishSave(profile,newAsset,oldProfile=current){
@@ -167,30 +188,41 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
       if(stored)try{await assetStore.delete(profile.logoAssetId);}catch{}
       throw error;
     }
-    await notify(profile);
+    if(destroyed)current=snapshotCompanyProfile(profile);else await notify(profile);
     let cleanupWarning='';
     if(oldProfile?.logoAssetId&&oldProfile.logoAssetId!==profile.logoAssetId){
       try{await assetStore.delete(oldProfile.logoAssetId);}catch{cleanupWarning=' The older logo could not be cleaned up.';}
     }
-    selectedLogo=null;logoSelectionError=null;byId('closeCompanyProfile').disabled=false;status(`Company profile saved.${cleanupWarning}`,'ok');
-    fields(profile);return profile;
+    if(!destroyed){
+      selectedLogo=null;logoSelectionError=null;importGeneration++;pendingImport=null;importCandidate=null;byId('companyImportPreview').hidden=true;
+      status(`Company profile saved.${cleanupWarning}`,'ok');fields(profile);
+    }
+    return profile;
   }
-  async function submit(event){
-    event?.preventDefault?.();clearErrors();
+  async function submitWork(record){
+    clearErrors();
     while(pendingLogo){const operation=pendingLogo;await operation;if(destroyed)return false;}
-    if(logoSelectionError){showErrors([{field:'logoAssetId',message:logoSelectionError.message}]);status('Choose a valid decoded logo before saving.','error');return false;}
+    if(logoSelectionError){showErrors([{field:'logoAssetId',message:logoSelectionError.message}]);record.retryFocus='companyLogo';status('Choose a valid decoded logo before saving.','error');return false;}
     let profile;
-    try{profile=profileFromForm();}catch(error){status(error.message,'error');return false;}
-    const errors=validateCompanyProfile(profile);if(errors.length){showErrors(errors);status('Correct the highlighted company profile fields.','error');return false;}
+    try{profile=profileFromForm();}catch(error){record.retryFocus='saveCompanyProfile';status(error.message,'error');return false;}
+    const errors=validateCompanyProfile(profile);if(errors.length){showErrors(errors);record.retryFocus=fieldControl(errors[0].field)?.id||'saveCompanyProfile';status('Correct the highlighted company profile fields.','error');return false;}
     let newAsset=null;
     if(selectedLogo){
       newAsset={metadata:{id:selectedLogo.id,kind:'company-logo',mime:selectedLogo.mime,size:selectedLogo.blob.size,width:selectedLogo.width,height:selectedLogo.height,
         sha256:selectedLogo.sha256,createdAt:selectedLogo.createdAt},blob:selectedLogo.blob};
     }
-    try{await finishSave(profile,newAsset);close();return true;}catch(error){status(`Company profile was not replaced: ${error.message}`,'error');return false;}
+    status('Saving the company profile and logo. Keep this dialog open…');
+    try{await finishSave(profile,newAsset);if(!destroyed)releaseDialog();return true;}
+    catch(error){if(!destroyed){status(`Company profile was not replaced: ${error.message}`,'error');record.retryFocus='saveCompanyProfile';}return false;}
+  }
+  function submit(event){
+    event?.preventDefault?.();
+    if(destroyed||pendingImport)return Promise.resolve(false);
+    return startMutation('save','Preparing the company profile for saving…',submitWork);
   }
   async function selectLogo(event){
-    clearErrors();const file=event?.target?.files?.[0];if(!file)return;
+    if(destroyed||mutation)return false;
+    clearErrors();const file=event?.target?.files?.[0];if(!file)return false;
     const ticket=++logoGeneration;selectedLogo=null;logoSelectionError=null;status('Decoding and securely preparing the selected logo…');
     const operation=(async()=>{
       try{
@@ -208,7 +240,8 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
   }
   async function previewImport(event){
     const file=event?.target?.files?.[0];if(!file)return false;
-    if(dialog.hidden)await open();if(destroyed)return false;
+    if(destroyed||mutation)return false;
+    if(dialog.hidden)await open();if(destroyed||mutation)return false;
     const ticket=++importGeneration;importCandidate=null;byId('companyImportPreview').hidden=true;status('Inspecting and decoding the company template…');
     const operation=(async()=>{
       try{
@@ -228,22 +261,36 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
     try{const result=await operation;if(result&&ticket===importGeneration)byId('confirmCompanyImport').focus();return result;}
     finally{if(pendingImport===operation){pendingImport=null;updateBusy();}}
   }
-  async function confirmImport(){
+  async function confirmImportWork(record){
     while(pendingImport){const operation=pendingImport;await operation;if(destroyed)return false;}
-    if(!importCandidate)return false;const old=current;let profile;
+    if(!importCandidate)return false;const candidate=importCandidate,old=current;let profile;
+    status('Saving the imported company profile and logo. Keep this dialog open…');
     try{
-      profile=await commitCompanyTemplate(importCandidate,{assetStore});
+      profile=await commitCompanyTemplate(candidate,{assetStore});
       try{
         const result=await saveProfile(profile);if(result===false)throw new Error('Company profile metadata could not be saved.');
       }catch(error){try{await assetStore.delete(profile.logoAssetId);}catch{}throw error;}
-      await notify(profile);
+      if(destroyed)current=snapshotCompanyProfile(profile);else await notify(profile);
       let cleanupWarning='';if(old?.logoAssetId&&old.logoAssetId!==profile.logoAssetId){try{await assetStore.delete(old.logoAssetId);}catch{cleanupWarning=' The older logo could not be cleaned up.';}}
-      importCandidate=null;updateBusy();byId('companyImportPreview').hidden=true;fields(profile);byId('closeCompanyProfile').disabled=false;
-      const decoded=await storedLogo(profile);previewLogo(dataUrl(decoded.bytes,decoded.mime,document),`${profile.companyName} logo`);
-      status(`Imported company profile saved.${cleanupWarning}`,'ok');close();return true;
-    }catch(error){status(`Company profile was not replaced: ${error.message}`,'error');return false;}
+      if(!destroyed){
+        const importedLogoUrl=byId('companyImportLogo').src;importCandidate=null;byId('companyImportPreview').hidden=true;fields(profile);
+        previewLogo(importedLogoUrl,`${profile.companyName} logo`);
+        status(`Imported company profile saved.${cleanupWarning}`,'ok');releaseDialog();
+      }
+      return true;
+    }catch(error){if(!destroyed){status(`Company profile was not replaced: ${error.message}`,'error');record.retryFocus='confirmCompanyImport';}return false;}
+  }
+  function confirmImport(){
+    if(destroyed||pendingLogo||(!pendingImport&&!importCandidate))return Promise.resolve(false);
+    return startMutation('import','Preparing the imported company profile for saving…',confirmImportWork);
+  }
+  function cancelImport(){
+    if(destroyed||mutation)return false;
+    importGeneration++;pendingImport=null;importCandidate=null;updateBusy();byId('companyImportPreview').hidden=true;
+    status('Import cancelled. The saved company profile was not changed.');return true;
   }
   async function exportTemplate(){
+    if(destroyed||mutation)return false;
     try{
       const profile=current||await refresh();if(!profile)throw new Error('Complete and save the Company Profile first.');
       downloadBlob(await exportCompanyTemplate({profile,assetStore,Zip}),document);status('Company template downloaded.','ok');return true;
@@ -267,15 +314,15 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
   }
 
   form.onsubmit=submit;byId('companyLogo').onchange=selectLogo;byId('closeCompanyProfile').onclick=close;
-  byId('companyLogoAlign').onchange=placementPreview;byId('companyLogoScale').oninput=placementPreview;
+  byId('companyLogoAlign').onchange=()=>{if(!mutation)placementPreview();};byId('companyLogoScale').oninput=()=>{if(!mutation)placementPreview();};
   byId('editCompanyProfile').onclick=()=>open();byId('exportCompanyTemplate').onclick=exportTemplate;
-  const chooseImport=()=>byId('importCompanyTemplateFile').click();
+  const chooseImport=()=>{if(!mutation)byId('importCompanyTemplateFile').click();};
   byId('importCompanyTemplate').onclick=chooseImport;byId('importCompanyTemplateInDialog').onclick=chooseImport;byId('importCompanyTemplateFile').onchange=previewImport;
-  byId('confirmCompanyImport').onclick=confirmImport;byId('cancelCompanyImport').onclick=()=>{importGeneration++;pendingImport=null;importCandidate=null;updateBusy();byId('companyImportPreview').hidden=true;status('Import cancelled. The saved company profile was not changed.');};
+  byId('confirmCompanyImport').onclick=confirmImport;byId('cancelCompanyImport').onclick=cancelImport;
   document.addEventListener('keydown',keydown);
 
   return {open,close,refresh,outputSnapshot,destroy(){
-    if(destroyed)return;destroyed=true;logoGeneration++;importGeneration++;pendingLogo=pendingImport=null;selectedLogo=null;logoSelectionError=null;importCandidate=null;updateBusy();document.removeEventListener('keydown',keydown);if(!dialog.hidden)releaseDialog();
+    if(destroyed)return;destroyed=true;lifecycleGeneration++;refreshGeneration++;logoGeneration++;importGeneration++;mutation=null;pendingLogo=pendingImport=null;selectedLogo=null;logoSelectionError=null;importCandidate=null;updateBusy();document.removeEventListener('keydown',keydown);if(!dialog.hidden)releaseDialog();
     for(const id of ['companyProfileForm','companyLogo','companyLogoAlign','companyLogoScale','closeCompanyProfile','editCompanyProfile','exportCompanyTemplate','importCompanyTemplate','importCompanyTemplateInDialog','importCompanyTemplateFile','confirmCompanyImport','cancelCompanyImport']){
       const node=byId(id);if(node){node.onclick=null;node.onchange=null;node.onsubmit=null;}
     }

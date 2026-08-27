@@ -33,14 +33,14 @@ function memoryStore(initial=[]){
   };
 }
 
-function setup({persisted=null,store=memoryStore(),saveProfile}={}){
+function setup({persisted=null,store=memoryStore(),loadProfile,saveProfile}={}){
   const dom=new JSDOM(fs.readFileSync(new URL('../index.html',import.meta.url),'utf8'),{url:'https://example.test/',pretendToBeVisual:true});
   dom.window.createImageBitmap=async()=>({width:320,height:160,close(){}});
   let saved=persisted?structuredClone(persisted):null;
   const changes=[];
   const controller=createCompanyProfileDialog({
     document:dom.window.document,assetStore:store,Zip:JSZip,
-    loadProfile:async()=>saved,
+    loadProfile:loadProfile||(()=>saved),
     saveProfile:saveProfile||((profile)=>{saved=structuredClone(profile);}),
     onChanged:profile=>changes.push(profile)
   });
@@ -54,6 +54,7 @@ function fill(document,{companyName='Acme Environmental'}={}){
 }
 
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
+async function eventually(predicate){for(let tries=0;tries<100;tries++){if(predicate())return;await new Promise(resolve=>setImmediate(resolve));}assert.ok(predicate(),'condition did not become true');}
 
 test('first use stays gated with field errors until a decoded PNG logo and every required field save',async t=>{
   const fixture=setup();t.after(()=>{fixture.controller.destroy();fixture.dom.window.close();});
@@ -188,5 +189,61 @@ test('destroy force-cleans an open first-use dialog and restores the host',async
   assert.equal(fixture.controller.close(),false);assert.equal(document.getElementById('companyProfileDialog').hidden,false);
   fixture.controller.destroy();assert.equal(document.getElementById('companyProfileDialog').hidden,true);
   assert.equal(document.body.classList.contains('company-profile-open'),false);assert.equal(Boolean(header.inert),false);
+  fixture.dom.window.close();
+});
+
+test('double import confirmation shares one durable mutation and commits one replacement asset',async t=>{
+  const old=await asset(),incoming=await asset('logo-incoming','Imported Once'),store=memoryStore([old]);
+  const template=await exportCompanyTemplate({profile:incoming.profile,assetStore:memoryStore([incoming]),Zip:JSZip});let saves=0;
+  const fixture=setup({persisted:old.profile,store,saveProfile:()=>{saves++;return true;}});t.after(()=>{fixture.controller.destroy();fixture.dom.window.close();});
+  await fixture.controller.refresh();const document=fixture.dom.window.document;await document.getElementById('importCompanyTemplateFile').onchange({target:{files:[template.blob],value:'template'}});
+  const gate=deferred(),originalPut=store.put.bind(store);let puts=0;store.put=async value=>{puts++;await gate.promise;return originalPut(value);};
+  const first=document.getElementById('confirmCompanyImport').onclick(),second=document.getElementById('confirmCompanyImport').onclick();
+  assert.strictEqual(second,first);
+  await eventually(()=>puts>0);await new Promise(resolve=>setImmediate(resolve));const observedPuts=puts;
+  gate.resolve();const results=await Promise.all([first,second]);
+  assert.equal(observedPuts,1);assert.deepEqual(results,[true,true]);assert.equal(saves,1);
+  assert.equal(store.values.size,1);assert.equal(store.values.has('logo-old'),false);
+});
+
+test('save in flight blocks import interleaving and all conflicting dialog paths',async t=>{
+  const old=await asset(),incoming=await asset('logo-incoming','Imported Later'),store=memoryStore([old]);
+  const template=await exportCompanyTemplate({profile:incoming.profile,assetStore:memoryStore([incoming]),Zip:JSZip}),gate=deferred();let saves=0;
+  const fixture=setup({persisted:old.profile,store,saveProfile:()=>{saves++;return gate.promise;}});t.after(()=>{fixture.controller.destroy();fixture.dom.window.close();});
+  await fixture.controller.refresh();const document=fixture.dom.window.document;await document.getElementById('importCompanyTemplateFile').onchange({target:{files:[template.blob],value:'template'}});
+  document.getElementById('companyName').value='Saved Edit';const saving=document.getElementById('companyProfileForm').onsubmit({preventDefault(){}}),duplicate=document.getElementById('companyProfileForm').onsubmit({preventDefault(){}});
+  assert.strictEqual(duplicate,saving);await eventually(()=>saves===1);
+  const confirming=document.getElementById('confirmCompanyImport').onclick(),selection=await document.getElementById('companyLogo').onchange({target:{files:[new Blob([PNG],{type:'image/png'})]}}),observed={
+    saves,assets:store.values.size,close:fixture.controller.close(),hidden:document.getElementById('companyProfileDialog').hidden,
+    busy:document.getElementById('companyProfileForm').getAttribute('aria-busy'),disabled:['saveCompanyProfile','companyLogo','importCompanyTemplateFile','confirmCompanyImport','cancelCompanyImport','closeCompanyProfile'].map(id=>document.getElementById(id).disabled),
+    status:document.getElementById('companyProfileStatus').textContent
+  };
+  gate.resolve(true);const [saved,savedAgain,imported]=await Promise.all([saving,duplicate,confirming]);
+  assert.deepEqual(observed,{saves:1,assets:1,close:false,hidden:false,busy:'true',disabled:[true,true,true,true,true,true],status:observed.status});assert.match(observed.status,/saving.*company profile/i);
+  assert.equal(saved,true);assert.equal(savedAgain,true);assert.equal(imported,false);assert.equal(selection,false);assert.equal(saves,1);assert.equal(store.values.size,1);
+});
+
+test('cancel cannot contradict an in-flight import failure, which rolls back and restores retry',async t=>{
+  const old=await asset(),incoming=await asset('logo-incoming','Retry Import'),store=memoryStore([old]);
+  const template=await exportCompanyTemplate({profile:incoming.profile,assetStore:memoryStore([incoming]),Zip:JSZip}),failure=deferred();let saves=0;
+  const fixture=setup({persisted:old.profile,store,saveProfile:()=>++saves===1?failure.promise:true});t.after(()=>{fixture.controller.destroy();fixture.dom.window.close();});
+  await fixture.controller.refresh();const document=fixture.dom.window.document;await document.getElementById('importCompanyTemplateFile').onchange({target:{files:[template.blob],value:'template'}});
+  const confirming=document.getElementById('confirmCompanyImport').onclick();await eventually(()=>saves===1);const before=document.getElementById('companyProfileStatus').textContent;
+  const cancelResult=document.getElementById('cancelCompanyImport').onclick(),observed={busy:document.getElementById('companyProfileForm').getAttribute('aria-busy'),cancelDisabled:document.getElementById('cancelCompanyImport').disabled,
+    previewHidden:document.getElementById('companyImportPreview').hidden,status:document.getElementById('companyProfileStatus').textContent,assets:store.values.size};
+  failure.reject(new Error('metadata unavailable'));assert.equal(await confirming,false);
+  const afterFailure={assets:[...store.values.keys()],confirmDisabled:document.getElementById('confirmCompanyImport').disabled,cancelDisabled:document.getElementById('cancelCompanyImport').disabled,
+    logoDisabled:document.getElementById('companyLogo').disabled,busy:document.getElementById('companyProfileForm').getAttribute('aria-busy'),focus:document.activeElement.id};
+  const retried=await document.getElementById('confirmCompanyImport').onclick();
+  assert.equal(cancelResult,false);assert.deepEqual(observed,{busy:'true',cancelDisabled:true,previewHidden:false,status:before,assets:2});assert.match(before,/saving.*imported/i);
+  assert.deepEqual(afterFailure,{assets:['logo-old'],confirmDisabled:false,cancelDisabled:false,logoDisabled:false,busy:'false',focus:'confirmCompanyImport'});
+  assert.equal(retried,true);assert.equal(saves,2);assert.equal(store.values.size,1);assert.equal(store.values.has('logo-old'),false);
+});
+
+test('destroy during an awaited first-use open cannot later show the dialog or inert the host',async()=>{
+  const old=await asset(),store=memoryStore([old]),read=deferred();let reads=0;store.get=()=>{reads++;return read.promise;};
+  const fixture=setup({persisted:old.profile,store}),document=fixture.dom.window.document,header=document.querySelector('header');
+  const opening=fixture.controller.open();await eventually(()=>reads===1);fixture.controller.destroy();read.resolve(old);await opening;
+  assert.equal(document.getElementById('companyProfileDialog').hidden,true);assert.equal(document.body.classList.contains('company-profile-open'),false);assert.equal(Boolean(header.inert),false);
   fixture.dom.window.close();
 });
