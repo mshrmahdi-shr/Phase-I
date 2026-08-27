@@ -61,6 +61,42 @@ test('result validation accepts exact normalized fields and a nullable missing r
     'resolutionMeters','sourceUrl','title','year'
   ]);
   assert.throws(()=>validateImageryResult({...normalized,unexpected:true},registryProvider),/field|unexpected|exact/i);
+  assert.throws(()=>validateImageryResult(normalized),/provider|registry|context/i);
+});
+
+test('exact-field validation rejects symbols, hidden fields, prototypes and accessors without invoking getters',()=>{
+  const registryProvider=provider();
+  const extra=Symbol('extra');
+  assert.throws(()=>normalizeProviderResult(registryProvider,{...result(),[extra]:true}),/field|symbol|exact/i);
+
+  const hidden=result();
+  Object.defineProperty(hidden,'hidden',{value:true});
+  assert.throws(()=>normalizeProviderResult(registryProvider,hidden),/field|hidden|exact/i);
+
+  const inherited=Object.assign(Object.create({inherited:true}),result());
+  assert.throws(()=>normalizeProviderResult(registryProvider,inherited),/plain|prototype|record/i);
+
+  let reads=0;
+  const accessor=result();
+  Object.defineProperty(accessor,'year',{enumerable:true,get(){reads++;return 1972;}});
+  assert.throws(()=>normalizeProviderResult(registryProvider,accessor),/accessor|data propert|field|record/i);
+  assert.equal(reads,0);
+
+  let nestedReads=0;
+  const nestedAccessor=result();
+  Object.defineProperty(nestedAccessor.preview,'url',{enumerable:true,get(){nestedReads++;return 'https://official.example/arcgis/preview/1972';}});
+  assert.throws(()=>normalizeProviderResult(registryProvider,nestedAccessor),/accessor|data propert|field|record/i);
+  assert.equal(nestedReads,0);
+
+  const normalized=normalizeProviderResult(registryProvider,result());
+  Object.defineProperty(normalized,'hidden',{value:true});
+  assert.throws(()=>validateImageryResult(normalized,registryProvider),/field|hidden|exact/i);
+
+  let groupingReads=0;
+  const groupedAccessor=normalizeProviderResult(registryProvider,result());
+  Object.defineProperty(groupedAccessor,'providerId',{enumerable:true,get(){groupingReads++;return 'official';}});
+  assert.throws(()=>groupImageryResults([groupedAccessor],1972,{providers:[registryProvider]}),/accessor|data propert|field|record/i);
+  assert.equal(groupingReads,0);
 });
 
 test('acquisition years are four-digit integers in a defensible historical-to-current range without coercion',()=>{
@@ -107,6 +143,28 @@ test('result validation rejects invalid coverage, policies, dimensions and unsaf
   }
 });
 
+test('URL validation rejects deeply encoded traversal, separators and controls under bounded canonicalization',()=>{
+  const registryProvider=provider();
+  const nest=(value,layers)=>{
+    let encoded=value;
+    for(let index=0;index<layers;index++)encoded=encoded.replaceAll('%','%25');
+    return encoded;
+  };
+  const unsafePaths=[
+    `${nest('%2E%2e',6)}/private`,
+    `${nest('%2e%2E',80)}/private`,
+    `safe${nest('%5C',7)}..${nest('%2F',7)}private`,
+    `safe${nest('%00',7)}private`,
+    'a'.repeat(8_200)
+  ];
+  for(const path of unsafePaths){
+    assert.throws(
+      ()=>normalizeProviderResult(registryProvider,result({sourceUrl:`https://official.example/arcgis/${path}`})),
+      /URL|path|encoding|traversal|separator|control|length|limit/i
+    );
+  }
+});
+
 test('stable result IDs use the provider namespace and reject ambiguous source identities',()=>{
   const registryProvider=provider();
   assert.equal(normalizeProviderResult(registryProvider,result()).id,'official:flight-1972-a');
@@ -123,11 +181,36 @@ test('grouping puts exact matches first and keeps all results from the three nea
     result({id:'1971-a',year:1971}),result({id:'1972-a',year:1972}),result({id:'1973-a',year:1973}),
     result({id:'1974-a',year:1974}),result({id:'1978-a',year:1978})
   ].map(value=>normalizeProviderResult(registryProvider,value));
-  const grouped=groupImageryResults(values,1972);
+  const grouped=groupImageryResults(values,1972,{providers:[registryProvider]});
   assert.deepEqual(grouped.exact.map(value=>value.year),[1972]);
   assert.deepEqual(grouped.nearby.map(value=>value.year),[1971,1973,1970,1970]);
   assert.deepEqual(grouped.remaining.map(value=>value.year),[1974,1969,1978]);
   assert.deepEqual(grouped.errors,[]);
+});
+
+test('grouping requires registered provider context and enforces every official URL and legal-policy boundary',()=>{
+  const registryProvider=provider();
+  const normalized=normalizeProviderResult(registryProvider,result());
+  assert.throws(()=>groupImageryResults([normalized],1972),/provider|registry|context/i);
+
+  const evil='https://evil.example/arcgis/a';
+  for(const mutate of [
+    value=>({...value,preview:{...value.preview,url:evil}}),
+    value=>({...value,preview:{...value.preview,tileTemplate:'https://evil.example/tiles/{z}/{x}/{y}'}}),
+    value=>({...value,export:{...value.export,url:evil}}),
+    value=>({...value,sourceUrl:evil}),
+    value=>({...value,licenseUrl:'https://evil.example/licence/open.html'})
+  ]) assert.throws(
+    ()=>groupImageryResults([mutate(normalized)],1972,{providers:[registryProvider]}),
+    /official|origin|root|licen[cs]e/i
+  );
+
+  const unknown={...normalized,id:'other:flight-1972-a',providerId:'other'};
+  assert.throws(()=>groupImageryResults([unknown],1972,{providers:[registryProvider]}),/unknown|provider|registered/i);
+
+  const limited=provider({id:'limited',policy:'link-only'});
+  const exceedsPolicy={...result({id:'limited:flight-1972-a',providerId:'limited'})};
+  assert.throws(()=>groupImageryResults([exceedsPolicy],1972,{providers:[limited]}),/policy|legal/i);
 });
 
 test('results within a year rank by resolution, provider priority, then stable ID with missing resolution last',()=>{
@@ -197,6 +280,28 @@ test('provider timeout aborts its child and is reported alongside successful pro
   assert.deepEqual(grouped.exact.map(value=>value.id),['good:kept']);
   assert.deepEqual(grouped.errors.map(error=>error.providerId),['slow']);
   assert.match(grouped.errors[0].message,/timed out|timeout|20 ms/i);
+});
+
+test('provider progress is emitted as each child settles instead of waiting for the slowest provider',async()=>{
+  let slowSignal;
+  const slow=provider({id:'slow',priority:20,search:async({signal})=>{slowSignal=signal;return new Promise(()=>{});}});
+  const fast=provider({id:'fast',priority:1,search:async()=>[result({id:'kept',providerId:'fast'})]});
+  const progress=[];
+  let notifyFast;
+  const fastProgress=new Promise(resolve=>{notifyFast=resolve;});
+  const pending=searchOfficialImagery({
+    providers:[slow,fast],location,year:1972,fetchImpl,timeoutMs:60,
+    onProgress:event=>{progress.push(event);if(event.providerId==='fast')notifyFast({event,slowWasAborted:slowSignal.aborted});}
+  });
+  const early=await fastProgress;
+  assert.deepEqual(early,{event:{providerId:'fast',status:'success'},slowWasAborted:false});
+  const grouped=await pending;
+  assert.deepEqual(progress,[
+    {providerId:'fast',status:'success'},
+    {providerId:'slow',status:'error'}
+  ]);
+  assert.deepEqual(grouped.exact.map(value=>value.id),['fast:kept']);
+  assert.deepEqual(grouped.errors.map(error=>error.providerId),['slow']);
 });
 
 test('parent abort rejects promptly, aborts children, and suppresses late progress and results',async()=>{

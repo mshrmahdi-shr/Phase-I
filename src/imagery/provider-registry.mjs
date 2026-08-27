@@ -10,15 +10,30 @@ const IDENTITY=/^[A-Za-z0-9][A-Za-z0-9._~-]{0,199}$/;
 const PROVIDER_ID=/^[a-z][a-z0-9-]{0,63}$/;
 const KIND=/^[a-z][a-z0-9-]{0,63}$/;
 const POLICY_RANK=new Map([['unknown',0],['link-only',1],['exportable',2]]);
+const MAX_URL_LENGTH=8_192;
+const MAX_PATH_DECODE_PASSES=64;
 
 function fail(message){throw new TypeError(message);}
 function isObject(value){return value!==null&&typeof value==='object'&&!Array.isArray(value);}
 function exactFields(value,allowed,label,required=allowed){
   if(!isObject(value))fail(`${label} must be an object`);
-  const keys=Object.keys(value);
-  const unexpected=keys.filter(key=>!allowed.includes(key));
-  const missing=required.filter(key=>!Object.hasOwn(value,key));
+  let prototype,keys;
+  try{prototype=Object.getPrototypeOf(value);keys=Reflect.ownKeys(value);}catch{fail(`${label} must be an inspectable plain record`);}
+  if(prototype!==Object.prototype&&prototype!==null)fail(`${label} must be a plain record without a custom prototype`);
+  const symbols=keys.filter(key=>typeof key==='symbol');
+  if(symbols.length)fail(`${label} must not contain symbol fields`);
+  const stringKeys=keys.filter(key=>typeof key==='string');
+  const unexpected=stringKeys.filter(key=>!allowed.includes(key));
+  const missing=required.filter(key=>!stringKeys.includes(key));
   if(unexpected.length||missing.length)fail(`${label} must have exact fields; unexpected: ${unexpected.join(', ')||'none'}; missing: ${missing.join(', ')||'none'}`);
+  const snapshot=Object.create(null);
+  for(const key of stringKeys){
+    let descriptor;
+    try{descriptor=Object.getOwnPropertyDescriptor(value,key);}catch{fail(`${label}.${key} must be an inspectable data property`);}
+    if(!descriptor||!Object.hasOwn(descriptor,'value')||!descriptor.enumerable)fail(`${label}.${key} must be an enumerable data property, not an accessor or hidden field`);
+    snapshot[key]=descriptor.value;
+  }
+  return snapshot;
 }
 function text(value,label){if(typeof value!=='string'||!value.trim())fail(`${label} must be a non-empty string`);}
 function finite(value,label){if(typeof value!=='number'||!Number.isFinite(value))fail(`${label} must be a finite number`);}
@@ -39,21 +54,28 @@ export function validateCoverage(coverage,label='Coverage'){
   return coverage;
 }
 
+function inspectDecodedPath(path,label){
+  if(/[\\\u0000-\u001f\u007f]/.test(path))fail(`${label} path contains a backslash or control character`);
+  if(/%(?:2f|5c|0[0-9a-f]|1[0-9a-f]|7f)/i.test(path))fail(`${label} path contains an encoded separator or control character`);
+  if(path.split('/').some(segment=>segment==='.'||segment==='..'))fail(`${label} path contains traversal`);
+}
+
 function validateRawPath(url,label){
+  if(url.length>MAX_URL_LENGTH)fail(`${label} exceeds the ${MAX_URL_LENGTH}-character URL length limit`);
   if(url.startsWith('//'))fail(`${label} must be an absolute https URL, not protocol-relative`);
   const scheme=url.indexOf('://');
   const authorityEnd=scheme<0?-1:url.indexOf('/',scheme+3);
   const raw=authorityEnd<0?'':url.slice(authorityEnd).split(/[?#]/,1)[0];
-  if(/\\|%2f|%5c/i.test(raw))fail(`${label} path contains an encoded or invalid separator`);
   let path=raw;
-  for(let pass=0;pass<4;pass++){
-    if(path.split('/').some(segment=>segment==='.'||segment==='..'))fail(`${label} path contains traversal`);
+  for(let pass=0;pass<MAX_PATH_DECODE_PASSES;pass++){
+    inspectDecodedPath(path,label);
     let decoded;
     try{decoded=decodeURIComponent(path);}catch{fail(`${label} path has invalid encoding`);}
-    if(decoded===path)break;
+    if(decoded===path)return;
     path=decoded;
   }
-  if(path.split('/').some(segment=>segment==='.'||segment==='..'))fail(`${label} path contains encoded traversal`);
+  inspectDecodedPath(path,label);
+  fail(`${label} path encoding did not stabilize within ${MAX_PATH_DECODE_PASSES} passes`);
 }
 
 function parsedHttpsUrl(value,label,{template=false}={}){
@@ -119,6 +141,7 @@ export function validateImageryProvider(provider){
 
 export function defineImageryProvider(value){
   if(!isObject(value))fail('Imagery provider must be an object');
+  validateImageryProvider(value);
   const provider={
     ...value,
     coverage:isObject(value.coverage)?Object.freeze({...value.coverage}):value.coverage,
@@ -151,10 +174,16 @@ function validateExport(descriptor,provider){
   for(const field of ['maxWidth','maxHeight'])if(typeof descriptor[field]!=='number'||!Number.isInteger(descriptor[field])||descriptor[field]<=0)fail(`Imagery export ${field} must be a positive integer`);
 }
 
+export function getImageryResultProviderId(value){
+  return exactFields(value,RESULT_FIELDS,'Imagery result').providerId;
+}
+
 export function validateImageryResult(value,provider){
+  if(!provider)fail('Imagery result validation requires registered provider context');
+  validateImageryProvider(provider);
   exactFields(value,RESULT_FIELDS,'Imagery result');
   if(typeof value.providerId!=='string'||!PROVIDER_ID.test(value.providerId))fail('Imagery result providerId is invalid');
-  if(provider&&value.providerId!==provider.id)fail('Imagery result providerId does not match its provider');
+  if(value.providerId!==provider.id)fail('Imagery result providerId does not match its provider');
   const prefix=`${value.providerId}:`;
   if(typeof value.id!=='string'||!value.id.startsWith(prefix)||!IDENTITY.test(value.id.slice(prefix.length)))fail('Imagery result id must contain its provider namespace and a stable source identity');
   text(value.title,'Imagery result title');text(value.attribution,'Imagery result attribution');
@@ -162,7 +191,7 @@ export function validateImageryResult(value,provider){
   if(value.resolutionMeters!==null&&(typeof value.resolutionMeters!=='number'||!Number.isFinite(value.resolutionMeters)||value.resolutionMeters<=0))fail('Imagery result resolutionMeters must be positive or null');
   validateCoverage(value.coverage,'Imagery result coverage');
   if(!IMAGERY_POLICIES.includes(value.policy))fail('Imagery result policy must be exportable, link-only, or unknown');
-  if(provider&&POLICY_RANK.get(value.policy)>POLICY_RANK.get(provider.policy))fail('Imagery result policy exceeds the provider legal policy');
+  if(POLICY_RANK.get(value.policy)>POLICY_RANK.get(provider.policy))fail('Imagery result policy exceeds the provider legal policy');
   validatePreview(value.preview,provider);
   if(value.policy==='exportable'){
     if(value.export===null)fail('Exportable imagery result requires an export descriptor');
@@ -170,24 +199,32 @@ export function validateImageryResult(value,provider){
   }else if(value.export!==null)fail('Link-only or unknown imagery result must not contain an export descriptor');
   validateProviderUrl(value.sourceUrl,provider,{label:'Imagery source URL'});
   validateProviderUrl(value.licenseUrl,provider,{label:'Imagery license URL'});
-  if(provider&&value.licenseUrl!==provider.licenseUrl)fail('Imagery result license URL must match the registered provider license');
+  if(value.licenseUrl!==provider.licenseUrl)fail('Imagery result license URL must match the registered provider license');
   return value;
 }
 
 export function normalizeProviderResult(provider,value){
   validateImageryProvider(provider);
   if(!isObject(value))fail('Imagery result must be an object');
-  exactFields(value,RESULT_FIELDS,'Imagery result');
-  if(value.providerId!==provider.id)fail('Imagery result providerId does not match its provider');
-  let identity=value.id;
+  const fields=exactFields(value,RESULT_FIELDS,'Imagery result');
+  if(fields.providerId!==provider.id)fail('Imagery result providerId does not match its provider');
+  let identity=fields.id;
   const prefix=`${provider.id}:`;
   if(typeof identity==='string'&&identity.startsWith(prefix))identity=identity.slice(prefix.length);
   if(typeof identity!=='string'||!IDENTITY.test(identity))fail('Imagery result source identity is invalid or has an ambiguous namespace');
+  const coverage=exactFields(fields.coverage,COVERAGE_FIELDS,'Imagery result coverage');
+  const preview=exactFields(fields.preview,PREVIEW_FIELDS,'Imagery preview',['kind','url']);
+  const exportDescriptor=fields.export===null?null:exactFields(fields.export,EXPORT_FIELDS,'Imagery export',['kind','url','maxWidth','maxHeight']);
   const normalized={
-    ...value,id:prefix+identity,
-    coverage:isObject(value.coverage)?{...value.coverage}:value.coverage,
-    preview:isObject(value.preview)?{...value.preview}:value.preview,
-    export:isObject(value.export)?{...value.export}:value.export
+    id:prefix+identity,providerId:fields.providerId,title:fields.title,year:fields.year,
+    resolutionMeters:fields.resolutionMeters,
+    coverage:{west:coverage.west,south:coverage.south,east:coverage.east,north:coverage.north},
+    preview:{kind:preview.kind,url:preview.url,...(Object.hasOwn(preview,'layer')?{layer:preview.layer}:{}),
+      ...(Object.hasOwn(preview,'tileTemplate')?{tileTemplate:preview.tileTemplate}:{})},
+    export:exportDescriptor===null?null:{kind:exportDescriptor.kind,url:exportDescriptor.url,
+      ...(Object.hasOwn(exportDescriptor,'layer')?{layer:exportDescriptor.layer}:{}),
+      maxWidth:exportDescriptor.maxWidth,maxHeight:exportDescriptor.maxHeight},
+    policy:fields.policy,sourceUrl:fields.sourceUrl,licenseUrl:fields.licenseUrl,attribution:fields.attribution
   };
   validateImageryResult(normalized,provider);
   return normalized;

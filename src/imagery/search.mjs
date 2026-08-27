@@ -1,4 +1,5 @@
 import {
+  getImageryResultProviderId,
   normalizeProviderResult,
   validateAcquisitionYear,
   validateImageryProvider,
@@ -16,9 +17,15 @@ function validateLocation(location){
     typeof location.lng!=='number'||!Number.isFinite(location.lng)||location.lng < -180||location.lng > 180)fail('Search location must contain valid numeric lat and lng');
 }
 function providerMap(options){
-  if(options instanceof Map)return options;
-  if(Array.isArray(options))return new Map(options.map(provider=>[provider.id,provider]));
-  return new Map();
+  const entries=options instanceof Map?[...options]:Array.isArray(options)?options.map(provider=>[provider.id,provider]):[];
+  const providers=new Map();
+  for(const [key,provider] of entries){
+    validateImageryProvider(provider);
+    if(key!==provider.id)fail('Provider registry key must match provider id');
+    if(providers.has(provider.id))fail(`Duplicate imagery provider id: ${provider.id}`);
+    providers.set(provider.id,provider);
+  }
+  return providers;
 }
 function resultComparator(providers){
   return (left,right)=>{
@@ -38,13 +45,17 @@ function yearComparator(requestedYear){
 export function groupImageryResults(results,requestedYear,{providers:providerOptions}={}){
   if(!Array.isArray(results))fail('Imagery results must be an array');
   validateAcquisitionYear(requestedYear,'Requested year');
+  const providers=providerMap(providerOptions);
+  if(results.length>0&&providers.size===0)fail('Grouping imagery results requires registered provider context');
   const seen=new Set();
   for(const result of results){
-    validateImageryResult(result);
+    const providerId=getImageryResultProviderId(result);
+    const provider=providers.get(providerId);
+    if(!provider)fail(`Imagery result references an unknown registered provider: ${providerId}`);
+    validateImageryResult(result,provider);
     if(seen.has(result.id))fail(`Duplicate imagery result id: ${result.id}`);
     seen.add(result.id);
   }
-  const providers=providerMap(providerOptions);
   const compareResults=resultComparator(providers);
   const compareYears=yearComparator(requestedYear);
   const years=[...new Set(results.filter(result=>result.year!==requestedYear).map(result=>result.year))].sort(compareYears);
@@ -115,17 +126,19 @@ export async function searchOfficialImagery({
     if(ids.has(provider.id))fail(`Duplicate imagery provider id: ${provider.id}`);
     ids.add(provider.id);
   }
-  const settled=await Promise.allSettled(providers.map(provider=>runProvider(provider,{location,year,signal,fetchImpl,timeoutMs})));
+  const tasks=providers.map(provider=>runProvider(provider,{location,year,signal,fetchImpl,timeoutMs}).then(
+    value=>{safeProgress(onProgress,{providerId:provider.id,status:value.status},signal);return value;},
+    reason=>{safeProgress(onProgress,{providerId:provider.id,status:'error'},signal);throw reason;}
+  ));
+  const settled=await Promise.allSettled(tasks);
   throwIfAborted(signal);
   const results=[],errors=[];
   for(let index=0;index<settled.length;index++){
     const provider=providers[index],entry=settled[index];
     if(entry.status==='fulfilled'){
       results.push(...entry.value.results);
-      safeProgress(onProgress,{providerId:provider.id,status:entry.value.status},signal);
     }else{
       errors.push(providerError(provider,entry.reason));
-      safeProgress(onProgress,{providerId:provider.id,status:'error'},signal);
     }
   }
   errors.sort((left,right)=>{
