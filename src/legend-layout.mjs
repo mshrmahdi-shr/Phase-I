@@ -1,15 +1,25 @@
 const CONTINUED_TITLE='LEGEND — CONTINUED';
-const EPSILON=.000001;
 
 function invalid(message){throw new Error(message);}
 
 function validateEntries(entries){
   if(!Array.isArray(entries)) invalid('Legend entries must be an array.');
-  for(const entry of entries){
-    if(!entry||typeof entry!=='object'||entry.code==null||!String(entry.code).trim()){
-      invalid('Legend entries must each have a code.');
+  return entries.map(entry=>{
+    if(!entry||typeof entry!=='object') invalid('Legend entries must be objects.');
+    let symbol=null;
+    if(entry.symbol!=null){
+      if(typeof entry.symbol!=='string'||!entry.symbol.trim()) invalid('Legend entry symbols must be non-empty strings.');
+      symbol=entry.symbol.trim();
     }
-  }
+    let label;
+    if(entry.code==null){
+      if(!symbol) invalid('Legend entries must each have a code or symbol.');
+      label=symbol;
+    }else if(typeof entry.code==='string'&&entry.code.trim()) label=entry.code.trim();
+    else if(typeof entry.code==='number'&&Number.isFinite(entry.code)) label=String(entry.code);
+    else invalid('Legend entry codes must be non-empty strings or finite numbers.');
+    return {entry,label,fixed:!!symbol};
+  });
 }
 
 function normalizeOptions(fontSizes,columnCounts){
@@ -21,7 +31,7 @@ function normalizeOptions(fontSizes,columnCounts){
   }
   return {
     fontSizes:[...new Set(fontSizes)].sort((a,b)=>b-a),
-    columnCounts:[...new Set(columnCounts)].sort((a,b)=>a-b),
+    columnCounts:[...new Set(columnCounts)],
   };
 }
 
@@ -56,9 +66,9 @@ function fitPrefix(entries,measure,box,fontSize,columnCount){
   for(const column of columns){
     let used=0;
     while(index<entries.length){
-      const entry=entries[index],entryHeight=measuredHeight(measure,entry,fontSize,width);
-      if(used+entryHeight>height+EPSILON) break;
-      column.push(entry);
+      const entry=entries[index],entryHeight=measuredHeight(measure,entry.entry,fontSize,width);
+      if(used+entryHeight>height) break;
+      column.push(entry.entry);
       used+=entryHeight;
       index+=1;
     }
@@ -73,8 +83,7 @@ function candidates(fontSizes,columnCounts){
 function fixedEntryIndex(entries){
   let index=-1;
   for(let i=0;i<entries.length;i+=1){
-    // The PDF legend producer sets `symbol` for SITE and boundary rows. Codes remain opaque.
-    if(typeof entries[i].symbol==='string'&&entries[i].symbol.trim()) index=i;
+    if(entries[i].fixed) index=i;
   }
   return index;
 }
@@ -97,45 +106,41 @@ function paginate(entries,measure,box,candidate){
 
 /**
  * Plans measured legend rows without altering their contents. A non-empty `symbol`
- * field marks a required SITE/boundary row; the caller supplies it explicitly.
+ * field marks a required SITE/boundary row; it is also that row's stable error label
+ * when no code is supplied. Candidates use largest font first, then supplied column
+ * order; overflow-map ties retain that priority, as do continuation candidates.
  */
 export function planLegend({entries,measure,box,fontSizes=[7.5,7,6.5,6,5.5],columnCounts=[1,2]}={}){
-  validateEntries(entries);
+  const normalizedEntries=validateEntries(entries);
   if(typeof measure!=='function') invalid('Legend measure must be a function.');
   const normalizedBox=normalizeBox(box),options=normalizeOptions(fontSizes,columnCounts);
   const allCandidates=candidates(options.fontSizes,options.columnCounts);
   const minimumFont=options.fontSizes.at(-1),fullWidth=dimensions(normalizedBox,1);
 
-  for(const entry of entries){
-    if(measuredHeight(measure,entry,minimumFont,fullWidth.width)>fullWidth.height+EPSILON){
-      throw new Error(`Legend entry ${entry.code} exceeds the supported text length.`);
+  for(const item of normalizedEntries){
+    if(measuredHeight(measure,item.entry,minimumFont,fullWidth.width)>fullWidth.height){
+      throw new Error(`Legend entry ${item.label} exceeds the supported text length.`);
     }
   }
 
   for(const candidate of allCandidates){
-    const fit=fitPrefix(entries,measure,normalizedBox,candidate.fontSize,candidate.columnCount);
-    if(fit.count===entries.length) return {map:pagePlan(fit,candidate),continuations:[]};
+    const fit=fitPrefix(normalizedEntries,measure,normalizedBox,candidate.fontSize,candidate.columnCount);
+    if(fit.count===normalizedEntries.length) return {map:pagePlan(fit,candidate),continuations:[]};
   }
 
-  const requiredThrough=fixedEntryIndex(entries)+1;
+  const requiredThrough=fixedEntryIndex(normalizedEntries)+1;
   let bestMap=null;
   for(const candidate of allCandidates){
-    const fit=fitPrefix(entries,measure,normalizedBox,candidate.fontSize,candidate.columnCount);
+    const fit=fitPrefix(normalizedEntries,measure,normalizedBox,candidate.fontSize,candidate.columnCount);
     if(fit.count<requiredThrough) continue;
     if(!bestMap||fit.count>bestMap.fit.count) bestMap={candidate,fit};
   }
   if(!bestMap) invalid('Required legend symbols do not fit on the map page.');
 
-  const remaining=entries.slice(bestMap.fit.count);
-  let bestContinuation=null;
+  const remaining=normalizedEntries.slice(bestMap.fit.count);
   for(const candidate of allCandidates){
     const pages=paginate(remaining,measure,normalizedBox,candidate);
-    if(!pages) continue;
-    if(!bestContinuation||pages.length<bestContinuation.pages.length){
-      bestContinuation={candidate,pages};
-    }
+    if(pages) return {map:pagePlan(bestMap.fit,bestMap.candidate),continuations:pages};
   }
-  if(!bestContinuation) invalid('Legend entries do not fit on continuation pages.');
-
-  return {map:pagePlan(bestMap.fit,bestMap.candidate),continuations:bestContinuation.pages};
+  invalid('Legend entries do not fit on continuation pages.');
 }
