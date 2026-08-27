@@ -16,7 +16,7 @@ test('layout fits the approved A3 frame with each figure default when no A3 view
     assert.deepEqual(sheetGeometry(p,code).bounds,g.bounds,'unsaved figure extent is migration/display metadata');
   }
   assert.throws(()=>sheetGeometry(p,'A',149),/150 DPI|300 DPI/i);
-  assert.throws(()=>sheetGeometry(p,'A',600),/choose 300/i);
+  assert.throws(()=>sheetGeometry(p,'A',600),/Unsafe raster dimensions; choose 300 DPI/i);
 });
 test('segmented metric scale measures final ground width at map centre latitude',async()=>{
   const {metricScale}=await import('../src/sheet-layout.mjs');
@@ -45,18 +45,28 @@ test('saved A-E crops may be smaller or larger than their default A3 views',asyn
   }
 });
 
-test('saved A3 views validate SITE containment, normalized finite bounds, and Mercator safety',async()=>{
+test('saved A3 views reject SITE exclusion, non-finite, inverted, degenerate, and out-of-range bounds',async()=>{
   const {sheetGeometry}=await import('../src/sheet-layout.mjs');
   const p=createProject();p.location={lat:43.7,lng:-79.3};
+  p.figures.A.bounds={north:43.701,south:43.699,east:-79.298,west:-79.299};
+  assert.throws(()=>sheetGeometry(p,'A'),/SITE.*view/i);
   for(const bounds of [
-    {north:43.701,south:43.699,east:-79.298,west:-79.299},
     {north:NaN,south:43.699,east:-79.299,west:-79.301},
     {north:43.699,south:43.701,east:-79.299,west:-79.301},
-    {north:43.7,south:43.7,east:-79.299,west:-79.301}
+    {north:43.7,south:43.7,east:-79.299,west:-79.301},
+    {north:43.701,south:43.699,east:181,west:-79.301}
   ]){
     p.figures.A.bounds=bounds;
     assert.throws(()=>sheetGeometry(p,'A'),/SITE.*view/i);
   }
+});
+
+test('saved A3 views explicitly reject antimeridian crossings and Mercator-overflow aspect fits',async()=>{
+  const {sheetGeometry,captureFigureView}=await import('../src/sheet-layout.mjs');
+  const p=createProject();p.location={lat:10,lng:179.95};
+  p.figures.A.bounds={north:10.01,south:9.99,east:-179.9,west:179.9};
+  assert.throws(()=>sheetGeometry(p,'A'),/antimeridian/i);
+  assert.throws(()=>captureFigureView(p,'A',p.figures.A.bounds),/antimeridian/i);
   p.location={lat:84.9995,lng:0};p.figures.A.bounds={north:85,south:84.999,east:.1,west:-.1};
   assert.throws(()=>sheetGeometry(p,'A'),/Mercator/i);
 });
