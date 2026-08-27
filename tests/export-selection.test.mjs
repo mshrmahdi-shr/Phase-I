@@ -75,10 +75,64 @@ test('selection reports planned Figure D continuation sheets without blocking th
   const dialog=createExportDialog({document,getState:()=>state,save(){},setBusy(){},
     planPdf:planPdfExport,
     exportPdf:async()=>{throw Error('unused');},download(){}});
-  dialog.open();await dialog.refresh();
+  await dialog.open();
   assert.equal($('exportFigureD').disabled,false);
   assert.equal($('exportReasonD').textContent,'Figure D will include 1 legend continuation sheet.');
   assert.equal($('downloadPdf').textContent,'Download PDF (2 sheets)');
+});
+
+test('planner rejection disables and unchecks only the affected row and guards download',async()=>{
+  const {createExportDialog}=await import('../src/export-selection.mjs');
+  const {planPdfExport}=await import('../src/pdf-export.mjs');
+  for(const description of ['Unsupported 𠀀','x\n'.repeat(6000)]){
+    const {document,dom,$}=fixture(),p=project(),surficial=surficialDataset();p.exportPreferences={codes:['D']};
+    surficial.features[0].unitCode='UNIT-BLOCKED';surficial.features[0].description=description;
+    let exports=0;
+    const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{surficial},companyProfile:companyProfile()}),save(){},setBusy(){},
+      planPdf:planPdfExport,exportPdf:async()=>{exports++;return {blob:new Blob(['pdf']),filename:'invalid.pdf',pageCount:1};},download(){}});
+    await dialog.open();
+    assert.equal($('exportFigureD').checked,false);assert.equal($('exportFigureD').disabled,true);
+    assert.deepEqual(p.exportPreferences.codes,[]);assert.equal($('downloadPdf').disabled,true);
+    assert.match($('exportReasonD').textContent,/Figure D.*(?:Unsupported font character|Legend entry UNIT-BLOCKED)/);
+    assert.equal($('exportFigureA').disabled,false,'an unrelated valid row remains usable');
+    await dialog.start();assert.equal(exports,0,'download cannot start without a currently planned selected figure');
+    dom.window.close();
+  }
+});
+
+function deferredPlanner(){
+  const calls=[];
+  return {calls,planPdf(args){
+    const code=args.codes[0];if(code!=='D')return Promise.resolve({pageCount:1,continuationCounts:{[code]:0}});
+    let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});calls.push({args,resolve,reject});return promise;
+  }};
+}
+
+test('an older planning success cannot overwrite a newer failure',async()=>{
+  const {createExportDialog}=await import('../src/export-selection.mjs');
+  const {document,dom,$}=fixture(),p=project(),surficial=surficialDataset(),planner=deferredPlanner();p.exportPreferences={codes:['D']};
+  const state={project:p,datasets:{surficial},companyProfile:companyProfile()};
+  const dialog=createExportDialog({document,getState:()=>state,save(){},setBusy(){},planPdf:planner.planPdf,exportPdf:async()=>{throw Error('unused');},download(){}});
+  const older=dialog.open();assert.equal(planner.calls.length,1);
+  surficial.features[0].description='new invalid snapshot';const newer=dialog.refresh();assert.equal(planner.calls.length,2);
+  planner.calls[1].reject(Error('Figure D: Unsupported font character U+20000.'));await newer;
+  planner.calls[0].resolve({pageCount:2,continuationCounts:{D:1}});await older;await new Promise(resolve=>setImmediate(resolve));
+  assert.equal($('exportFigureD').disabled,true);assert.equal($('exportFigureD').checked,false);assert.equal($('downloadPdf').disabled,true);
+  assert.match($('exportReasonD').textContent,/U\+20000/);assert.deepEqual(p.exportPreferences.codes,[]);dom.window.close();
+});
+
+test('an older planning failure cannot overwrite a newer success',async()=>{
+  const {createExportDialog}=await import('../src/export-selection.mjs');
+  const {document,dom,$}=fixture(),p=project(),surficial=surficialDataset(),planner=deferredPlanner();p.exportPreferences={codes:['D']};
+  const state={project:p,datasets:{surficial},companyProfile:companyProfile()};
+  const dialog=createExportDialog({document,getState:()=>state,save(){},setBusy(){},planPdf:planner.planPdf,exportPdf:async()=>{throw Error('unused');},download(){}});
+  const older=dialog.open();surficial.features[0].description='new valid snapshot';const newer=dialog.refresh();
+  planner.calls[1].resolve({pageCount:3,continuationCounts:{D:2}});await newer;
+  planner.calls[0].reject(Error('Figure D: stale failure'));await older;await new Promise(resolve=>setImmediate(resolve));
+  assert.equal($('exportFigureD').disabled,false);assert.equal($('exportFigureD').checked,true);
+  assert.equal($('exportReasonD').textContent,'Figure D will include 2 legend continuation sheets.');
+  assert.equal($('downloadPdf').disabled,false);assert.equal($('downloadPdf').textContent,'Download PDF (3 sheets)');
+  assert.deepEqual(p.exportPreferences.codes,['D']);dom.window.close();
 });
 
 test('dialog snapshots input, prevents duplicates, reports per-phase progress, and downloads only a full result',async()=>{

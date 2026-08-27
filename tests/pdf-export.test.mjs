@@ -22,35 +22,46 @@ function longSurficialDataset(count=28){
   const features=Array.from({length:count},(_,index)=>({
     name:`Official unit ${String(index+1).padStart(2,'0')}`,
     description:'Official Quaternary geology description with deposits, sediments, landforms, and interpretive qualifiers preserved in full.',
-    unitCode:`UNIT-${String(index+1).padStart(2,'0')}`,color:'#5fa8d3',fillOpacity:.6,
+    unitCode:`DUNIT-${index+1}`,color:'#5fa8d3',fillOpacity:.6,
     polygon:[[-80,43],[-78,43],[-78,45],[-80,45],[-80,43]],holes:[],
   }));
   return {features,source:{name:'Ontario Geological Survey official surficial geology',credits:'Official unit descriptions reproduced without abbreviation.'},coverage:null};
+}
+function longBedrockDataset(count=28){
+  const features=Array.from({length:count},(_,index)=>({
+    name:`Custom bedrock unit ${index+1}`,
+    description:'User supplied bedrock description preserving formation, member, lithology, and interpretive qualifiers in full.',
+    unitCode:`BR-${index+1}`,color:'#aaaaaa',fillOpacity:.6,
+    polygon:[[-80,43],[-78,43],[-78,45],[-80,45],[-80,43]],holes:[],
+  }));
+  return {features,source:{name:'Synthetic custom bedrock.kml',credits:'Synthetic review fixture; no private data.'},coverage:null};
 }
 function decodePdfText(raw){
   const cmap=new Map([...raw.matchAll(/<([0-9a-f]{4})><([0-9a-f]{4})>/gi)].map(m=>[m[1].toLowerCase(),String.fromCodePoint(parseInt(m[2],16))]));
   return [...raw.matchAll(/<([0-9a-f]+)>\s*Tj/gi)].map(m=>m[1].match(/.{4}/g).map(g=>cmap.get(g.toLowerCase())||'?').join('')).join('\n');
 }
 async function engine(){const {exportCombinedPdf}=await import('../src/pdf-export.mjs');return options=>exportCombinedPdf({...branding(),...options});}
-test('long Figure D legend creates complete continuation sheets with final physical numbering',async()=>{
-  const exportPdf=await engine(),log=[],disposed=[],surficial=longSurficialDataset();
-  const result=await exportPdf({project:project(),codes:['E','D','A'],datasets:{surficial,bedrock:datasets.bedrock},compose:compositor(log,disposed)});
-  assert.deepEqual(log,['A','D','E'],'only selected map pages compose, in figure order');
-  assert.deepEqual(disposed,log);assert.equal(result.pageCount,4,'one continuation increases three selected maps to four physical pages');
+test('long Figure D and E legends preserve exact code tokens and global order across physical pages',async()=>{
+  const exportPdf=await engine(),log=[],disposed=[],surficial=longSurficialDataset(),bedrock=longBedrockDataset();
+  const result=await exportPdf({project:project(),codes:['E','D'],datasets:{surficial,bedrock},compose:compositor(log,disposed)});
+  assert.deepEqual(log,['D','E'],'only the D/E map pages compose, in figure order');
+  assert.deepEqual(disposed,log);assert.equal(result.pageCount,4,'each selected geology map receives one continuation');
   const raw=Buffer.from(await result.blob.arrayBuffer()).toString('latin1'),decoded=decodePdfText(raw);
   assert.equal((raw.match(/\/Type \/Page\b/g)||[]).length,result.pageCount);
-  assert.ok(decoded.indexOf('FIGURE A')<decoded.indexOf('FIGURE D'));
   assert.ok(decoded.indexOf('FIGURE D')<decoded.indexOf('LEGEND — CONTINUED'));
-  assert.ok(decoded.indexOf('LEGEND — CONTINUED')<decoded.lastIndexOf('FIGURE E'));
+  assert.ok(decoded.lastIndexOf('FIGURE D')<decoded.indexOf('FIGURE E'),'D continuation is immediately before the E map');
+  assert.ok(decoded.indexOf('FIGURE E')<decoded.lastIndexOf('LEGEND — CONTINUED'));
   assert.equal((decoded.match(/Acme Environmental/g)||[]).length,result.pageCount,'company block is present on every physical page');
   assert.equal((decoded.match(/Ontario Geological Survey official surficial geology/g)||[]).length,2,'Figure D source appears on its map and continuation');
+  assert.equal((decoded.match(/Synthetic custom bedrock\.kml/g)||[]).length,2,'Figure E custom source appears on its map and continuation');
   for(let page=1;page<=result.pageCount;page+=1)assert.match(decoded,new RegExp(`Page ${page} of ${result.pageCount}`));
   assert.ok((decoded.match(/LEGEND — CONTINUED/g)||[]).length>=1);
   assert.equal((decoded.replace(/\s+/g,' ').match(/Official Quaternary geology description/g)||[]).length,surficial.features.length,'every complete official description is extractable');
-  for(const unit of surficial.features){
-    const occurrences=decoded.split(unit.unitCode).length-1;
-    assert.equal(occurrences,1,`${unit.unitCode} appears exactly once across the map and continuation pages`);
-  }
+  assert.equal((decoded.replace(/\s+/g,' ').match(/User supplied bedrock description/g)||[]).length,bedrock.features.length,'every complete custom bedrock description is extractable');
+  const expectedCodes=[...surficial.features,...bedrock.features].map(unit=>unit.unitCode);
+  const actualCodes=decoded.split('\n').filter(line=>/^(?:DUNIT|BR)-\d+$/.test(line));
+  assert.deepEqual(actualCodes,expectedCodes,'complete code tokens occur exactly once and in global D-then-E order despite prefix collisions');
+  assert.equal(new Set(actualCodes).size,expectedCodes.length);
 });
 test('real PDF has only A/C/E pages in figure order, A3 media boxes, embedded text, and cleaned maps',async()=>{
   const exportPdf=await engine(),log=[],disposed=[];

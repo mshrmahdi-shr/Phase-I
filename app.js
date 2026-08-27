@@ -285,7 +285,7 @@ function setExportBusy(value){
 }
 async function exportBrandedPdf(args){const branding=await companyDialog.outputSnapshot(args.companyProfile);return exportCombinedPdf({...args,...branding});}
 exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport});
-$('exportPdf').onclick=()=>{if(!printSession.isOpen)exportDialog.open();};
+$('exportPdf').onclick=()=>{if(!printSession.isOpen)return exportDialog.open();};
 function refreshPrint(){
   const f=project.figures[active];
   $('printProject').textContent=project.name||'—';$('printAddress').textContent=project.address||'—';

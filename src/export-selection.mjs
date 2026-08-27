@@ -49,7 +49,7 @@ export function downloadPdf(result,{document,signal}){
 export function createExportDialog({document,getState,save,setBusy,exportPdf,planPdf=null,download=downloadPdf}){
   const byId=id=>document.getElementById(id),dialog=byId('exportDialog');
   const sheetCount=count=>`${count} ${count===1?'sheet':'sheets'}`;
-  let controller=null,planning=null,planningController=null,planSummary=null,planGeneration=0,returnFocus=null,background=[];
+  let controller=null,planning=null,planningController=null,planStates=new Map(),planGeneration=0,returnFocus=null,background=[];
   function persist(codes){
     const project=getState().project;
     if(JSON.stringify(project.exportPreferences?.codes)!==JSON.stringify(codes)){
@@ -58,46 +58,66 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,pla
   }
   function render(){
     if(dialog.hidden||controller)return;
-    const state=getState(),rows=exportRows(state),codes=selectedReadyCodes(rows,state.project.exportPreferences?.codes);
-    persist(codes);
+    const state=getState(),rows=exportRows(state),saved=state.project.exportPreferences?.codes||[];
+    const retained=saved.filter(code=>{
+      const row=rows.find(candidate=>candidate.code===code),planned=planStates.get(code);
+      return row?.ready&&(!planPdf||planned?.status!=='error');
+    });
+    persist(retained);
+    const codes=rows.filter(row=>retained.includes(row.code)&&row.ready&&(!planPdf||planStates.get(row.code)?.status==='ready')).map(row=>row.code);
     const focused=document.activeElement?.id;
     byId('exportRows').replaceChildren();
     for(const row of rows){
       const label=document.createElement('label');label.className='export-row';
       const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.id=`exportFigure${row.code}`;
-      checkbox.checked=codes.includes(row.code);checkbox.disabled=!row.ready;checkbox.value=row.code;
+      const planned=planStates.get(row.code),pending=Boolean(planPdf&&row.ready&&planned?.status!=='ready'&&planned?.status!=='error'),blocked=Boolean(planPdf&&planned?.status==='error');
+      checkbox.checked=retained.includes(row.code)&&!blocked;checkbox.disabled=!row.ready||pending||blocked;checkbox.value=row.code;
       const text=document.createElement('span'),title=document.createElement('strong'),detail=document.createElement('span');
       title.textContent=`Figure ${row.code} — ${row.title}`;
       detail.className='export-reason';detail.id=`exportReason${row.code}`;
-      const continuations=planSummary?.continuationCounts?.[row.code]||0;
-      detail.textContent=!row.ready?row.reasons.join(' '):continuations?`Figure ${row.code} will include ${continuations} legend continuation ${continuations===1?'sheet':'sheets'}.`:`Ready · ${row.source.label}`;
+      const continuations=planned?.continuations||0;
+      detail.textContent=!row.ready?row.reasons.join(' '):blocked?planned.error.message:pending?'Checking PDF layout…':continuations?`Figure ${row.code} will include ${continuations} legend continuation ${continuations===1?'sheet':'sheets'}.`:`Ready · ${row.source.label}`;
       if(continuations)detail.classList.add('export-continuation');
       checkbox.setAttribute('aria-describedby',detail.id);
       checkbox.onchange=()=>{
         const selected=new Set(getState().project.exportPreferences?.codes||[]);
         checkbox.checked?selected.add(row.code):selected.delete(row.code);
-        persist(selectedReadyCodes(exportRows(getState()),[...selected]));render();
+        persist(selectedReadyCodes(exportRows(getState()),[...selected]));return refresh();
       };
       text.append(title,detail);label.append(checkbox,text);byId('exportRows').append(label);
     }
-    const physicalCount=codes.length+codes.reduce((sum,code)=>sum+(planSummary?.continuationCounts?.[code]||0),0);
+    const physicalCount=codes.length+codes.reduce((sum,code)=>sum+(planStates.get(code)?.continuations||0),0);
     byId('downloadPdf').textContent=`Download PDF (${sheetCount(physicalCount)})`;
-    byId('downloadPdf').disabled=!codes.length;
+    byId('downloadPdf').disabled=!codes.length||codes.length!==retained.length;
     if(focused?.startsWith('exportFigure'))byId(focused)?.focus();
   }
   function refresh(){
     if(dialog.hidden||controller)return planning||Promise.resolve();
-    render();if(!planPdf)return Promise.resolve();
-    if(planning)return planning;
+    planGeneration++;planningController?.abort();planningController=null;planning=null;planStates=new Map();
+    if(!planPdf){render();return Promise.resolve();}
     const state=getState(),rows=exportRows(state),codes=rows.filter(row=>row.ready).map(row=>row.code);
-    if(!codes.length){planSummary=null;render();return Promise.resolve();}
-    const generation=++planGeneration,pending=new AbortController();planningController=pending;
+    if(!codes.length){render();return Promise.resolve();}
+    const generation=planGeneration,pending=new AbortController();planningController=pending;
     const snapshot=structuredClone({project:state.project,datasets:state.datasets||{},companyProfile:state.companyProfile,codes});
-    planning=Promise.resolve(planPdf({...snapshot,dpi:snapshot.project.dpi||300,signal:pending.signal})).then(summary=>{
+    for(const code of codes)planStates.set(code,{status:'pending'});render();
+    const tasks=codes.map(code=>{
+      let request;
+      try{request=planPdf({...snapshot,codes:[code],dpi:snapshot.project.dpi||300,signal:pending.signal});}
+      catch(error){request=Promise.reject(error);}
+      return Promise.resolve(request).then(summary=>{
+        if(generation!==planGeneration||pending.signal.aborted)return;
+        const continuations=summary?.continuationCounts?.[code];
+        if(!Number.isInteger(continuations)||continuations<0)throw new Error(`Figure ${code}: PDF planning returned an invalid continuation count.`);
+        planStates.set(code,{status:'ready',continuations});render();
+      }).catch(error=>{
+        if(generation!==planGeneration||pending.signal.aborted)return;
+        planStates.set(code,{status:'error',error});render();
+      });
+    });
+    planning=Promise.allSettled(tasks).then(()=>{
       if(generation!==planGeneration||pending.signal.aborted)return;
-      planSummary=summary;render();
-    }).catch(error=>{
-      if(generation===planGeneration&&!pending.signal.aborted){planSummary=null;byId('exportProgress').textContent=`Export planning blocked: ${error.message}`;}
+      const blocked=[...planStates.values()].some(state=>state.status==='error');
+      byId('exportProgress').textContent=blocked?'Some figures are blocked. Correct their PDF layout errors to continue.':'PDF layout checked. Select the sheets to include.';
     }).finally(()=>{if(generation===planGeneration){planning=null;planningController=null;}});
     return planning;
   }
@@ -108,18 +128,19 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,pla
     background.forEach(([node])=>node.inert=true);
     byId('exportProgress').textContent='Select the sheets to include. Source images are checked during export.';
     byId('cancelExport').textContent='Cancel';
-    byId('exportMeter').hidden=true;planSummary=null;refresh();byId('selectAllReady').focus();
+    byId('exportMeter').hidden=true;byId('selectAllReady').focus();return refresh();
   }
   function close(){
     if(controller){controller.abort();byId('exportProgress').textContent='Cancelling export…';return;}
     if(dialog.hidden)return;
-    planGeneration++;planningController?.abort();planning=null;planningController=null;
+    planGeneration++;planningController?.abort();planning=null;planningController=null;planStates=new Map();
     dialog.hidden=true;document.body.classList.remove('export-open');
     background.forEach(([node,inert])=>node.inert=inert);background=[];returnFocus?.focus();
   }
   async function start(){
     if(controller)return;
     render();const state=getState(),codes=selectedReadyCodes(exportRows(state),state.project.exportPreferences?.codes);
+    if(planPdf&&(planning||codes.some(code=>planStates.get(code)?.status!=='ready'))){byId('exportProgress').textContent='Wait for the current PDF layout check before downloading.';return;}
     if(!codes.length)return;
     const snapshot=structuredClone({project:state.project,datasets:state.datasets||{},companyProfile:state.companyProfile,codes});
     const pending=new AbortController();controller=pending;
@@ -145,8 +166,8 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,pla
       byId('cancelExport').textContent='Close';byId('exportMeter').hidden=true;render();
     }
   }
-  byId('selectAllReady').onclick=()=>{persist(exportRows(getState()).filter(row=>row.ready).map(row=>row.code));render();};
-  byId('clearExport').onclick=()=>{persist([]);render();};
+  byId('selectAllReady').onclick=()=>{persist(exportRows(getState()).filter(row=>row.ready&&(!planPdf||planStates.get(row.code)?.status==='ready')).map(row=>row.code));return refresh();};
+  byId('clearExport').onclick=()=>{persist([]);return refresh();};
   byId('cancelExport').onclick=close;byId('downloadPdf').onclick=start;
   document.addEventListener('keydown',event=>{
     if(dialog.hidden)return;

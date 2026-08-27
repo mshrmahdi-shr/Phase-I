@@ -156,8 +156,10 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   assert.ok(restored.getNorth()>=savedView.bounds.north&&restored.getSouth()<=savedView.bounds.south);
   assert.ok(restored.getEast()>=savedView.bounds.east&&restored.getWest()<=savedView.bounds.west);
   assert.match($('mapSourceStatus').textContent,/Figure B.*restored/i);
-  $('exportPdf').click();assert.equal($('exportDialog').hidden,false);
-  $('selectAllReady').click();assert.equal($('downloadPdf').textContent,'Download PDF (2 sheets)');
+  let browserPlanning=globalThis.window;delete globalThis.window;
+  try{await $('exportPdf').onclick();assert.equal($('exportDialog').hidden,false);await $('selectAllReady').onclick();}
+  finally{globalThis.window=browserPlanning;}
+  assert.equal($('downloadPdf').textContent,'Download PDF (2 sheets)');
   $('cancelExport').click();
   await t.test('official Bedrock commits source only for the current SITE and custom reload stays explicit',async t=>{
     const feature={name:'55B — Georgian Bay Formation',description:'Official test unit',unitCode:'55b',color:'#99bb88',fillOpacity:.6,
@@ -173,7 +175,8 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
     assert.equal(JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology.bedrock,null);
     await $('loadBedrock').onclick();
     assert.equal(JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology.bedrock.source.id,'MRD126-REV1');
-    $('exportPdf').click();assert.equal($('exportFigureE').disabled,false);$('cancelExport').click();
+    const planningWindow=globalThis.window;delete globalThis.window;
+    try{await $('exportPdf').onclick();assert.equal($('exportFigureE').disabled,false);}finally{globalThis.window=planningWindow;}$('cancelExport').click();
     const text='<kml><Document><Placemark><name>55b Custom meaning</name><description>Customer geology</description><Polygon><outerBoundaryIs><LinearRing><coordinates>-80,43 -79,43 -79,44 -80,44 -80,43</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark></Document></kml>';
     $('geologyKind').value='bedrock';await $('uploadGeology').onchange({target:{files:[{name:'customer.kml',text:async()=>text}]}});
     const count=requests.length;choose('A');choose('E');
@@ -189,12 +192,12 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
     };
     const loading=$('loadBedrock').onclick();
     container.scrollIntoView=()=>{};$('drawSite').click();map.fire('click',{latlng:L.latLng(43.661,-79.381)});
-    $('exportPdf').click();$('clearExport').click();$('exportFigureA').click();
     const nativeContext=dom.window.HTMLCanvasElement.prototype.getContext;
     dom.window.HTMLCanvasElement.prototype.getContext=()=>({fillRect(){}});
     // Select the engine's Node jsPDF loading branch; the source-root app does
     // not have build-generated vendor files. Restore the browser immediately.
     const browser=globalThis.window;delete globalThis.window;
+    await $('exportPdf').onclick();await $('clearExport').onclick();const figureA=$('exportFigureA');figureA.checked=true;await figureA.onchange();
     const exporting=$('downloadPdf').onclick();
     try{
       const first=await Promise.race([imageryStarted.then(()=> 'imagery'),exporting.then(()=> 'export-finished')]);
