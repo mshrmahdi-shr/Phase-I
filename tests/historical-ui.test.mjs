@@ -12,6 +12,8 @@ import {createHistoricalImageryUI,historicalFigureCode,migrateLegacyHistoricalIm
 const HTML=fs.readFileSync(new URL('../index.html',import.meta.url),'utf8');
 const SITE={lat:43.65,lng:-79.38};
 const BOUNDS={north:43.66,south:43.64,east:-79.37,west:-79.39};
+const ASSET_BYTES=new Uint8Array([1,2,3]);
+const ASSET_SHA256='039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81';
 
 function result({id='flight-1972',year=1972,title='Aerial 1972',policy='exportable'}={}){
   const exportable=policy==='exportable';
@@ -69,12 +71,17 @@ function memoryStore(){
   const values=new Map();return {values,async put(value){if(values.has(value.metadata.id))throw Error('duplicate');values.set(value.metadata.id,value);},async get(id){return values.get(id)||null;},async delete(id){return values.delete(id);}};
 }
 
-function harness({providers=[provider({search:async()=>[result()]})],project,store:providedStore=memoryStore(),decodeImage,overlayFactory,hashBlob,saveProject}={}){
+function storedAsset({id='3caa1022-b2e7-4c63-8ca8-12f4845e1be1',kind='historical-image',sha256=ASSET_SHA256,extraMetadata}={}){
+  const blob=new Blob([ASSET_BYTES],{type:'image/png'});
+  return {metadata:{id,kind,mime:'image/png',size:blob.size,width:2,height:1,sha256,createdAt:STAMP,...extraMetadata},blob};
+}
+
+function harness({providers=[provider({search:async()=>[result()]})],project,store:providedStore=memoryStore(),decodeImage,overlayFactory,hashBlob,saveProject,isAssetReferencedOutsideHistorical}={}){
   const dom=new JSDOM(HTML,{url:'https://app.test/',pretendToBeVisual:true}),document=dom.window.document,map=fakeMap(document),L=fakeLeaflet(map),assetStore=providedStore;
   let current=project||Object.assign(createProject(),{location:{...SITE}}),saveCalls=0;
   const controller=createHistoricalImageryUI({document,map,L,assetStore,providers,getProject:()=>current,
-    saveProject:async next=>{const saved=saveProject?await saveProject(next,current):true;if(saved!==false){current=next;saveCalls++;}return saved;},onChanged:()=>{},confirm:()=>true,
-    ...(hashBlob?{hashBlob}:{}),
+    saveProject:async next=>{const saved=saveProject?await saveProject(next,current):true;if(saved!==false){current={...current,historical:next.historical,historicalSequenceCounters:next.historicalSequenceCounters,updatedAt:next.updatedAt};saveCalls++;}return saved;},onChanged:()=>{},confirm:()=>true,
+    ...(hashBlob?{hashBlob}:{}),...(isAssetReferencedOutsideHistorical?{isAssetReferencedOutsideHistorical}:{}),
     decodeImage:decodeImage|| (async file=>({blob:new Blob([await file.arrayBuffer()],{type:'image/png'}),mime:'image/png',width:2,height:1,geo:null})),
     overlayFactory:overlayFactory||(()=>({addTo(){return this;},remove(){},ready:Promise.resolve()}))});
   return {dom,document,map,L,store:assetStore,controller,get project(){return current;},get saveCalls(){return saveCalls;}};
@@ -126,6 +133,7 @@ test('official preview/cancel restores the map and approval snapshots a provider
   h.document.querySelector('.historical-result button').click();await h.controller.whenIdle();
   assert.equal(h.document.getElementById('historicalCropControls').hidden,false);assert.equal(h.map.layers.size,1);assert.equal(h.document.getElementById('historicalDialog').classList.contains('historical-cropping'),true);
   h.document.getElementById('cancelHistoricalCrop').click();assert.equal(h.map.layers.size,0);assert.equal(h.document.getElementById('historicalCropControls').hidden,true);assert.equal(h.document.getElementById('historicalDialog').classList.contains('historical-cropping'),false);
+  assert.equal(h.document.activeElement,h.document.getElementById('closeHistorical'),'crop cancel moves focus before hiding its active controls');
   h.document.querySelector('.historical-result button').click();await h.controller.whenIdle();
   const frame=h.document.getElementById('historicalCropFrame');
   assert.ok(Math.abs(Number.parseFloat(frame.style.width)-809.45)<.02,'visible frame uses 90% of the map while preserving the A3 ratio');
@@ -140,6 +148,12 @@ test('official preview/cancel restores the map and approval snapshots a provider
   await h.controller.refresh();h.document.querySelector(`[data-historical-id="${item.id}"] [data-action="view"]`).click();await h.controller.whenIdle();
   assert.equal(h.map.layers.size,1);assert.match([...h.map.layers][0].url,/\/export\?.*f=image.*bbox=/);
   h.controller.destroy();h.dom.window.close();
+});
+
+test('closing during crop transfers focus to the dialog trigger before active controls are hidden',async()=>{
+  const h=harness(),launcher=h.document.getElementById('manageHistorical');launcher.focus();h.controller.open();h.document.getElementById('historicalYear').value='1972';h.document.getElementById('searchHistorical').click();await h.controller.whenIdle();
+  h.document.querySelector('.historical-result button').click();await h.controller.whenIdle();let cropVisibleAtFocus=false;launcher.addEventListener('focus',()=>{cropVisibleAtFocus=!h.document.getElementById('historicalCropControls').hidden;},{once:true});
+  h.document.getElementById('closeHistorical').click();assert.equal(cropVisibleAtFocus,true);assert.equal(h.document.activeElement,launcher);assert.equal(h.document.getElementById('historicalDialog').hidden,true);h.controller.destroy();h.dom.window.close();
 });
 
 test('manual mode requires citation and permission, validates basename, stores before project metadata, and reports missing reload assets',async()=>{
@@ -227,9 +241,29 @@ test('destroy aborts a manual hash transaction and compensates a save that compl
   assert.equal(first.project.historical.length,0);assert.equal(first.store.values.size,0);first.dom.window.close();
 
   const saveStarted=deferred(),saveGate=deferred();let saveAttempt=0;
-  const second=harness({hashBlob:async()=> 'b'.repeat(64),saveProject:async()=>{saveAttempt++;if(saveAttempt===1){saveStarted.resolve();await saveGate.promise;}return true;}});await stagedManual(second);await saveStarted.promise;second.controller.destroy();saveGate.resolve();await second.controller.whenIdle();
-  assert.equal(second.project.historical.length,0,'late save is compensated back to the pre-mutation project');assert.equal(second.store.values.size,0,'compensated save rolls back its unreferenced asset');assert.equal(saveAttempt,2);
+  const second=harness({hashBlob:async()=> 'b'.repeat(64),saveProject:async()=>{saveAttempt++;if(saveAttempt===1){saveStarted.resolve();await saveGate.promise;}return true;}});await stagedManual(second);await saveStarted.promise;second.project.name='Concurrent project name';second.project.siteBoundary=[[-79.4,43.64],[-79.3,43.64],[-79.3,43.7],[-79.4,43.64]];second.controller.destroy();saveGate.resolve();await second.controller.whenIdle();
+  assert.equal(second.project.historical.length,0,'late save compensation reverses only its historical item');assert.equal(second.project.name,'Concurrent project name');assert.equal(second.project.siteBoundary.length,4,'scoped compensation preserves unrelated geometry');assert.equal(second.store.values.size,0,'compensated save rolls back its unreferenced asset');assert.equal(saveAttempt,2);
   second.dom.window.close();
+});
+
+test('manual save rebases its historical delta after hashing and never overwrites concurrent project edits',async()=>{
+  const hashStarted=deferred(),hashGate=deferred(),h=harness({hashBlob:async()=>{hashStarted.resolve();return hashGate.promise;}});
+  h.controller.open();h.document.getElementById('historicalManualMode').click();const file={name:'concurrent.png',size:3,type:'image/png',arrayBuffer:async()=>ASSET_BYTES.slice().buffer};
+  Object.defineProperty(h.document.getElementById('manualHistoricalFile'),'files',{value:[file],configurable:true});h.document.getElementById('manualHistoricalYear').value='1960';h.document.getElementById('manualCitation').value='Archive';h.document.getElementById('manualPermission').checked=true;
+  h.document.getElementById('previewManualHistorical').click();await h.controller.whenIdle();h.document.getElementById('useHistoricalCrop').click();h.document.getElementById('commitHistorical').click();await hashStarted.promise;
+  h.project.name='Edited while hashing';h.project.buildingBoundary=[[-79.39,43.64],[-79.37,43.64],[-79.37,43.66],[-79.39,43.64]];hashGate.resolve(ASSET_SHA256);await h.controller.whenIdle();
+  assert.equal(h.project.name,'Edited while hashing');assert.equal(h.project.buildingBoundary.length,4);assert.equal(h.project.historical.length,1);
+  h.controller.destroy();h.dom.window.close();
+});
+
+test('manual save rejects a crop when SITE moves during hashing and preserves the newer SITE',async()=>{
+  const hashStarted=deferred(),hashGate=deferred(),h=harness({hashBlob:async()=>{hashStarted.resolve();return hashGate.promise;}});
+  h.controller.open();h.document.getElementById('historicalManualMode').click();const file={name:'moved.png',size:3,type:'image/png',arrayBuffer:async()=>ASSET_BYTES.slice().buffer};
+  Object.defineProperty(h.document.getElementById('manualHistoricalFile'),'files',{value:[file],configurable:true});h.document.getElementById('manualHistoricalYear').value='1960';h.document.getElementById('manualCitation').value='Archive';h.document.getElementById('manualPermission').checked=true;
+  h.document.getElementById('previewManualHistorical').click();await h.controller.whenIdle();h.document.getElementById('useHistoricalCrop').click();h.document.getElementById('commitHistorical').click();await hashStarted.promise;
+  h.project.location={lat:44.5,lng:-80.5};hashGate.resolve(ASSET_SHA256);await h.controller.whenIdle();
+  assert.deepEqual(h.project.location,{lat:44.5,lng:-80.5});assert.equal(h.project.historical.length,0);assert.equal(h.store.values.size,0);assert.match(h.document.getElementById('historicalStatus').textContent,/SITE|crop|placement/i);
+  h.controller.destroy();h.dom.window.close();
 });
 
 test('saved official readiness follows current provider policy and Leaflet receives only escaped registered attribution',async()=>{
@@ -240,6 +274,7 @@ test('saved official readiness follows current provider policy and Leaflet recei
   assert.equal(h.document.activeElement,h.document.getElementById('cancelHistoricalView'));
   const layer=[...h.map.layers][0];assert.equal(layer.options.attribution,'&lt;b&gt;Registered archive&lt;/b&gt;');assert.doesNotMatch(layer.options.attribution,/<[a-z]/i);
   h.document.getElementById('cancelHistoricalView').click();assert.equal(h.map.layers.size,0);assert.equal(h.document.getElementById('historicalViewControls').hidden,true);
+  assert.equal(h.document.activeElement,h.document.getElementById('closeHistorical'),'view cancel moves focus before hiding its active controls');
   h.controller.destroy();h.dom.window.close();
 
   for(const [policy,kind] of [['link-only','arcgis-export'],['exportable','unsupported-export']]){
@@ -251,8 +286,8 @@ test('saved official readiness follows current provider policy and Leaflet recei
 });
 
 test('deleting a shared manual asset keeps it while a surviving approved item references it',async()=>{
-  const assetId='3caa1022-b2e7-4c63-8ca8-12f4845e1be1',store=memoryStore(),blob=new Blob([new Uint8Array([1,2,3])],{type:'image/png'});
-  await store.put({metadata:{id:assetId,kind:'historical-image',mime:'image/png',size:3,width:2,height:1,sha256:'a'.repeat(64),createdAt:STAMP},blob});
+  const assetId='3caa1022-b2e7-4c63-8ca8-12f4845e1be1',store=memoryStore();
+  await store.put(storedAsset({id:assetId}));
   const first=manualItem({assetId,sequence:1}),second=manualItem({id:'9833e469-c7e8-4ef1-84f1-b89c608c2126',assetId,sequence:2});
   const project=Object.assign(createProject(),{location:{...SITE},historical:[first,second],historicalSequenceCounters:{'1960':2}}),h=harness({project,store});
   await h.controller.refresh();h.document.querySelector(`[data-historical-id="${first.id}"] [data-action="delete"]`).click();await h.controller.whenIdle();
@@ -262,16 +297,23 @@ test('deleting a shared manual asset keeps it while a surviving approved item re
 });
 
 test('failed project persistence never deletes the manual asset or approved item',async()=>{
-  const assetId='3caa1022-b2e7-4c63-8ca8-12f4845e1be1',store=memoryStore(),blob=new Blob([new Uint8Array([1,2,3])],{type:'image/png'});
-  await store.put({metadata:{id:assetId,kind:'historical-image',mime:'image/png',size:3,width:2,height:1,sha256:'a'.repeat(64),createdAt:STAMP},blob});
+  const assetId='3caa1022-b2e7-4c63-8ca8-12f4845e1be1',store=memoryStore();
+  await store.put(storedAsset({id:assetId}));
   const item=manualItem({assetId}),project=Object.assign(createProject(),{location:{...SITE},historical:[item],historicalSequenceCounters:{'1960':1}}),h=harness({project,store,saveProject:async()=>false});
   await h.controller.refresh();h.document.querySelector('[data-action="delete"]').click();await h.controller.whenIdle();assert.equal(h.project.historical.length,1);assert.ok(await store.get(assetId));
   h.controller.destroy();h.dom.window.close();
 });
 
+test('delete persists only its historical delta while an async save overlaps unrelated edits',async()=>{
+  const store=memoryStore(),asset=storedAsset();await store.put(asset);const project=Object.assign(createProject(),{location:{...SITE},historical:[manualItem({assetId:asset.metadata.id})],historicalSequenceCounters:{'1960':1}}),saveStarted=deferred(),saveGate=deferred();
+  const h=harness({project,store,saveProject:async()=>{saveStarted.resolve();await saveGate.promise;return true;}});await h.controller.refresh();h.document.querySelector('[data-action="delete"]').click();await saveStarted.promise;
+  h.project.name='Edited while delete saved';h.project.siteBoundary=[[-79.4,43.64],[-79.3,43.64],[-79.3,43.7],[-79.4,43.64]];saveGate.resolve();await h.controller.whenIdle();
+  assert.equal(h.project.historical.length,0);assert.equal(h.project.name,'Edited while delete saved');assert.equal(h.project.siteBoundary.length,4);assert.equal(await store.get(asset.metadata.id),null);h.controller.destroy();h.dom.window.close();
+});
+
 test('late manual View and Edit asset reads cannot create overlays after destroy and actions open their dialog',async()=>{
   for(const action of ['view','edit']){
-    const assetId='3caa1022-b2e7-4c63-8ca8-12f4845e1be1',blob=new Blob([new Uint8Array([1,2,3])],{type:'image/png'}),asset={metadata:{id:assetId,kind:'historical-image',mime:'image/png',size:3,width:2,height:1,sha256:'a'.repeat(64),createdAt:STAMP},blob};
+    const assetId='3caa1022-b2e7-4c63-8ca8-12f4845e1be1',asset=storedAsset({id:assetId});
     const late=deferred();let delayed=false,adds=0;
     const store={async put(){},async delete(){},async get(){return delayed?late.promise:asset;}};
     const project=Object.assign(createProject(),{location:{...SITE},historical:[manualItem({assetId})],historicalSequenceCounters:{'1960':1}});
@@ -295,12 +337,26 @@ test('late world-file and overlay completions are cleaned after close',async()=>
 });
 
 test('search and approved list expose accessible metadata thumbnails and explicit coverage or placement status',async()=>{
-  const store=memoryStore(),assetId='3caa1022-b2e7-4c63-8ca8-12f4845e1be1',blob=new Blob([new Uint8Array([1,2,3])],{type:'image/png'});
-  await store.put({metadata:{id:assetId,kind:'historical-image',mime:'image/png',size:3,width:2,height:1,sha256:'a'.repeat(64),createdAt:STAMP},blob});
+  const store=memoryStore(),assetId='3caa1022-b2e7-4c63-8ca8-12f4845e1be1';
+  await store.put(storedAsset({id:assetId}));
   const project=Object.assign(createProject(),{location:{...SITE},historical:[manualItem({assetId})],historicalSequenceCounters:{'1960':1}}),h=harness({project,store});
   h.controller.open();h.document.getElementById('historicalYear').value='1972';h.document.getElementById('searchHistorical').click();await h.controller.whenIdle();
   const resultCard=h.document.querySelector('.historical-result');assert.equal(resultCard.querySelector('.historical-result-thumbnail').getAttribute('role'),'img');assert.match(resultCard.querySelector('.historical-result-thumbnail').textContent,/1972|Official archive/i);assert.match(resultCard.querySelector('.historical-coverage-status').textContent,/SITE.*crop/i);
   await h.controller.refresh();let approved=h.document.querySelector('[data-historical-id]');assert.equal(approved.querySelector('.historical-approved-thumbnail').getAttribute('role'),'img');assert.match(approved.querySelector('.historical-placement-status').textContent,/placement|crop|SITE/i);
   await store.delete(assetId);await h.controller.refresh();approved=h.document.querySelector('[data-historical-id]');assert.ok(approved.querySelector('.historical-approved-thumbnail'));assert.match(approved.querySelector('.historical-placement-status').textContent,/Missing asset/i);
   h.controller.destroy();h.dom.window.close();
+});
+
+test('foreign, malformed, or hash-mismatched assets are never ready, previewed, or deleted by historical imagery',async()=>{
+  for(const asset of [storedAsset({kind:'company-logo'}),storedAsset({sha256:'0'.repeat(64)}),storedAsset({extraMetadata:{owner:'other'}})]){
+    const store=memoryStore();await store.put(asset);const project=Object.assign(createProject(),{location:{...SITE},historical:[manualItem({assetId:asset.metadata.id})],historicalSequenceCounters:{'1960':1}}),h=harness({project,store});
+    await h.controller.refresh();const row=h.document.querySelector('[data-historical-id]');assert.match(row.textContent,/Not ready/i);assert.equal(row.querySelector('[data-action="view"]').disabled,true);assert.equal(row.querySelector('[data-action="edit"]').disabled,true);
+    row.querySelector('[data-action="delete"]').click();await h.controller.whenIdle();assert.equal(h.project.historical.length,0);assert.ok(await store.get(asset.metadata.id),'historical deletion preserves an asset it does not own and verify');h.controller.destroy();h.dom.window.close();
+  }
+});
+
+test('an imagery asset referenced by another subsystem is preserved after its last historical item is deleted',async()=>{
+  const store=memoryStore(),asset=storedAsset();await store.put(asset);const project=Object.assign(createProject(),{location:{...SITE},historical:[manualItem({assetId:asset.metadata.id})],historicalSequenceCounters:{'1960':1}});
+  const h=harness({project,store,isAssetReferencedOutsideHistorical:id=>id===asset.metadata.id});await h.controller.refresh();h.document.querySelector('[data-action="delete"]').click();await h.controller.whenIdle();
+  assert.equal(h.project.historical.length,0);assert.ok(await store.get(asset.metadata.id));h.controller.destroy();h.dom.window.close();
 });

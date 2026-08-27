@@ -9,6 +9,9 @@ const A3_RATIO=420/297;
 const CROP_FILL=.9;
 const MIN_OFFICIAL_EXPORT_DIMENSION=256;
 const SUPPORTED_OFFICIAL_EXPORT_KINDS=new Set(['arcgis-export']);
+const HISTORICAL_ASSET_FIELDS=['createdAt','height','id','kind','mime','sha256','size','width'];
+const HISTORICAL_ASSET_MIMES=new Set(['image/png','image/jpeg','image/tiff']);
+const MAX_HISTORICAL_ASSET_BYTES=16_000_000,MAX_HISTORICAL_ASSET_PIXELS=16_000_000;
 
 function fail(message){throw new Error(message);}
 function aborted(error){return error?.name==='AbortError';}
@@ -23,6 +26,9 @@ function containsSite(bounds,location){return location&&location.lat>=bounds.sou
 function sourceName(filename){return String(filename||'').replace(/\.[^.]+$/,'').toLocaleLowerCase('en');}
 function formatResolution(value){return value===null?'Not published':value<1?`${Math.round(value*100)} cm`:`${value} m`;}
 function cropText(bounds){return `${bounds.west.toFixed(5)}, ${bounds.south.toFixed(5)} to ${bounds.east.toFixed(5)}, ${bounds.north.toFixed(5)}`;}
+function comparable(value){if(Array.isArray(value))return value.map(comparable);if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,comparable(value[key])]));return value;}
+function sameValue(left,right){return JSON.stringify(comparable(left))===JSON.stringify(comparable(right));}
+function exactKeys(value,keys){return value&&typeof value==='object'&&!Array.isArray(value)&&sameValue(Object.keys(value).sort(),keys);}
 function escapedLeafletText(value){return String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));}
 function nextSequence(project,year){
   const current=project.historicalSequenceCounters?.[year]||0;
@@ -148,9 +154,9 @@ function pointInConvex(point,polygon){
 export function createHistoricalImageryUI({
   document,map,L,assetStore,providers,getProject,saveProject,onChanged=()=>{},fetchImpl=globalThis.fetch,
   decodeImage=decodeManualImage,overlayFactory=createCanvasImageOverlay,confirm=message=>globalThis.confirm(message),
-  hashBlob=sha256,uuid:uuidFactory=()=>globalThis.crypto?.randomUUID?.(),now=()=>new Date().toISOString()
+  hashBlob=sha256,isAssetReferencedOutsideHistorical=()=>false,uuid:uuidFactory=()=>globalThis.crypto?.randomUUID?.(),now=()=>new Date().toISOString()
 }={}){
-  if(!document||!map||!L||!assetStore||typeof getProject!=='function'||typeof saveProject!=='function'||!Array.isArray(providers))fail('Historical imagery UI dependencies are incomplete.');
+  if(!document||!map||!L||!assetStore||typeof getProject!=='function'||typeof saveProject!=='function'||typeof isAssetReferencedOutsideHistorical!=='function'||!Array.isArray(providers))fail('Historical imagery UI dependencies are incomplete.');
   for(const provider of providers)validateImageryProvider(provider);
   const providerById=new Map(providers.map(provider=>[provider.id,provider]));
   const ids=['historicalDialog','closeHistorical','historicalOfficialMode','historicalManualMode','historicalOfficialPanel','historicalManualPanel','historicalYear','searchHistorical','cancelHistoricalSearch','historicalSearchProgress','historicalProviderErrors','showAllHistorical','manualHistoricalYear','manualHistoricalFile','manualWorldFile','manualWorldCrs','manualCitation','manualSourceUrl','manualPermission','previewManualHistorical','manualPlacementControls','manualCenterLat','manualCenterLng','manualGroundWidth','manualGroundHeight','manualRotation','applyManualPlacement','drawManualExtent','historicalCropControls','historicalCropTitle','useHistoricalCrop','resetHistoricalCrop','cancelHistoricalCrop','commitHistorical','historicalViewControls','cancelHistoricalView','historicalStatus','historicalCropFrame','historicalApprovedList','aerialCount'];
@@ -186,6 +192,20 @@ export function createHistoricalImageryUI({
   function restoreMap(snapshot){if(snapshot?.center&&Number.isFinite(snapshot.zoom)&&typeof map.setView==='function')map.setView(snapshot.center,snapshot.zoom,{animate:false});else if(snapshot?.bounds)map.fitBounds(boundsPair(snapshot.bounds),{animate:false});}
   function removeLayer(layer){try{layer?.remove?.();if(layer&&map.hasLayer?.(layer))map.removeLayer(layer);}catch{}}
   function disposeLateImage(image){try{image?.bitmap?.close?.();image?.close?.();}catch{}}
+  function validateHistoricalAssetRecord(asset,item){
+    if(!asset||!exactKeys(asset,['blob','metadata'])||!exactKeys(asset.metadata,HISTORICAL_ASSET_FIELDS))fail('The saved file is not a valid historical imagery asset.');
+    const metadata=asset.metadata;
+    if(metadata.id!==item.assetId||metadata.kind!=='historical-image')fail('The saved file is owned by another feature, not historical imagery.');
+    if(!(asset.blob instanceof Blob)||!HISTORICAL_ASSET_MIMES.has(metadata.mime)||asset.blob.type!==metadata.mime||asset.blob.size!==metadata.size||!Number.isSafeInteger(metadata.size)||metadata.size<=0||metadata.size>MAX_HISTORICAL_ASSET_BYTES)fail('Historical imagery asset metadata does not match its file.');
+    if(!Number.isSafeInteger(metadata.width)||metadata.width<=0||!Number.isSafeInteger(metadata.height)||metadata.height<=0||metadata.width>Math.floor(MAX_HISTORICAL_ASSET_PIXELS/metadata.height))fail('Historical imagery asset dimensions are invalid.');
+    if(!/^[a-f0-9]{64}$/.test(metadata.sha256)||typeof metadata.createdAt!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(metadata.createdAt)||Number.isNaN(Date.parse(metadata.createdAt)))fail('Historical imagery asset integrity metadata is invalid.');
+    return asset;
+  }
+  async function loadHistoricalAsset(item,{session=null,operation=null}={}){
+    const check=()=>{if(session&&!ownsActive(session))throw abortError();if(operation)requireMutation(operation);};
+    const asset=await assetStore.get(item.assetId);check();if(!asset)return null;validateHistoricalAssetRecord(asset,item);
+    const digest=await hashBlob(asset.blob);check();if(digest!==asset.metadata.sha256)fail('Historical imagery asset hash verification failed.');return asset;
+  }
   function removeExtentListener(){map.off?.('click',onExtentClick);extentPoints=[];$('drawManualExtent').dataset.active='false';}
   function removeActive({restore=false}={}){
     previewGeneration++;removeExtentListener();
@@ -370,8 +390,8 @@ export function createHistoricalImageryUI({
 
   function drawExtent(){requireInteractive();if(!active||active.kind!=='manual')fail('Open a manual image before drawing its extent.');removeExtentListener();extentPoints=[];$('drawManualExtent').dataset.active='true';map.on('click',onExtentClick);showStatus('Select two opposite image-extent corners on the map.');}
 
-  function validateManualCrop(bounds,placement){
-    validatePlacement(placement,{location:getProject().location});if(!containsSite(bounds,getProject().location))fail('The A3 crop must contain SITE.');
+  function validateManualCrop(bounds,placement,project=getProject()){
+    validatePlacement(placement,{location:project.location});if(!containsSite(bounds,project.location))fail('The A3 crop must contain SITE.');
     const imagePolygon=placementCorners(placement),cropCorners=[[bounds.west,bounds.north],[bounds.east,bounds.north],[bounds.east,bounds.south],[bounds.west,bounds.south]].map(projectWebMercator);
     if(cropCorners.some(point=>!pointInConvex(point,imagePolygon)))fail('The A3 crop must stay inside the placed manual image.');
   }
@@ -388,14 +408,44 @@ export function createHistoricalImageryUI({
   function resetCrop(){requireInteractive();if(!active)fail('Open an image before resetting the crop.');map.fitBounds(boundsPair(resetBoundsFor(active.item)),{animate:false,padding:[0,0]});active.crop=null;$('commitHistorical').disabled=true;showStatus('Crop reset to SITE. Choose Use current crop to approve it.');}
 
   async function notifyChanged(project){try{await onChanged(project);}catch{} }
-  async function persistOperation(next,previous,operation){
-    const normalized=restoreProject(next);requireMutation(operation);const saved=await saveProject(normalized);if(saved===false)fail('Project metadata could not be saved.');
+  function historicalItem(project,id){return project.historical?.find(item=>item.id===id)||null;}
+  function changedCounters(before,after){
+    const result=[];for(const year of new Set([...Object.keys(before||{}),...Object.keys(after||{})])){
+      const beforeHad=Object.hasOwn(before||{},year),afterHad=Object.hasOwn(after||{},year),beforeValue=before?.[year],afterValue=after?.[year];
+      if(beforeHad!==afterHad||beforeValue!==afterValue)result.push({year,beforeHad,beforeValue,afterHad,afterValue});
+    }
+    return result;
+  }
+  async function compensateHistoricalDelta(delta){
+    const latest=restoreProject(clone(getProject())),current=historicalItem(latest,delta.id);
+    const applicable=delta.afterItem===null?current===null:sameValue(current,delta.afterItem);if(!applicable)return false;
+    if(delta.beforeItem===null)latest.historical=latest.historical.filter(item=>item.id!==delta.id);
+    else if(current===null)latest.historical.push(clone(delta.beforeItem));
+    else latest.historical[latest.historical.findIndex(item=>item.id===delta.id)]=clone(delta.beforeItem);
+    for(const counter of delta.counters){
+      const currentHad=Object.hasOwn(latest.historicalSequenceCounters,counter.year),currentValue=latest.historicalSequenceCounters[counter.year];
+      if(currentHad!==counter.afterHad||currentValue!==counter.afterValue)continue;
+      const remaining=Math.max(0,...latest.historical.filter(item=>String(item.year)===counter.year).map(item=>item.sequence));
+      if(!counter.beforeHad&&remaining===0)delete latest.historicalSequenceCounters[counter.year];
+      else latest.historicalSequenceCounters[counter.year]=Math.max(counter.beforeValue||0,remaining);
+    }
+    const compensated=restoreProject(latest),saved=await saveProject(compensated);if(saved===false)fail('The historical imagery change could not be reversed.');return true;
+  }
+  async function persistHistoricalMutation({operation,id,expectedItem,apply}){
+    requireMutation(operation);const base=restoreProject(clone(getProject())),beforeItem=historicalItem(base,id);
+    if(expectedItem===null){if(beforeItem)fail('This historical imagery ID is already in use.');}
+    else if(!beforeItem||!sameValue(beforeItem,expectedItem))fail('This historical imagery item changed before the operation could be saved. Refresh and try again.');
+    const candidate=clone(base),beforeCounters=clone(candidate.historicalSequenceCounters);apply(candidate,beforeItem?clone(beforeItem):null);const normalized=restoreProject(candidate),afterItem=historicalItem(normalized,id);
+    const delta={id,beforeItem:beforeItem?clone(beforeItem):null,afterItem:afterItem?clone(afterItem):null,counters:changedCounters(beforeCounters,normalized.historicalSequenceCounters)};
+    requireMutation(operation);const saved=await saveProject(normalized);if(saved===false)fail('Project metadata could not be saved.');
     if(!ownsMutation(operation)){
-      try{const restored=restoreProject(previous),compensated=await saveProject(restored);if(compensated===false)fail('The previous project could not be restored.');}
-      catch(error){throw new Error(`A cancelled historical imagery mutation may have reached storage and could not be compensated: ${error.message} Export a project backup now.`,{cause:error});}
+      try{await compensateHistoricalDelta(delta);}
+      catch(error){throw new Error(`A cancelled historical imagery mutation may have reached storage and its historical delta could not be compensated: ${error.message} Export a project backup now.`,{cause:error});}
       throw abortError();
     }
-    await notifyChanged(normalized);return normalized;
+    const observed=restoreProject(clone(getProject())),observedItem=historicalItem(observed,id),applied=delta.afterItem===null?observedItem===null:sameValue(observedItem,delta.afterItem);
+    if(!applied)fail('The historical imagery item changed while it was being saved. Refresh and try again.');
+    await notifyChanged(observed);return observed;
   }
 
   function snapshotCommit(session){
@@ -408,32 +458,41 @@ export function createHistoricalImageryUI({
 
   async function commitActive(){
     if(mutating)return;const session=active,snapshot=snapshotCommit(session),operation=beginMutation(session);if(!operation)return;
-    const previous=clone(getProject());let rollbackAssetId=null;
+    const id=snapshot.item?.id??uuid(uuidFactory),stamp=iso(now);let rollbackAssetId=null,rollbackAsset=null;
     try{
-      requireMutation(operation);const project=clone(previous),stamp=iso(now),existing=snapshot.item,year=existing?.year??(snapshot.kind==='official'?snapshot.result.year:snapshot.year);
-      project.historical=project.historical||[];project.historicalSequenceCounters={...(project.historicalSequenceCounters||{})};
-      const sequence=existing?.sequence??nextSequence(project,year),id=existing?.id??uuid(uuidFactory),createdAt=existing?.createdAt??stamp;
-      let item;
+      requireMutation(operation);const existing=snapshot.item;
       if(snapshot.kind==='official'){
         const descriptor=snapshot.result.export,provider=providerById.get(snapshot.result.providerId);validateImageryResult(snapshot.result,provider);
         if(provider.policy!=='exportable'||!SUPPORTED_OFFICIAL_EXPORT_KINDS.has(descriptor.kind))fail('This provider does not currently offer a supported export for approval.');
-        item={id,year,sequence,title:snapshot.result.title,mode:'official',providerId:snapshot.result.providerId,sourceUrl:snapshot.result.sourceUrl,
-          licenseUrl:snapshot.result.licenseUrl,attribution:snapshot.result.attribution,policy:'exportable',resolutionMeters:snapshot.result.resolutionMeters,
-          bounds:{...snapshot.crop},placement:null,assetId:null,officialExport:{kind:descriptor.kind,url:descriptor.url,layer:Object.hasOwn(descriptor,'layer')?descriptor.layer:null,maxWidth:descriptor.maxWidth,maxHeight:descriptor.maxHeight},createdAt,updatedAt:stamp};
       }else{
-        let assetId=existing?.assetId;
+        let assetId=existing?.assetId;if(existing){const asset=await loadHistoricalAsset(existing,{operation});if(!asset)fail('The manual image asset is missing. Restore it from a project backup before editing.');}
         if(!assetId){
           assetId=uuid(uuidFactory);const digest=await hashBlob(snapshot.image.blob);requireMutation(operation);
-          const asset={metadata:{id:assetId,kind:'historical-image',mime:snapshot.image.mime,size:snapshot.image.blob.size,width:snapshot.image.width,height:snapshot.image.height,sha256:digest,createdAt:stamp},blob:snapshot.image.blob};
-          await assetStore.put(asset);rollbackAssetId=assetId;requireMutation(operation);
+          if(!/^[a-f0-9]{64}$/.test(digest))fail('The manual image hash is invalid.');
+          rollbackAsset={metadata:{id:assetId,kind:'historical-image',mime:snapshot.image.mime,size:snapshot.image.blob.size,width:snapshot.image.width,height:snapshot.image.height,sha256:digest,createdAt:stamp},blob:snapshot.image.blob};
+          await assetStore.put(rollbackAsset);rollbackAssetId=assetId;requireMutation(operation);
         }
-        item=manualItem({id,assetId,year,sequence,title:existing?.title??snapshot.fileName,citation:snapshot.citation,sourceUrl:snapshot.sourceUrl,bounds:{...snapshot.crop},placement:snapshot.placement,createdAt});item.updatedAt=stamp;
+        snapshot.assetId=assetId;
       }
-      const index=project.historical.findIndex(value=>value.id===id);if(index<0)project.historical.push(item);else project.historical[index]=item;
-      project.historicalSequenceCounters[year]=Math.max(project.historicalSequenceCounters[year]||0,sequence);await persistOperation(project,previous,operation);
+      await persistHistoricalMutation({operation,id,expectedItem:existing,apply(project,currentItem){
+        const year=currentItem?.year??(snapshot.kind==='official'?snapshot.result.year:snapshot.year),sequence=currentItem?.sequence??nextSequence(project,year),createdAt=currentItem?.createdAt??stamp;let item;
+        if(snapshot.kind==='official'){
+          const descriptor=snapshot.result.export,provider=providerById.get(snapshot.result.providerId);validateImageryResult(snapshot.result,provider);
+          if(!project.location||provider.covers(project.location)!==true||!containsSite(snapshot.crop,project.location)||!containsBounds(snapshot.result.coverage,snapshot.crop))fail('The current SITE or crop is no longer covered by this official source.');
+          item={id,year,sequence,title:snapshot.result.title,mode:'official',providerId:snapshot.result.providerId,sourceUrl:snapshot.result.sourceUrl,
+            licenseUrl:snapshot.result.licenseUrl,attribution:snapshot.result.attribution,policy:'exportable',resolutionMeters:snapshot.result.resolutionMeters,
+            bounds:{...snapshot.crop},placement:null,assetId:null,officialExport:{kind:descriptor.kind,url:descriptor.url,layer:Object.hasOwn(descriptor,'layer')?descriptor.layer:null,maxWidth:descriptor.maxWidth,maxHeight:descriptor.maxHeight},createdAt,updatedAt:stamp};
+        }else{
+          validateManualCrop(snapshot.crop,snapshot.placement,project);item=manualItem({id,assetId:snapshot.assetId,year,sequence,title:currentItem?.title??snapshot.fileName,citation:snapshot.citation,sourceUrl:snapshot.sourceUrl,bounds:{...snapshot.crop},placement:snapshot.placement,createdAt});item.updatedAt=stamp;
+        }
+        const index=project.historical.findIndex(value=>value.id===id);if(index<0)project.historical.push(item);else project.historical[index]=item;
+        project.historicalSequenceCounters[year]=Math.max(project.historicalSequenceCounters[year]||0,sequence);
+      }});
       if(ownsMutation(operation)){removeActive({restore:false});await refresh();if(alive)showStatus(`${historicalFigureCode(getProject().historical,id)} saved.`, 'ok');}
     }catch(error){
-      if(rollbackAssetId&&!getProject()?.historical?.some(item=>item.assetId===rollbackAssetId))await assetStore.delete(rollbackAssetId).catch(()=>{});throw error;
+      if(rollbackAssetId&&!getProject()?.historical?.some(item=>item.assetId===rollbackAssetId))try{
+        const stored=await assetStore.get(rollbackAssetId);if(stored&&sameValue(stored.metadata,rollbackAsset.metadata)&&!await isAssetReferencedOutsideHistorical(rollbackAssetId))await assetStore.delete(rollbackAssetId);
+      }catch{}throw error;
     }finally{endMutation(operation);}
   }
 
@@ -441,7 +500,7 @@ export function createHistoricalImageryUI({
     requireInteractive();setMode('manual');removeActive({restore:true});const before=mapSnapshot(),controller=new AbortController(),token=++previewGeneration;
     const session={kind:'loading',item,before,controller,token,overlay:null,overlayGeneration:0};active=session;showStatus('Loading the saved manual image…');
     try{
-      const asset=await assetStore.get(item.assetId);if(!ownsActive(session))return;if(!asset){removeActive({restore:true});fail('The manual image asset is missing. Restore it from a project backup before editing.');}
+      const asset=await loadHistoricalAsset(item,{session});if(!ownsActive(session))return;if(!asset){removeActive({restore:true});fail('The manual image asset is missing. Restore it from a project backup before editing.');}
       const image={blob:asset.blob,mime:asset.metadata.mime,width:asset.metadata.width,height:asset.metadata.height,geo:null};Object.assign(session,{kind:'manual',file:{name:item.title},image,placement:clone(item.placement),crop:null,year:item.year,citation:item.attribution,sourceUrl:item.sourceUrl});
       $('manualHistoricalYear').value=String(item.year);$('manualCitation').value=item.attribution;$('manualSourceUrl').value=item.sourceUrl||'';$('manualPermission').checked=true;
       map.fitBounds(boundsPair(item.bounds),{animate:false});showCrop(item);$('manualPlacementControls').hidden=false;
@@ -464,7 +523,7 @@ export function createHistoricalImageryUI({
     requireInteractive();removeActive({restore:true});const before=mapSnapshot(),controller=new AbortController(),token=++previewGeneration,session={kind:'loading',item,before,controller,token,layer:null,overlay:null};active=session;$('historicalDialog').classList.add('historical-viewing');showStatus('Loading the approved historical image…');
     try{
       if(item.mode==='manual'){
-        const asset=await assetStore.get(item.assetId);if(!ownsActive(session))return;if(!asset){removeActive({restore:true});showStatus('Missing asset. Restore this image from a project backup.','error');return;}
+        const asset=await loadHistoricalAsset(item,{session});if(!ownsActive(session))return;if(!asset){removeActive({restore:true});showStatus('Missing asset. Restore this image from a project backup.','error');return;}
         const image={blob:asset.blob,mime:asset.metadata.mime,width:asset.metadata.width,height:asset.metadata.height,geo:null},overlay=overlayFactory({L,map,image,placement:item.placement,signal:controller.signal});session.kind='view';session.overlay=overlay.addTo(map);await overlay.ready;
         if(!ownsActive(session)||session.overlay!==overlay){removeLayer(overlay);return;}
       }else{
@@ -478,10 +537,14 @@ export function createHistoricalImageryUI({
   async function deleteItem(item){
     requireInteractive();if(!confirm(`Delete ${historicalFigureCode(getProject().historical,item.id)}? This cannot be undone.`))return;const session=active,operation=beginMutation(session);if(!operation)return;
     try{
-      const previous=clone(getProject()),project=clone(previous);project.historical=project.historical.filter(value=>value.id!==item.id);const saved=await persistOperation(project,previous,operation);
-      const stillReferenced=item.assetId&&saved.historical.some(value=>value.assetId===item.assetId);let cleanupFailed=false;
-      if(item.assetId&&!stillReferenced)try{await assetStore.delete(item.assetId);}catch{cleanupFailed=true;}
-      if(alive){if(active?.item?.id===item.id)removeActive({restore:true});await refresh();if(alive)showStatus(cleanupFailed?'Item deleted, but its unreferenced local asset could not be cleaned up.':'Historical imagery item deleted.',cleanupFailed?'error':'ok');}
+      const saved=await persistHistoricalMutation({operation,id:item.id,expectedItem:clone(item),apply(project){project.historical=project.historical.filter(value=>value.id!==item.id);}});
+      let cleanupFailed=false,assetPreserved=false;
+      if(item.assetId&&!saved.historical.some(value=>value.assetId===item.assetId))try{
+        const asset=await loadHistoricalAsset(item,{operation});requireMutation(operation);
+        const referenced=getProject()?.historical?.some(value=>value.assetId===item.assetId)||await isAssetReferencedOutsideHistorical(item.assetId);requireMutation(operation);
+        if(asset&&!referenced)await assetStore.delete(item.assetId);else if(asset)assetPreserved=true;
+      }catch(error){if(aborted(error))throw error;assetPreserved=true;if(/storage|database|quota/i.test(error.message))cleanupFailed=true;}
+      if(alive){if(active?.item?.id===item.id)removeActive({restore:true});await refresh();if(alive)showStatus(cleanupFailed?'Item deleted, but its unreferenced historical asset could not be cleaned up.':assetPreserved?'Historical imagery item deleted; the local asset was preserved because ownership, integrity, or other references prevent cleanup.':'Historical imagery item deleted.',cleanupFailed?'error':'ok');}
     }finally{endMutation(operation);}
   }
 
@@ -489,7 +552,7 @@ export function createHistoricalImageryUI({
     try{storedOfficialResult(item);return {ready:true,status:'Registered export available · SITE and crop covered'};}catch{return {ready:false,status:'Current provider export unavailable · Not ready'};}
   }
   async function manualState(item){
-    const asset=await assetStore.get(item.assetId).catch(()=>null);if(!asset)return {ready:false,status:'Missing asset · Not ready'};
+    let asset;try{asset=await loadHistoricalAsset(item);}catch{return {ready:false,status:'Historical asset ownership or integrity invalid · Not ready'};}if(!asset)return {ready:false,status:'Missing asset · Not ready'};
     try{
       if(asset.metadata.width!==item.placement.sourceWidth||asset.metadata.height!==item.placement.sourceHeight)fail('asset dimensions changed');
       validateManualCrop(item.bounds,item.placement);return {ready:true,status:'Placement covers SITE and approved crop'};
@@ -525,14 +588,18 @@ export function createHistoricalImageryUI({
     (official?$('historicalYear'):$('manualHistoricalYear')).focus();
   }
   function openDialog(refreshList=true){if(!alive||open)return;open=true;lastFocus=document.activeElement;$('historicalDialog').hidden=false;document.body.classList.add('historical-open');if(refreshList)track(refresh());(mode==='official'?$('historicalYear'):$('manualHistoricalYear')).focus();}
-  function closeDialog(){if(!open)return;if(mutating){showStatus('Wait for the current save to finish before closing.','error');return;}searchController?.abort(abortError());searchGeneration++;setSearchBusy(false);removeActive({restore:true});$('historicalDialog').hidden=true;document.body.classList.remove('historical-open');open=false;lastFocus?.focus?.();}
+  function closeDialog(){
+    if(!open)return;if(mutating){showStatus('Wait for the current save to finish before closing.','error');return;}searchController?.abort(abortError());searchGeneration++;setSearchBusy(false);
+    const fallback=document.getElementById('manageHistoricalHeader')||document.getElementById('manageHistorical'),returnTarget=lastFocus?.isConnected&&lastFocus!==document.body&&!lastFocus.disabled?lastFocus:fallback;returnTarget?.focus?.();
+    removeActive({restore:true});$('historicalDialog').hidden=true;document.body.classList.remove('historical-open');open=false;
+  }
   function showAll(){document.querySelector('[data-result-group="remaining"]').hidden=false;document.querySelector('[data-result-group="remaining-section"]').hidden=false;$('showAllHistorical').hidden=true;}
 
   $('closeHistorical').addEventListener('click',closeDialog,{signal:bindings.signal});$('historicalOfficialMode').addEventListener('click',()=>setMode('official'),{signal:bindings.signal});$('historicalManualMode').addEventListener('click',()=>setMode('manual'),{signal:bindings.signal});
   $('searchHistorical').addEventListener('click',()=>track(search()),{signal:bindings.signal});$('cancelHistoricalSearch').addEventListener('click',()=>searchController?.abort(abortError()),{signal:bindings.signal});$('showAllHistorical').addEventListener('click',showAll,{signal:bindings.signal});
   $('previewManualHistorical').addEventListener('click',()=>track(previewManual()),{signal:bindings.signal});$('applyManualPlacement').addEventListener('click',()=>track(applyPlacement()),{signal:bindings.signal});$('drawManualExtent').addEventListener('click',()=>{try{drawExtent();}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});
-  $('useHistoricalCrop').addEventListener('click',()=>{try{useCrop();}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});$('resetHistoricalCrop').addEventListener('click',()=>{try{resetCrop();}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});$('cancelHistoricalCrop').addEventListener('click',()=>{try{requireInteractive();removeActive({restore:true});}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});$('commitHistorical').addEventListener('click',()=>track(commitActive()),{signal:bindings.signal});
-  $('cancelHistoricalView').addEventListener('click',()=>{try{requireInteractive();removeActive({restore:true});showStatus('Historical image view closed.');}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});
+  $('useHistoricalCrop').addEventListener('click',()=>{try{useCrop();}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});$('resetHistoricalCrop').addEventListener('click',()=>{try{resetCrop();}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});$('cancelHistoricalCrop').addEventListener('click',()=>{try{requireInteractive();$('closeHistorical').focus();removeActive({restore:true});}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});$('commitHistorical').addEventListener('click',()=>track(commitActive()),{signal:bindings.signal});
+  $('cancelHistoricalView').addEventListener('click',()=>{try{requireInteractive();$('closeHistorical').focus();removeActive({restore:true});showStatus('Historical image view closed.');}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});
   document.addEventListener('keydown',event=>{
     if(!open)return;
     if(event.key==='Escape'){event.preventDefault();closeDialog();return;}

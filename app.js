@@ -64,10 +64,10 @@ function save(){
   preflight?.refresh();exportDialog?.refresh();return true;
 }
 function persistHistoricalProject(next){
-  next.updatedAt=new Date().toISOString();
-  try{localStorage.setItem(STORAGE,JSON.stringify(next));}
+  const scoped=restoreProject({...project,historical:next.historical,historicalSequenceCounters:next.historicalSequenceCounters,updatedAt:new Date().toISOString()});
+  try{localStorage.setItem(STORAGE,JSON.stringify(scoped));}
   catch{status('saveMessage','Browser storage is unavailable or full. Export Project now to keep a backup.','error');return false;}
-  project=next;try{$('saveState').textContent='Saved';status('saveMessage','Saved in this browser. Export Project for a backup.');}catch{}return true;
+  project=scoped;try{$('saveState').textContent='Saved';status('saveMessage','Saved in this browser. Export Project for a backup.');}catch{}return true;
 }
 function status(id,t,k=''){$(id).textContent=t;$(id).dataset.kind=k}
 function loadingButton(id,value){const button=$(id);button.dataset.loading=String(value);button.disabled=value||exportBusy;}
@@ -319,10 +319,10 @@ function dl(n,t,ty){const a=document.createElement('a');a.href=URL.createObjectU
 
 try{
   const migration=await migrateLegacyHistoricalImagery({project,assetStore,saveProject:persistHistoricalProject});
-  project=migration.project;if(migration.migrated)status('imageryStatus','Legacy historical imagery was validated and moved to IndexedDB. Export Project for a fresh backup.','ok');
+  if(!migration.migrated)project=migration.project;else status('imageryStatus','Legacy historical imagery was validated and moved to IndexedDB. Export Project for a fresh backup.','ok');
 }catch(error){status('imageryStatus',error.message,'error');status('saveMessage','Legacy imagery was not changed. Export Project now to preserve the original data before retrying.','error');}
 historicalUI=createHistoricalImageryUI({document,map,L,assetStore,providers:[ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER],getProject:()=>project,
-  saveProject:persistHistoricalProject,onChanged:()=>{preflight?.refresh();exportDialog?.refresh();}});
+  saveProject:persistHistoricalProject,isAssetReferencedOutsideHistorical:id=>(companyProfile||loadCompanyProfile())?.logoAssetId===id,onChanged:()=>{preflight?.refresh();exportDialog?.refresh();}});
 const openHistorical=()=>{if(exportBusy)return;drawingController.cancel();historicalUI.open();};
 $('manageHistorical').onclick=openHistorical;$('manageHistoricalHeader').onclick=openHistorical;
 sync();await companyDialog.refresh();if(!companyProfile)await companyDialog.open();
