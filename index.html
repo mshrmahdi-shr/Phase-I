@@ -117,6 +117,9 @@
         <h3 id="historicalCropTitle">Crop editor</h3><p>The outlined landscape frame is the saved A3 map area. SITE and drawn boundaries remain on the shared map.</p>
         <div class="historical-crop-actions"><button id="useHistoricalCrop" type="button">Use current crop</button><button id="resetHistoricalCrop" type="button">Reset to SITE</button><button id="cancelHistoricalCrop" type="button">Cancel</button><button id="commitHistorical" type="button" class="primary" disabled>Add to package</button></div>
       </section>
+      <section id="historicalViewControls" class="historical-view-controls" hidden aria-label="Historical image view">
+        <p>The approved image is shown on the shared map at its saved crop and placement.</p><button id="cancelHistoricalView" type="button">Close view and restore map</button>
+      </section>
       <div id="historicalStatus" class="helper" role="status" aria-live="polite"></div>
     </section>
   </div>

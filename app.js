@@ -67,7 +67,7 @@ function persistHistoricalProject(next){
   next.updatedAt=new Date().toISOString();
   try{localStorage.setItem(STORAGE,JSON.stringify(next));}
   catch{status('saveMessage','Browser storage is unavailable or full. Export Project now to keep a backup.','error');return false;}
-  project=next;$('saveState').textContent='Saved';status('saveMessage','Saved in this browser. Export Project for a backup.');preflight?.refresh();exportDialog?.refresh();return true;
+  project=next;try{$('saveState').textContent='Saved';status('saveMessage','Saved in this browser. Export Project for a backup.');}catch{}return true;
 }
 function status(id,t,k=''){$(id).textContent=t;$(id).dataset.kind=k}
 function loadingButton(id,value){const button=$(id);button.dataset.loading=String(value);button.disabled=value||exportBusy;}
