@@ -1,11 +1,13 @@
 const TOO_FEW_POINTS='Add at least 3 distinct corners before finishing.';
 const INVALID_BOUNDARY='Boundary corners must be distinct and edges cannot cross.';
 const CALLBACK_FAILURE='Drawing could not be completed. The current draft is still active.';
+const DRAWING_SHORTCUT_SURFACE='[data-drawing-shortcuts]';
 const INTERACTIVE_TARGET='button, a[href], area[href], input, textarea, select, option, summary, details, audio[controls], video[controls], [contenteditable], [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="menuitem"], [role="option"], [role="tab"], [role="textbox"], [role="combobox"], [role="slider"], [role="spinbutton"], [role="treeitem"], [tabindex]';
 
 function copyPoints(points){return points.map(point=>[...point]);}
 
 function isInteractiveTarget(target){
+  if(target?.matches?.(DRAWING_SHORTCUT_SURFACE))return false;
   return Boolean(target?.matches?.(INTERACTIVE_TARGET)||target?.closest?.(INTERACTIVE_TARGET));
 }
 
