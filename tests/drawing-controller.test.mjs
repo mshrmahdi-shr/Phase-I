@@ -154,3 +154,103 @@ test('modified, composing, repeated, and text-entry key events do not hijack dra
   assert.deepEqual(commits,[]);
   assert.equal(controller.state().points.length,3);
 });
+
+test('keyboard commands leave native activation to interactive controls',()=>{
+  const controls=['button','a[href]','input','textarea','select','summary','[contenteditable]','[role="button"]','[tabindex]'];
+  for(const control of controls){
+    const {controller,commits}=setup();
+    controller.begin('site');triangle(controller);
+    const event=keyEvent({code:control==='button'?'NumpadEnter':'Enter',target:{matches:selector=>selector.includes(control),closest:()=>null}});
+
+    assert.equal(controller.handleKey(event),undefined,control);
+    assert.equal(event.defaultPrevented,false,control);
+    assert.deepEqual(commits,[],control);
+    assert.equal(controller.state().points.length,3,control);
+  }
+});
+
+test('finish returns a stable failure and preserves the draft when commit throws',()=>{
+  const drafts=[];
+  const controller=createDrawingController({
+    closeRing,validBoundary,
+    onDraft:(points,mode)=>drafts.push({points,mode}),
+    onCommit:()=>{throw Error('storage failed');}
+  });
+  controller.begin('site');triangle(controller);
+  const before=controller.state();
+
+  const result=controller.finish();
+
+  assert.deepEqual(result,{ok:false,message:'Drawing could not be completed. The current draft is still active.'});
+  assert.deepEqual(controller.state(),before);
+  assert.deepEqual(drafts.at(-1),before);
+});
+
+test('finish does not commit or clear when draft cleanup throws',()=>{
+  const commits=[];
+  let rejectEmpty=false;
+  const controller=createDrawingController({
+    closeRing,validBoundary,
+    onDraft:points=>{if(rejectEmpty&&points.length===0)throw Error('layer removal failed');},
+    onCommit:(mode,ring)=>commits.push({mode,ring})
+  });
+  controller.begin('building');triangle(controller);
+  rejectEmpty=true;
+  const before=controller.state();
+
+  const result=controller.finish();
+
+  assert.deepEqual(result,{ok:false,message:'Drawing could not be completed. The current draft is still active.'});
+  assert.deepEqual(controller.state(),before);
+  assert.deepEqual(commits,[]);
+});
+
+test('draft callback failures roll back add and undo transitions',()=>{
+  let rejectLength=2;
+  const controller=createDrawingController({
+    closeRing,validBoundary,
+    onDraft:points=>{if(points.length===rejectLength)throw Error('draft render failed');}
+  });
+  controller.begin('site');
+  controller.add([-79.38,43.65]);
+
+  assert.equal(controller.add([-79.37,43.65]),undefined);
+  assert.deepEqual(controller.state(),{mode:'site',points:[[-79.38,43.65]]});
+  rejectLength=0;
+  assert.equal(controller.undo(),undefined);
+  assert.deepEqual(controller.state(),{mode:'site',points:[[-79.38,43.65]]});
+});
+
+test('cancel and replacement callback failures preserve the active draft',()=>{
+  let rejectCancel=true;
+  const controller=createDrawingController({
+    closeRing,validBoundary,
+    onCancel:()=>{if(rejectCancel)throw Error('cleanup failed');}
+  });
+  controller.begin('site');triangle(controller);
+  const before=controller.state();
+
+  assert.deepEqual(controller.begin('building'),before);
+  assert.deepEqual(controller.state(),before);
+  assert.equal(controller.cancel(),false);
+  assert.deepEqual(controller.state(),before);
+
+  rejectCancel=false;
+  assert.deepEqual(controller.begin('building'),{mode:'building',points:[]});
+});
+
+test('status callback failures never change finish results or core state',()=>{
+  const commits=[];
+  const controller=createDrawingController({
+    closeRing,validBoundary,
+    onCommit:(mode,ring)=>commits.push({mode,ring}),
+    onStatus:()=>{throw Error('status display failed');}
+  });
+  controller.begin('site');triangle(controller);
+
+  const result=controller.finish();
+
+  assert.deepEqual(result,{ok:true,mode:'site',ring:[[-79.38,43.65],[-79.37,43.65],[-79.37,43.66],[-79.38,43.65]]});
+  assert.deepEqual(commits,[{mode:'site',ring:result.ring}]);
+  assert.deepEqual(controller.state(),{mode:null,points:[]});
+});
