@@ -86,7 +86,9 @@ function inverseNad83Utm([easting,northing],zone){
   const sin=Math.sin(footprint),cos=Math.cos(footprint),tan=Math.tan(footprint),N=a/Math.sqrt(1-eccentricitySquared*sin*sin),R=a*(1-eccentricitySquared)/(1-eccentricitySquared*sin*sin)**1.5,T=tan*tan,C=second*cos*cos,D=(easting-500_000)/(N*k0);
   const latitude=footprint-N*tan/R*(D**2/2-(5+3*T+10*C-4*C**2-9*second)*D**4/24+(61+90*T+298*C+45*T**2-252*second-3*C**2)*D**6/720);
   const longitude=((zone-1)*6-180+3)*DEGREES+(D-(1+2*T+C)*D**3/6+(5-2*C+28*T-3*C**2+8*second+24*T**2)*D**5/120)/cos;
-  return [longitude/DEGREES,latitude/DEGREES];
+  const result=[longitude/DEGREES,latitude/DEGREES],west=zone*6-186,east=zone*6-180;
+  if(result[0]<west-1e-8||result[0]>east+1e-8||result[1]<0||result[1]>84)fail('NAD83 UTM coordinate is outside the declared northern zone.');
+  return result;
 }
 
 function nativeToMercator(crs,point){

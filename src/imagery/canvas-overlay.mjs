@@ -1,9 +1,10 @@
 import {geographicPlacementCorners} from './placement.mjs';
 
+const MAX_DEVICE_PIXEL_RATIO=4,MAX_BACKING_DIMENSION=32_767,MAX_BACKING_PIXELS=67_108_864;
 function abortError(signal){return signal?.reason instanceof Error?signal.reason:new DOMException('Cancelled','AbortError');}
 
 export function createCanvasImageOverlay({
-  L,map,image,placement,signal,createBitmap,ImageConstructor,createObjectURL,revokeObjectURL
+  L,map,image,placement,signal,createBitmap,ImageConstructor,createObjectURL,revokeObjectURL,devicePixelRatio
 }={}){
   if(!map||typeof map.on!=='function'||typeof map.off!=='function'||typeof map.latLngToLayerPoint!=='function')throw new Error('A Leaflet map is required for the manual image overlay.');
   if(!L||typeof L.latLng!=='function')throw new Error('Leaflet is required for the manual image overlay.');
@@ -36,14 +37,18 @@ export function createCanvasImageOverlay({
     if(!activeMap||!canvas||!bitmap||!context)return;
     const size=activeMap.getSize(),topLeft=activeMap.containerPointToLayerPoint([0,0]);
     if(!Number.isFinite(size?.x)||!Number.isFinite(size?.y)||size.x<=0||size.y<=0)return;
-    const width=Math.ceil(size.x),height=Math.ceil(size.y);
-    if(canvas.width!==width)canvas.width=width;if(canvas.height!==height)canvas.height=height;
+    const width=Math.ceil(size.x),height=Math.ceil(size.y),candidate=typeof devicePixelRatio==='function'?devicePixelRatio():devicePixelRatio??globalThis.devicePixelRatio??1;
+    const ratio=Number.isFinite(candidate)&&candidate>0?Math.min(MAX_DEVICE_PIXEL_RATIO,Math.max(1,candidate)):1;
+    const backingWidth=Math.ceil(width*ratio),backingHeight=Math.ceil(height*ratio);
+    if(backingWidth>MAX_BACKING_DIMENSION||backingHeight>MAX_BACKING_DIMENSION||backingWidth>Math.floor(MAX_BACKING_PIXELS/backingHeight))throw new Error('The manual image overlay backing canvas would exceed its safe display allocation.');
+    canvas.style.width=`${width}px`;canvas.style.height=`${height}px`;
+    if(canvas.width!==backingWidth)canvas.width=backingWidth;if(canvas.height!==backingHeight)canvas.height=backingHeight;
     const points=geographicPlacementCorners(placement).map(([lng,lat])=>activeMap.latLngToLayerPoint(L.latLng(lat,lng)));
     const [nw,ne,,sw]=points,origin=topLeft||{x:0,y:0};
     L.DomUtil?.setPosition?L.DomUtil.setPosition(canvas,origin):Object.assign(canvas.style,{left:`${origin.x}px`,top:`${origin.y}px`});
     context=canvas.getContext('2d');if(!context)throw new Error('The browser could not allocate the manual image overlay canvas.');
-    context.clearRect(0,0,width,height);
-    context.setTransform((ne.x-nw.x)/image.width,(ne.y-nw.y)/image.width,(sw.x-nw.x)/image.height,(sw.y-nw.y)/image.height,nw.x-origin.x,nw.y-origin.y);
+    context.clearRect(0,0,backingWidth,backingHeight);
+    context.setTransform(ratio*(ne.x-nw.x)/image.width,ratio*(ne.y-nw.y)/image.width,ratio*(sw.x-nw.x)/image.height,ratio*(sw.y-nw.y)/image.height,ratio*(nw.x-origin.x),ratio*(nw.y-origin.y));
     context.drawImage(bitmap,0,0,image.width,image.height);
   }
 

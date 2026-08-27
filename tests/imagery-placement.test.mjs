@@ -59,18 +59,28 @@ test('pixel-centre georeferences become deterministic placements in Web Mercator
   assert.ok(utm.groundWidth>1.9&&utm.groundWidth<3);assert.ok(utm.groundHeight>1.9&&utm.groundHeight<3);
 });
 
+test('NAD83 UTM inverse placement uses the declared zones 15-18 and rejects out-of-zone coordinates',async()=>{
+  const {placementFromGeoReference,unprojectWebMercator}=await placementModule(),northingAt40=4_427_757.219;
+  for(const zone of [15,16,17,18]){
+    const crs=`EPSG:269${zone}`,placement=placementFromGeoReference({geo:{crs,transform:[1,0,0,-1,500_000,northingAt40]},width:1,height:1});
+    const [lng,lat]=unprojectWebMercator(placement.center);near(lng,zone*6-183,1e-8);near(lat,40,1e-6);
+  }
+  assert.throws(()=>placementFromGeoReference({geo:{crs:'EPSG:26915',transform:[1,0,0,-1,100_001,northingAt40]},width:1,height:1}),/zone|UTM/i);
+  assert.throws(()=>placementFromGeoReference({geo:{crs:'EPSG:26918',transform:[1,0,0,-1,500_000,-1]},width:1,height:1}),/zone|UTM/i);
+});
+
 function overlayHarness({bitmapPromise=Promise.resolve({width:2,height:1,close(){}})}={}){
-  const calls={transforms:[],draws:0,clears:0,closed:0,appends:0,removes:0};
-  const context={setTransform(...values){calls.transforms.push(values);},clearRect(){calls.clears++;},drawImage(){calls.draws++;}};
+  const calls={transforms:[],draws:0,drawArgs:[],clears:[],closed:0,appends:0,removes:0};
+  const context={setTransform(...values){calls.transforms.push(values);},clearRect(...values){calls.clears.push(values);},drawImage(...values){calls.draws++;calls.drawArgs.push(values);}};
   const pane={children:[],appendChild(node){if(!this.children.includes(node)){this.children.push(node);node.parentNode=this;calls.appends++;}},removeChild(node){this.children=this.children.filter(value=>value!==node);node.parentNode=null;calls.removes++;}};
   const document={createElement(tag){assert.equal(tag,'canvas');return {style:{},width:0,height:0,parentNode:null,getContext:()=>context,remove(){this.parentNode?.removeChild(this);}};}};
-  const listeners=new Map();let scale=1;
+  const listeners=new Map();let scale=1,size={x:200,y:100};
   const map={
-    getContainer:()=>({ownerDocument:document}),getPanes:()=>({overlayPane:pane}),getSize:()=>({x:200,y:100}),containerPointToLayerPoint:()=>({x:0,y:0}),
+    getContainer:()=>({ownerDocument:document}),getPanes:()=>({overlayPane:pane}),getSize:()=>size,containerPointToLayerPoint:()=>({x:0,y:0}),
     latLngToLayerPoint({lat,lng}){const R=6378137,d=Math.PI/180;return {x:R*lng*d*scale,y:-R*Math.log(Math.tan(Math.PI/4+lat*d/2))*scale};},
     on(names,handler){for(const name of names.split(/\s+/)){const set=listeners.get(name)||new Set();set.add(handler);listeners.set(name,set);}return this;},
     off(names,handler){for(const name of names.split(/\s+/))listeners.get(name)?.delete(handler);return this;},
-    emit(name){for(const handler of listeners.get(name)||[])handler();},listenerCount(){return [...listeners.values()].reduce((sum,set)=>sum+set.size,0);},setScale(value){scale=value;}
+    emit(name){for(const handler of listeners.get(name)||[])handler();},listenerCount(){return [...listeners.values()].reduce((sum,set)=>sum+set.size,0);},setScale(value){scale=value;},setSize(value){size=value;}
   };
   const L={latLng:(lat,lng)=>({lat,lng}),DomUtil:{setPosition(node,point){node.position=point;}}};
   const createBitmap=async()=>{const bitmap=await bitmapPromise;return {...bitmap,close(){calls.closed++;bitmap.close?.();}};};
@@ -87,6 +97,22 @@ test('rotated canvas overlay redraws from projected corners on move, zoom, and r
   h.map.emit('move');h.map.setScale(2);h.map.emit('zoom');h.map.emit('resize');assert.equal(h.calls.draws,4);
   const zoomed=h.calls.transforms.at(-1);first.forEach((value,index)=>near(zoomed[index],value*2));
   overlay.remove().remove();assert.equal(h.map.listenerCount(),0);assert.equal(h.calls.closed,1);assert.equal(h.calls.removes,1);assert.equal(overlay.getElement(),null);
+});
+
+test('overlay keeps CSS map dimensions and scales its backing store and complete affine at DPR 2',async()=>{
+  const {createCanvasImageOverlay}=await overlayModule(),h=overlayHarness();let dpr=2;
+  const placement={center:[0,0],groundWidth:20,groundHeight:10,sourceWidth:2,sourceHeight:1,rotationDegrees:0};
+  const overlay=createCanvasImageOverlay({L:h.L,map:h.map,image:{blob:new Blob(['x'],{type:'image/png'}),width:2,height:1},placement,
+    createBitmap:h.createBitmap,devicePixelRatio:()=>dpr});
+  overlay.addTo(h.map);await overlay.ready;
+  const canvas=overlay.getElement();assert.equal(canvas.style.width,'200px');assert.equal(canvas.style.height,'100px');
+  assert.equal(canvas.width,400);assert.equal(canvas.height,200);
+  const matrix=h.calls.transforms.at(-1);near(matrix[0],20);near(matrix[1],0);near(matrix[2],0);near(matrix[3],20);near(matrix[4],-20);near(matrix[5],-10);
+  assert.deepEqual(h.calls.clears.at(-1),[0,0,400,200]);assert.deepEqual(h.calls.drawArgs.at(-1).slice(1),[0,0,2,1]);
+  dpr=3;h.map.setSize({x:120,y:80});h.map.emit('resize');
+  assert.equal(canvas.style.width,'120px');assert.equal(canvas.style.height,'80px');assert.equal(canvas.width,360);assert.equal(canvas.height,240);
+  const resized=h.calls.transforms.at(-1);matrix.forEach((value,index)=>near(resized[index],value*1.5));
+  overlay.remove();assert.equal(canvas.width,0);assert.equal(canvas.height,0);
 });
 
 test('overlay abort removes listeners and canvas promptly, then closes a bitmap that resolves late without drawing',async()=>{

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import {fromArrayBuffer,writeArrayBuffer} from 'geotiff';
 
 const manual=()=>import('../src/imagery/manual-image.mjs');
@@ -10,29 +11,57 @@ function namedBlob(bytes,name,type=''){
   return blob;
 }
 
-function pngHeader(width,height){
-  const bytes=new Uint8Array(24),view=new DataView(bytes.buffer);
-  bytes.set([137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82]);
-  view.setUint32(16,width);view.setUint32(20,height);
-  return bytes;
-}
+const fixture=async name=>new Uint8Array(await fs.readFile(new URL(`./fixtures/imagery/manual/${name}`,import.meta.url)));
+const pngFixture=()=>fixture('valid-3x2.png');
+const jpegFixture=orientation=>fixture(`valid-2x3-o${orientation}.jpg`);
 
-function jpegWithOrientation(width,height,orientation){
-  const exif=new Uint8Array(32),view=new DataView(exif.buffer);
-  exif.set([69,120,105,102,0,0,73,73]);
-  view.setUint16(8,42,true);view.setUint32(10,8,true);view.setUint16(14,1,true);
-  view.setUint16(16,0x0112,true);view.setUint16(18,3,true);view.setUint32(20,1,true);view.setUint16(24,orientation,true);
-  const sof=Uint8Array.from([255,192,0,11,8,height>>8,height&255,width>>8,width&255,1,1,17,0]);
-  return Uint8Array.from([255,216,255,225,0,34,...exif,...sof,255,217]);
-}
-
-async function geotiffBlob({width=2,height=2,crs=4326,compression=1,values=new Uint8Array([0,64,128,255]),metadata={}}={}){
-  const projected=crs===4326?{}:{ProjectedCSTypeGeoKey:crs};
-  const geographic=crs===4326?{GeographicTypeGeoKey:4326}:{};
-  const buffer=await writeArrayBuffer(values,{width,height,BitsPerSample:[8],SamplesPerPixel:1,
-    PhotometricInterpretation:1,Compression:compression,SampleFormat:[1],GTModelTypeGeoKey:crs===4326?2:1,
-    GTRasterTypeGeoKey:1,ModelPixelScale:[.1,.2,0],ModelTiepoint:[0,0,0,-80,44,0],...geographic,...projected,...metadata});
+async function geotiffBlob({width=2,height=2,crs=4326,compression=1,values=new Uint8Array([0,64,128,255]),samples=1,
+  photometric=samples===1?1:2,bits=Array(samples).fill(8),sampleFormat=Array(samples).fill(1),extraSamples=[],planar=1,metadata={},omit=[]}={}){
+  const crsMetadata=crs===4326
+    ?{GTModelTypeGeoKey:2,GeographicTypeGeoKey:4326,GeogAngularUnitsGeoKey:9102}
+    :{GTModelTypeGeoKey:1,ProjectedCSTypeGeoKey:crs,ProjLinearUnitsGeoKey:9001};
+  const options={width,height,BitsPerSample:bits,SamplesPerPixel:samples,PhotometricInterpretation:photometric,
+    Compression:compression,SampleFormat:sampleFormat,ExtraSamples:extraSamples,PlanarConfiguration:planar,GTRasterTypeGeoKey:1,
+    ModelPixelScale:[.1,.2,0],ModelTiepoint:[0,0,0,-80,44,0],...crsMetadata,...metadata};
+  for(const name of omit)delete options[name];
+  const buffer=await writeArrayBuffer(values,options);
   return namedBlob(new Uint8Array(buffer),'fixture.tif','image/tiff');
+}
+
+function tiffView(bytes){
+  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),little=bytes[0]===73;
+  return {view,little,get16:offset=>view.getUint16(offset,little),get32:offset=>view.getUint32(offset,little),set16:(offset,value)=>view.setUint16(offset,value,little),set32:(offset,value)=>view.setUint32(offset,value,little)};
+}
+
+async function patchTiffTag(blob,tag,{type,count,value}){
+  const bytes=new Uint8Array(await blob.arrayBuffer()),io=tiffView(bytes),ifd=io.get32(4),entries=io.get16(ifd);
+  for(let index=0;index<entries;index++){
+    const entry=ifd+2+index*12;
+    if(io.get16(entry)!==tag)continue;
+    if(type!==undefined)io.set16(entry+2,type);
+    if(count!==undefined)io.set32(entry+4,count);
+    if(value!==undefined){io.set32(entry+8,0);io.set16(entry+8,value);}
+    return namedBlob(bytes,'fixture.tif','image/tiff');
+  }
+  throw new Error(`TIFF fixture has no tag ${tag}`);
+}
+
+function hostileTiff({entry,next=0,second=false,truncated=false,big=false}={}){
+  if(big)return namedBlob(Uint8Array.from([73,73,43,0,8,0,0,0,0,0,0,0,0,0,0,0]),'hostile.tif','image/tiff');
+  const count=entry?1:0,firstLength=2+count*12+4,total=8+firstLength+(second?6:0),bytes=new Uint8Array(truncated?10:total),view=new DataView(bytes.buffer);
+  bytes.set([73,73,42,0]);view.setUint32(4,8,true);if(truncated){view.setUint16(8,1,true);return namedBlob(bytes,'hostile.tif','image/tiff');}
+  view.setUint16(8,count,true);
+  if(entry){view.setUint16(10,entry.tag,true);view.setUint16(12,entry.type,true);view.setUint32(14,entry.count,true);view.setUint32(18,entry.offset??0,true);}
+  view.setUint32(8+2+count*12,next===true?8+firstLength:next,true);
+  if(second){const offset=8+firstLength;view.setUint16(offset,0,true);view.setUint32(offset+2,0,true);}
+  return namedBlob(bytes,'hostile.tif','image/tiff');
+}
+
+function utmGeoMetadata(crs,{originLongitude,falseNorthing}={}){
+  const directory=[1,1,0,4,1024,0,1,1,1025,0,1,1,3072,0,1,crs,3076,0,1,9001],doubles=[];
+  const addDouble=(key,value)=>{if(value===undefined)return;directory.push(key,34736,1,doubles.length);doubles.push(value);directory[3]++;};
+  addDouble(3080,originLongitude);addDouble(3083,falseNorthing);
+  return {GeoKeyDirectory:directory,GeoDoubleParams:doubles};
 }
 
 const bitmapDecoder=(width,height,log={})=>async(_blob,options)=>{
@@ -40,21 +69,35 @@ const bitmapDecoder=(width,height,log={})=>async(_blob,options)=>{
   return {width,height,close(){log.closed=(log.closed||0)+1;}};
 };
 
-test('manual PNG decoding trusts bytes, verifies completed decode dimensions, and rejects extension or MIME spoofing',async()=>{
+test('manual PNG decoding uses a complete fixture, verifies completed decode dimensions, and rejects extension or MIME spoofing',async()=>{
   const {decodeManualImage}=await manual(),log={};
-  const decoded=await decodeManualImage(namedBlob(pngHeader(3,2),'scan.png','image/png'),{decodeBitmap:bitmapDecoder(3,2,log)});
+  const png=await pngFixture(),decoded=await decodeManualImage(namedBlob(png,'scan.png','image/png'),{decodeBitmap:bitmapDecoder(3,2,log)});
   assert.equal(decoded.mime,'image/png');assert.equal(decoded.width,3);assert.equal(decoded.height,2);assert.equal(decoded.geo,null);
   assert.ok(decoded.blob instanceof Blob);assert.equal(log.closed,1);assert.equal(log.options.imageOrientation,'none');
-  await assert.rejects(decodeManualImage(namedBlob(pngHeader(3,2),'scan.jpg','image/png'),{decodeBitmap:bitmapDecoder(3,2)}),/extension.*signature|signature.*extension/i);
-  await assert.rejects(decodeManualImage(namedBlob(pngHeader(3,2),'scan.png','image\/jpeg'),{decodeBitmap:bitmapDecoder(3,2)}),/MIME.*signature|signature.*MIME/i);
+  await assert.rejects(decodeManualImage(namedBlob(png,'scan.jpg','image/png'),{decodeBitmap:bitmapDecoder(3,2)}),/extension.*signature|signature.*extension/i);
+  await assert.rejects(decodeManualImage(namedBlob(png,'scan.png','image\/jpeg'),{decodeBitmap:bitmapDecoder(3,2)}),/MIME.*signature|signature.*MIME/i);
   await assert.rejects(decodeManualImage(namedBlob(Uint8Array.from([1,2,3]),'scan.png','image/png'),{decodeBitmap:bitmapDecoder(3,2)}),/PNG.*JPEG.*TIFF|signature/i);
 });
 
-test('JPEG EXIF orientation determines output dimensions without trusting a pre-load Image',async()=>{
-  const {decodeManualImage}=await manual(),log={};
-  const decoded=await decodeManualImage(namedBlob(jpegWithOrientation(2,3,6),'oriented.jpeg','image/jpeg'),{decodeBitmap:bitmapDecoder(2,3,log)});
-  assert.deepEqual({width:decoded.width,height:decoded.height},{width:3,height:2});
-  assert.equal(log.closed,1);assert.equal(log.options.orientation,6);
+test('complete JPEG fixtures cover a non-swap orientation and every EXIF axis-swap orientation',async()=>{
+  const {decodeManualImage}=await manual();
+  for(const orientation of [1,5,6,7,8]){
+    const log={},bytes=await jpegFixture(orientation),decoded=await decodeManualImage(namedBlob(bytes,`o${orientation}.jpeg`,'image/jpeg'),{decodeBitmap:bitmapDecoder(2,3,log)});
+    assert.deepEqual({width:decoded.width,height:decoded.height},orientation>=5?{width:3,height:2}:{width:2,height:3});
+    assert.equal(log.closed,1);assert.equal(log.options.orientation,orientation);
+  }
+  const browserOriented=await decodeManualImage(namedBlob(await jpegFixture(6),'browser-oriented.jpeg','image/jpeg'),{decodeBitmap:bitmapDecoder(3,2)});
+  assert.deepEqual({width:browserOriented.width,height:browserOriented.height},{width:3,height:2},'browser decoders may return already-oriented dimensions');
+});
+
+test('plausible PNG/JPEG headers with corrupt bodies and decoder/header disagreement are rejected',async()=>{
+  const {decodeManualImage}=await manual(),png=await pngFixture(),jpeg=await jpegFixture(6);let called=0;
+  const corrupt=png.slice();for(let offset=8;offset<corrupt.length;){const length=new DataView(corrupt.buffer).getUint32(offset),type=String.fromCharCode(...corrupt.subarray(offset+4,offset+8));if(type==='IDAT'){corrupt[offset+8]^=0xff;break;}offset+=12+length;}
+  await assert.rejects(decodeManualImage(namedBlob(corrupt,'corrupt.png','image/png'),{decodeBitmap:async()=>{called++;return {width:3,height:2};}}),/could not be decoded|checksum|CRC|invalid/i);
+  await assert.rejects(decodeManualImage(namedBlob(png.subarray(0,png.length-12),'truncated.png','image/png'),{decodeBitmap:async()=>{called++;return {width:3,height:2};}}),/could not be decoded|incomplete|invalid/i);
+  await assert.rejects(decodeManualImage(namedBlob(jpeg.subarray(0,jpeg.length-2),'truncated.jpg','image/jpeg'),{decodeBitmap:async()=>{called++;return {width:2,height:3};}}),/could not be decoded|truncated|invalid/i);
+  assert.equal(called,0,'structurally incomplete images do not reach the browser allocation boundary');
+  await assert.rejects(decodeManualImage(namedBlob(png,'wrong.png','image/png'),{decodeBitmap:bitmapDecoder(2,3)}),/dimensions/i);
 });
 
 test('byte and pixel limits reject before reading or invoking a decoder allocation boundary',async()=>{
@@ -62,23 +105,23 @@ test('byte and pixel limits reject before reading or invoking a decoder allocati
   const oversized={name:'large.png',type:'image/png',size:65,arrayBuffer(){read=true;throw new Error('must not read');}};
   await assert.rejects(decodeManualImage(oversized,{maxBytes:64,decodeBitmap:async()=>{decoded=true;}}),/64 bytes|byte limit/i);
   assert.equal(read,false);assert.equal(decoded,false);
-  await assert.rejects(decodeManualImage(namedBlob(pngHeader(5,5),'large.png','image/png'),{maxPixels:24,decodeBitmap:async()=>{decoded=true;}}),/pixel limit|24 pixels/i);
+  await assert.rejects(decodeManualImage(namedBlob(await pngFixture(),'large.png','image/png'),{maxPixels:5,decodeBitmap:async()=>{decoded=true;}}),/pixel limit|5 pixels/i);
   assert.equal(decoded,false,'pixel headers are bounded before browser decoding/canvas allocation');
-  await assert.rejects(decodeManualImage(namedBlob(pngHeader(1,1),'small.png','image/png'),{maxPixels:32_000_001,decodeBitmap:bitmapDecoder(1,1)}),/maximum.*pixel|cannot exceed/i);
+  await assert.rejects(decodeManualImage(namedBlob(await pngFixture(),'small.png','image/png'),{maxPixels:32_000_001,decodeBitmap:bitmapDecoder(3,2)}),/maximum.*pixel|cannot exceed/i);
 });
 
 test('abort during injected bitmap decoding rejects promptly and closes a late bitmap without returning it',async()=>{
   const {decodeManualImage}=await manual(),controller=new AbortController();let release,closed=0;
   const started=new Promise(resolve=>{release=resolve;});
   let finish;const pending=new Promise(resolve=>{finish=resolve;});
-  const outcome=decodeManualImage(namedBlob(pngHeader(1,1),'scan.png','image/png'),{
+  const outcome=decodeManualImage(namedBlob(await pngFixture(),'scan.png','image/png'),{
     signal:controller.signal,decodeBitmap:async()=>{release();return pending;}
   }).then(value=>({value}),error=>({error}));
   await started;controller.abort();
   let timer;try{
     const observed=await Promise.race([outcome,new Promise(resolve=>{timer=setTimeout(()=>resolve({pending:true}),50);})]);
     assert.equal(observed.pending,undefined);assert.equal(observed.error?.name,'AbortError');
-  }finally{clearTimeout(timer);finish({width:1,height:1,close(){closed++;}});await outcome;}
+  }finally{clearTimeout(timer);finish({width:3,height:2,close(){closed++;}});await outcome;}
   await new Promise(resolve=>setImmediate(resolve));assert.equal(closed,1);
 });
 
@@ -93,10 +136,10 @@ test('world files parse six locale-independent pixel-centre coefficients in canv
 });
 
 test('an uncompressed 8-bit EPSG:4326 GeoTIFF is decoded and exposes a pixel-centre transform',async()=>{
-  const {decodeManualImage}=await manual();let encoded;
+  const {decodeManualImage}=await manual();let encoded;const png=await pngFixture();
   const decoded=await decodeManualImage(await geotiffBlob(),{
     geotiffLoader:async()=>({fromArrayBuffer}),
-    encodeRaster:async value=>{encoded=value;return new Blob([pngHeader(value.width,value.height)],{type:'image/png'});}
+    encodeRaster:async value=>{encoded=value;return new Blob([png],{type:'image/png'});}
   });
   assert.equal(decoded.mime,'image/png');assert.equal(decoded.width,2);assert.equal(decoded.height,2);
   assert.equal(decoded.geo.crs,'EPSG:4326');
@@ -105,7 +148,7 @@ test('an uncompressed 8-bit EPSG:4326 GeoTIFF is decoded and exposes a pixel-cen
 });
 
 test('GeoTIFF CRS allowlist accepts Web Mercator and NAD83 UTM zones 15-18 only',async()=>{
-  const {decodeManualImage}=await manual(),encodeRaster=async({width,height})=>new Blob([pngHeader(width,height)],{type:'image/png'});
+  const {decodeManualImage}=await manual(),png=await pngFixture(),encodeRaster=async()=>new Blob([png],{type:'image/png'});
   for(const crs of [3857,26915,26916,26917,26918]){
     const decoded=await decodeManualImage(await geotiffBlob({width:1,height:1,crs,values:new Uint8Array([1])}),{geotiffLoader:async()=>({fromArrayBuffer}),encodeRaster});
     assert.equal(decoded.geo.crs,`EPSG:${crs}`);
@@ -116,47 +159,96 @@ test('GeoTIFF CRS allowlist accepts Web Mercator and NAD83 UTM zones 15-18 only'
   );
 });
 
+test('classic TIFF preflight rejects hostile structures before loading or invoking GeoTIFF.js',async()=>{
+  const {decodeManualImage}=await manual();let loaderCalls=0;
+  const loader=async()=>{loaderCalls++;return {fromArrayBuffer(){throw new Error('must not parse');}};};
+  const cases=[
+    [hostileTiff({big:true}),/BigTIFF|classic TIFF/i],
+    [hostileTiff({truncated:true}),/IFD|truncated|safely decoded/i],
+    [hostileTiff({entry:{tag:273,type:12,count:1024,offset:26}}),/allocation|tag|strip|safely decoded/i],
+    [hostileTiff({entry:{tag:33550,type:12,count:3,offset:0xfffffff0}}),/offset|range|safely decoded/i],
+    [hostileTiff({next:8}),/cyclic|cycle|IFD/i],
+    [hostileTiff({next:true,second:true}),/multi-image|multiple|IFD/i]
+  ];
+  for(const [blob,pattern] of cases)await assert.rejects(decodeManualImage(blob,{geotiffLoader:loader}),pattern);
+  assert.equal(loaderCalls,0,'no hostile IFD reaches even the GeoTIFF library loader boundary');
+});
+
+test('classic TIFF preflight enforces exact strip cardinality and bounded declared dimensions before the library boundary',async()=>{
+  const {decodeManualImage}=await manual();let loaderCalls=0;
+  const loader=async()=>{loaderCalls++;return {fromArrayBuffer};};
+  const stripBomb=await patchTiffTag(await geotiffBlob({width:1,height:1,values:new Uint8Array([1])}),273,{count:2});
+  const rowBomb=await patchTiffTag(await geotiffBlob({width:1,height:1,values:new Uint8Array([1])}),278,{value:65535});
+  await assert.rejects(decodeManualImage(stripBomb,{geotiffLoader:loader}),/strip|cardinality|allocation|convert/i);
+  await assert.rejects(decodeManualImage(rowBomb,{geotiffLoader:loader}),/strip|dimension|allocation|convert/i);
+  assert.equal(loaderCalls,0);
+});
+
+test('GeoTIFF CRS rejects missing or contradictory model, units, CRS kind, UTM zone, and hemisphere metadata from real files',async()=>{
+  const {decodeManualImage}=await manual(),png=await pngFixture(),encodeRaster=async()=>new Blob([png],{type:'image/png'});
+  const rejected=[
+    geotiffBlob({metadata:{GeogAngularUnitsGeoKey:9101}}),
+    geotiffBlob({metadata:{GTModelTypeGeoKey:1}}),
+    geotiffBlob({omit:['GTModelTypeGeoKey']}),
+    geotiffBlob({omit:['GeogAngularUnitsGeoKey']}),
+    geotiffBlob({metadata:{ProjectedCSTypeGeoKey:3857,ProjLinearUnitsGeoKey:9001}}),
+    geotiffBlob({crs:3857,width:1,height:1,values:new Uint8Array([1]),metadata:{ProjLinearUnitsGeoKey:9002}}),
+    geotiffBlob({crs:3857,width:1,height:1,values:new Uint8Array([1]),omit:['ProjLinearUnitsGeoKey']}),
+    geotiffBlob({crs:26915,width:1,height:1,values:new Uint8Array([1]),metadata:utmGeoMetadata(26915,{originLongitude:-81})}),
+    geotiffBlob({crs:26915,width:1,height:1,values:new Uint8Array([1]),metadata:utmGeoMetadata(26915,{falseNorthing:10_000_000})})
+  ];
+  for(const pending of rejected)await assert.rejects(
+    decodeManualImage(await pending,{geotiffLoader:async()=>({fromArrayBuffer}),encodeRaster}),
+    /CRS|model|unit|degree|metre|zone|hemisphere.*convert|convert.*(?:CRS|model|unit|degree|metre|zone|hemisphere)/i
+  );
+});
+
+test('GeoTIFF rendering accepts only correctly represented BlackIsZero grayscale, RGB, and unassociated RGBA',async()=>{
+  const {decodeManualImage}=await manual(),png=await pngFixture();
+  const cases=[
+    [{width:1,height:1,values:new Uint8Array([40])},[40,40,40,255]],
+    [{width:1,height:1,samples:3,values:new Uint8Array([10,20,30])},[10,20,30,255]],
+    [{width:1,height:1,samples:4,extraSamples:[2],values:new Uint8Array([10,20,30,40])},[10,20,30,40]]
+  ];
+  for(const [options,expected] of cases){
+    let rendered;await decodeManualImage(await geotiffBlob(options),{geotiffLoader:async()=>({fromArrayBuffer}),encodeRaster:async value=>{rendered=Array.from(value.rgba);return new Blob([png],{type:'image/png'});}});
+    assert.deepEqual(rendered,expected);
+  }
+});
+
+test('GeoTIFF rendering rejects WhiteIsZero, palette, associated alpha, CMYK, planar, bit-depth, and signed layouts',async()=>{
+  const {decodeManualImage}=await manual(),png=await pngFixture(),encodeRaster=async()=>new Blob([png],{type:'image/png'});
+  const white=await patchTiffTag(await geotiffBlob({width:1,height:1,values:new Uint8Array([0])}),262,{value:0});
+  const rejected=[
+    white,
+    geotiffBlob({width:1,height:1,photometric:3,values:new Uint8Array([1])}),
+    geotiffBlob({width:1,height:1,samples:4,extraSamples:[1],values:new Uint8Array([10,20,30,40])}),
+    geotiffBlob({width:1,height:1,samples:4,photometric:5,values:new Uint8Array([10,20,30,40])}),
+    geotiffBlob({width:1,height:1,samples:3,planar:2,values:new Uint8Array([10,20,30])}),
+    geotiffBlob({width:1,height:1,bits:[16],values:new Uint16Array([1])}),
+    geotiffBlob({width:1,height:1,sampleFormat:[2],values:new Int8Array([1])})
+  ];
+  for(const pending of rejected)await assert.rejects(
+    decodeManualImage(await pending,{geotiffLoader:async()=>({fromArrayBuffer}),encodeRaster}),
+    /photometric|WhiteIsZero|palette|alpha|CMYK|planar|8-bit|unsigned.*convert|convert.*(?:photometric|alpha|planar|8-bit|unsigned)/i
+  );
+});
+
 test('GeoTIFF ambiguity and unsupported compression fail before raster decode with conversion instructions',async()=>{
-  const {decodeManualImage}=await manual();let imageRead=false;
-  const tiny=namedBlob(Uint8Array.from([73,73,42,0,8,0,0,0]),'tiny.tif','image/tiff');
-  await assert.rejects(decodeManualImage(tiny,{geotiffLoader:async()=>({fromArrayBuffer:async()=>({getImageCount:async()=>2,getImage:async()=>{imageRead=true;}})})}),/multi-image|pyramid|single-image.*convert/i);
-  assert.equal(imageRead,false);
+  const {decodeManualImage}=await manual();let loaderCalls=0;
+  await assert.rejects(decodeManualImage(hostileTiff({next:true,second:true}),{geotiffLoader:async()=>{loaderCalls++;return {fromArrayBuffer};}}),/multi-image|pyramid|multiple.*convert|IFD/i);
+  assert.equal(loaderCalls,0);
   await assert.rejects(decodeManualImage(await geotiffBlob({compression:5}),{
     geotiffLoader:async()=>({fromArrayBuffer}),encodeRaster:async()=>{throw new Error('must not encode');}
   }),/compression.*convert|uncompressed/i);
 });
 
 test('malformed and non-top-left GeoTIFFs fail with safe conversion guidance',async()=>{
-  const {decodeManualImage}=await manual(),tiny=namedBlob(Uint8Array.from([73,73,42,0,8,0,0,0]),'broken.tif','image/tiff');
-  await assert.rejects(decodeManualImage(tiny,{geotiffLoader:async()=>({fromArrayBuffer:async()=>{throw new Error('invalid IFD');}})}),/could not be safely decoded.*convert/i);
+  const {decodeManualImage}=await manual();
+  await assert.rejects(decodeManualImage(hostileTiff({truncated:true}),{geotiffLoader:async()=>({fromArrayBuffer})}),/could not be safely decoded.*convert|IFD.*convert/i);
   await assert.rejects(decodeManualImage(await geotiffBlob({metadata:{Orientation:2}}),{
     geotiffLoader:async()=>({fromArrayBuffer}),encodeRaster:async()=>{throw new Error('must reject before raster encoding');}
   }),/orientation.*convert|top-left.*convert/i);
-});
-
-test('declared GeoTIFF strip allocation is bounded before raster or canvas allocation',async()=>{
-  const {decodeManualImage}=await manual();let rasterRead=false,encoded=false;
-  const fileDirectory={Compression:1,BitsPerSample:[8],SampleFormat:[1],PhotometricInterpretation:1,SamplesPerPixel:1,
-    PlanarConfiguration:1,RowsPerStrip:2_000_000_000,StripByteCounts:[1],StripOffsets:[0],
-    ModelPixelScale:[1,1,0],ModelTiepoint:[0,0,0,0,0,0]};
-  const image={getWidth:()=>1,getHeight:()=>1,getSamplesPerPixel:()=>1,getFileDirectory:()=>fileDirectory,
-    getGeoKeys:()=>({GeographicTypeGeoKey:4326,GTRasterTypeGeoKey:1}),readRasters:async()=>{rasterRead=true;}};
-  await assert.rejects(decodeManualImage(namedBlob(Uint8Array.from([73,73,42,0,8,0,0,0]),'bomb.tif','image/tiff'),{
-    geotiffLoader:async()=>({fromArrayBuffer:async()=>({getImageCount:async()=>1,getImage:async()=>image})}),
-    encodeRaster:async()=>{encoded=true;}
-  }),/strip|allocation|convert/i);
-  assert.equal(rasterRead,false);assert.equal(encoded,false);
-});
-
-test('four-sample GeoTIFF requires an explicitly declared associated or unassociated alpha sample',async()=>{
-  const {decodeManualImage}=await manual(),directory={Compression:1,BitsPerSample:[8,8,8,8],SampleFormat:[1,1,1,1],PhotometricInterpretation:2,
-    SamplesPerPixel:4,PlanarConfiguration:1,RowsPerStrip:1,StripByteCounts:[4],StripOffsets:[0],ModelPixelScale:[1,1,0],ModelTiepoint:[0,0,0,0,0,0]};
-  const image={getWidth:()=>1,getHeight:()=>1,getSamplesPerPixel:()=>4,getFileDirectory:()=>directory,
-    getGeoKeys:()=>({GeographicTypeGeoKey:4326,GTRasterTypeGeoKey:1}),readRasters:async()=>new Uint8Array([1,2,3,4])};
-  await assert.rejects(decodeManualImage(namedBlob(Uint8Array.from([73,73,42,0,8,0,0,0]),'rgba.tif','image/tiff'),{
-    geotiffLoader:async()=>({fromArrayBuffer:async()=>({getImageCount:async()=>1,getImage:async()=>image})}),
-    encodeRaster:async()=>new Blob([pngHeader(1,1)],{type:'image/png'})
-  }),/alpha|extra sample.*convert/i);
 });
 
 test('abort during default GeoTIFF canvas encoding clears the canvas before a late encoder settles',async t=>{
@@ -166,16 +258,12 @@ test('abort during default GeoTIFF canvas encoding clears the canvas before a la
   const canvas={width:0,height:0,getContext:()=>context,convertToBlob(){start();return pending;}};
   const previous=Object.getOwnPropertyDescriptor(globalThis,'document');Object.defineProperty(globalThis,'document',{value:{createElement:()=>canvas},configurable:true});
   t.after(()=>{if(previous)Object.defineProperty(globalThis,'document',previous);else delete globalThis.document;});
-  const directory={Compression:1,BitsPerSample:[8],SampleFormat:[1],PhotometricInterpretation:1,SamplesPerPixel:1,PlanarConfiguration:1,
-    RowsPerStrip:1,StripByteCounts:[1],StripOffsets:[0],ModelPixelScale:[1,1,0],ModelTiepoint:[0,0,0,0,0,0]};
-  const image={getWidth:()=>1,getHeight:()=>1,getSamplesPerPixel:()=>1,getFileDirectory:()=>directory,
-    getGeoKeys:()=>({GeographicTypeGeoKey:4326,GTRasterTypeGeoKey:1}),readRasters:async()=>new Uint8Array([1])};
-  const outcome=decodeManualImage(namedBlob(Uint8Array.from([73,73,42,0,8,0,0,0]),'slow.tif','image/tiff'),{
-    signal:controller.signal,geotiffLoader:async()=>({fromArrayBuffer:async()=>({getImageCount:async()=>1,getImage:async()=>image})})
+  const outcome=decodeManualImage(await geotiffBlob({width:1,height:1,values:new Uint8Array([1])}),{
+    signal:controller.signal,geotiffLoader:async()=>({fromArrayBuffer})
   }).then(value=>({value}),error=>({error}));
   await encoding;controller.abort();
   let timer;try{
     const observed=await Promise.race([outcome,new Promise(resolve=>{timer=setTimeout(()=>resolve({pending:true}),50);})]);
     assert.equal(observed.pending,undefined);assert.equal(observed.error?.name,'AbortError');assert.equal(canvas.width,0);assert.equal(canvas.height,0);
-  }finally{clearTimeout(timer);finish(new Blob([pngHeader(1,1)],{type:'image/png'}));await outcome;}
+  }finally{clearTimeout(timer);finish(new Blob([await pngFixture()],{type:'image/png'}));await outcome;}
 });
