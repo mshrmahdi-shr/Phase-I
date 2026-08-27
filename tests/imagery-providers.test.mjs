@@ -73,15 +73,22 @@ test('official providers expose validated jurisdiction coverage and exact ArcGIS
 
 test('safe ArcGIS JSON fetch forces f=json and omits credentials',async()=>{
   const root='https://gis.toronto.ca/arcgis/rest/services/basemap/';
+  const hooks={};
   let request;
   const value=await fetchArcGisJson(`${root}?f=html`,{
     allowedOrigins:['https://gis.toronto.ca'],allowedRoots:[root],
-    fetchImpl:async(url,init)=>{request={url:new URL(url),init};return jsonResponse({services:[]},url);}
+    fetchImpl:async(url,init)=>{
+      request={url:new URL(url),init};
+      return {...jsonResponse({services:[]},url),body:readerBody([new TextEncoder().encode('{"services":[]}')],hooks)};
+    }
   });
   assert.deepEqual(value,{services:[]});
   assert.equal(request.url.search,'?f=json');
   assert.equal(request.init.credentials,'omit');
   assert.ok(request.init.signal instanceof AbortSignal);
+  assert.equal(request.init.signal.aborted,false);
+  assert.equal(hooks.cancels,undefined);
+  assert.equal(hooks.releases,1);
 });
 
 test('safe ArcGIS JSON fetch confines requests and redirect targets to normalized roots',async()=>{
@@ -123,6 +130,64 @@ test('safe ArcGIS JSON fetch rejects bad status, content, size, JSONP and ArcGIS
   await reject(jsonResponse('callback({"ok":true})',`${root}?f=json`,{type:'application/javascript'}),/JSONP|content.?type|JSON/i);
   await reject(jsonResponse('{broken',`${root}?f=json`),/malformed|JSON/i);
   await reject(jsonResponse({error:{code:499,message:'Token Required'}},`${root}?f=json`),/499|Token Required|ArcGIS/i);
+});
+
+test('safe ArcGIS JSON fetch aborts and cancels every response rejected before body consumption',async()=>{
+  const root='https://maps.ottawa.ca/arcgis/rest/services/';
+  const cases=[
+    {label:'cross-root final URL',url:'https://evil.example/arcgis/rest/services/?f=json',pattern:/redirect|official|origin|root/i},
+    {label:'missing final URL',url:undefined,pattern:/final|response|URL/i},
+    {label:'changed final format',url:`${root}?f=pjson`,pattern:/preserve|f=json/i},
+    {label:'bad status',url:`${root}?f=json`,status:503,cancel:'throw',pattern:/503|status/i},
+    {label:'bad content type',url:`${root}?f=json`,type:'text/html',cancel:'reject',pattern:/content.?type|JSON/i},
+    {label:'invalid declared length',url:`${root}?f=json`,contentLength:'unknown',pattern:/invalid content length/i},
+    {label:'oversized declared length',url:`${root}?f=json`,contentLength:1_048_577,pattern:/size|large|limit/i}
+  ];
+  for(const scenario of cases){
+    const hooks={};
+    let requestSignal;
+    const response=jsonResponse({},scenario.url??`${root}?f=json`,scenario);
+    response.url=scenario.url;
+    response.body={
+      cancel(reason){
+        hooks.cancels=(hooks.cancels??0)+1;
+        hooks.cancelReason=reason;
+        if(scenario.cancel==='throw')throw new Error('cleanup exploded synchronously');
+        if(scenario.cancel==='reject')return Promise.reject(new Error('cleanup rejected asynchronously'));
+      },
+      getReader(){hooks.readerCalls=(hooks.readerCalls??0)+1;throw new Error('body must not be consumed');}
+    };
+    await assert.rejects(fetchArcGisJson(root,{
+      allowedOrigins:['https://maps.ottawa.ca'],allowedRoots:[root],
+      fetchImpl:async(_url,init)=>{requestSignal=init.signal;return response;}
+    }),scenario.pattern,scenario.label);
+    await Promise.resolve();
+    assert.equal(requestSignal.aborted,true,`${scenario.label} must abort the child request`);
+    assert.equal(hooks.cancels,1,`${scenario.label} must cancel its response body exactly once`);
+    assert.equal(hooks.readerCalls,undefined,`${scenario.label} must reject before acquiring a reader`);
+  }
+});
+
+test('safe ArcGIS early cleanup cancels and releases a reader when direct body cancellation is unavailable',async()=>{
+  const root='https://maps.ottawa.ca/arcgis/rest/services/';
+  const hooks={};
+  let requestSignal;
+  const response=jsonResponse({},`${root}?f=json`,{status:502});
+  response.body={getReader(){
+    hooks.readerCalls=(hooks.readerCalls??0)+1;
+    return {
+      cancel(){hooks.cancels=(hooks.cancels??0)+1;throw new Error('reader cleanup exploded');},
+      releaseLock(){hooks.releases=(hooks.releases??0)+1;}
+    };
+  }};
+  await assert.rejects(fetchArcGisJson(root,{
+    allowedOrigins:['https://maps.ottawa.ca'],allowedRoots:[root],
+    fetchImpl:async(_url,init)=>{requestSignal=init.signal;return response;}
+  }),/502|status/i);
+  assert.equal(requestSignal.aborted,true);
+  assert.equal(hooks.readerCalls,1);
+  assert.equal(hooks.cancels,1);
+  assert.equal(hooks.releases,1);
 });
 
 test('safe ArcGIS JSON fetch stops oversized streams with missing or false lengths before reading remaining chunks',async()=>{
@@ -179,12 +244,25 @@ test('safe ArcGIS JSON fetch preserves split UTF-8 boundaries and releases malfo
 
 test('safe ArcGIS JSON fetch fails closed when response body streaming is unavailable',async()=>{
   const root='https://maps.ottawa.ca/arcgis/rest/services/';
-  let textCalls=0;
+  let requestSignal,textCalls=0;
   const response={...jsonResponse({},`${root}?f=json`),body:null,text:async()=>{textCalls++;return '{}';}};
   await assert.rejects(fetchArcGisJson(root,{
-    allowedOrigins:['https://maps.ottawa.ca'],allowedRoots:[root],fetchImpl:async()=>response
+    allowedOrigins:['https://maps.ottawa.ca'],allowedRoots:[root],
+    fetchImpl:async(_url,init)=>{requestSignal=init.signal;return response;}
   }),/stream|body|unavailable/i);
+  assert.equal(requestSignal.aborted,true);
   assert.equal(textCalls,0);
+
+  const hooks={};
+  const unreadable={...jsonResponse({},`${root}?f=json`),body:{
+    cancel(){hooks.cancels=(hooks.cancels??0)+1;},
+    getReader(){hooks.readerCalls=(hooks.readerCalls??0)+1;throw new Error('reader unavailable');}
+  }};
+  await assert.rejects(fetchArcGisJson(root,{
+    allowedOrigins:['https://maps.ottawa.ca'],allowedRoots:[root],fetchImpl:async()=>unreadable
+  }),/stream|body|read/i);
+  assert.equal(hooks.readerCalls,1);
+  assert.equal(hooks.cancels,1);
 });
 
 test('safe ArcGIS JSON fetch aborts promptly while a response body is still pending',async()=>{

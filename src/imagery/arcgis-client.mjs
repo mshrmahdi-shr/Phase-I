@@ -65,32 +65,67 @@ function jsonContentType(value){
   return type==='application/json'||type.endsWith('+json')||type==='text/plain';
 }
 
-async function readBoundedJsonBody(response,{controller,aborted}){
+function releaseAfterCancellation(reader,cancellation){
+  let released=false;
+  const release=()=>{
+    if(released||typeof reader?.releaseLock!=='function')return;
+    try{reader.releaseLock();released=true;}catch{}
+  };
+  if(cancellation)Promise.resolve(cancellation).catch(()=>{}).finally(release);
+  release();
+  return release;
+}
+
+function responseCleanup(response,controller){
+  let cleaned=false;
+  return reason=>{
+    if(cleaned)return;
+    cleaned=true;
+    try{
+      let body;
+      try{body=response?.body;}catch{}
+      if(body){
+        let cancel;
+        try{cancel=body.cancel;}catch{}
+        if(typeof cancel==='function'){
+          try{Promise.resolve(cancel.call(body,reason)).catch(()=>{});}catch{}
+        }else{
+          let reader;
+          try{reader=typeof body.getReader==='function'?body.getReader():null;}catch{}
+          if(reader){
+            let cancellation;
+            try{cancellation=typeof reader.cancel==='function'?reader.cancel(reason):null;}catch{}
+            releaseAfterCancellation(reader,cancellation);
+          }
+        }
+      }
+    }finally{
+      if(!controller.signal.aborted)controller.abort(reason);
+    }
+  };
+}
+
+async function readBoundedJsonBody(response,{controller,aborted,onReaderAcquired}){
   if(!response.body||typeof response.body.getReader!=='function'){
     fail('ArcGIS metadata response body streaming is unavailable');
   }
   let reader;
   try{reader=response.body.getReader();}catch{fail('ArcGIS metadata response body stream cannot be read');}
-  if(!reader||typeof reader.read!=='function'||typeof reader.cancel!=='function'||typeof reader.releaseLock!=='function'){
-    fail('ArcGIS metadata response body stream reader is invalid');
-  }
+  onReaderAcquired();
 
-  let complete=false,cancelled=false,released=false;
-  const release=()=>{
-    if(released)return;
-    try{reader.releaseLock();released=true;}catch{}
-  };
+  let complete=false,cancelled=false,cancellation,release=()=>{};
   const cancel=reason=>{
     if(cancelled)return;
     cancelled=true;
-    let cancellation;
-    try{cancellation=Promise.resolve(reader.cancel(reason));}catch{release();return;}
-    cancellation.catch(()=>{}).finally(release);
-    release();
+    try{cancellation=typeof reader?.cancel==='function'?reader.cancel(reason):null;}catch{}
+    release=releaseAfterCancellation(reader,cancellation);
   };
   const decoder=new TextDecoder('utf-8',{fatal:true});
   let byteLength=0,body='';
   try{
+    if(!reader||typeof reader.read!=='function'||typeof reader.cancel!=='function'||typeof reader.releaseLock!=='function'){
+      fail('ArcGIS metadata response body stream reader is invalid');
+    }
     while(true){
       const chunk=await Promise.race([Promise.resolve().then(()=>reader.read()),aborted]);
       if(!chunk||typeof chunk!=='object'||typeof chunk.done!=='boolean')fail('ArcGIS metadata response body stream returned an invalid chunk');
@@ -109,8 +144,12 @@ async function readBoundedJsonBody(response,{controller,aborted}){
       }
       try{body+=decoder.decode(chunk.value,{stream:true});}catch{fail('ArcGIS metadata response contains malformed UTF-8');}
     }
+  }catch(error){
+    if(!complete&&!controller.signal.aborted)controller.abort(error);
+    throw error;
   }finally{
     if(!complete)cancel(controller.signal.reason);
+    else releaseAfterCancellation(reader,null);
     release();
   }
 }
@@ -135,32 +174,39 @@ export async function fetchArcGisJson(url,{signal,fetchImpl=globalThis.fetch,all
       })),
       aborted
     ]);
-    if(!response||typeof response!=='object')fail('ArcGIS metadata response is invalid');
-    if(typeof response.url!=='string'||!response.url)fail('ArcGIS metadata response did not expose its final redirect URL');
-    const rawFinalUrl=new URL(response.url);
-    const finalFormats=rawFinalUrl.searchParams.getAll('f');
-    if(finalFormats.length!==1||finalFormats[0]!=='json')fail('ArcGIS final redirect URL did not preserve f=json');
-    safeRequestUrl(response.url,context,'ArcGIS final redirect URL');
-    if(!response.ok)throw new Error(`ArcGIS metadata request failed with HTTP status ${response.status}`);
-    if(!jsonContentType(response.headers?.get?.('content-type')))fail('ArcGIS metadata response has an unsupported JSON content-type');
-    const declared=response.headers?.get?.('content-length');
-    if(declared!==null&&declared!==undefined&&declared!==''){
-      const bytes=Number(declared);
-      if(!Number.isFinite(bytes)||bytes<0)fail('ArcGIS metadata response has an invalid content length');
-      if(bytes>MAX_JSON_BYTES)fail(`ArcGIS metadata response exceeds the ${MAX_JSON_BYTES}-byte size limit`);
+    const cleanup=responseCleanup(response,controller);
+    let readerAcquired=false;
+    try{
+      if(!response||typeof response!=='object')fail('ArcGIS metadata response is invalid');
+      if(typeof response.url!=='string'||!response.url)fail('ArcGIS metadata response did not expose its final redirect URL');
+      const rawFinalUrl=new URL(response.url);
+      const finalFormats=rawFinalUrl.searchParams.getAll('f');
+      if(finalFormats.length!==1||finalFormats[0]!=='json')fail('ArcGIS final redirect URL did not preserve f=json');
+      safeRequestUrl(response.url,context,'ArcGIS final redirect URL');
+      if(!response.ok)throw new Error(`ArcGIS metadata request failed with HTTP status ${response.status}`);
+      if(!jsonContentType(response.headers?.get?.('content-type')))fail('ArcGIS metadata response has an unsupported JSON content-type');
+      const declared=response.headers?.get?.('content-length');
+      if(declared!==null&&declared!==undefined&&declared!==''){
+        const bytes=Number(declared);
+        if(!Number.isFinite(bytes)||bytes<0)fail('ArcGIS metadata response has an invalid content length');
+        if(bytes>MAX_JSON_BYTES)fail(`ArcGIS metadata response exceeds the ${MAX_JSON_BYTES}-byte size limit`);
+      }
+      const body=await readBoundedJsonBody(response,{controller,aborted,onReaderAcquired:()=>{readerAcquired=true;}});
+      if(/^\s*[A-Za-z_$][\w$.[\]]*\s*\(/.test(body))fail('ArcGIS JSONP responses are not accepted');
+      let value;
+      try{value=JSON.parse(body);}catch{fail('ArcGIS metadata response contains malformed JSON');}
+      if(value===null||typeof value!=='object'||Array.isArray(value))fail('ArcGIS metadata response must be a JSON object');
+      if(value.error&&typeof value.error==='object'){
+        const code=Number.isFinite(value.error.code)?` ${value.error.code}`:'';
+        const message=typeof value.error.message==='string'&&value.error.message.trim()?`: ${value.error.message}`:'';
+        const details=Array.isArray(value.error.details)&&value.error.details.length?` (${value.error.details.join('; ')})`:'';
+        throw new Error(`ArcGIS error${code}${message}${details}`);
+      }
+      return value;
+    }catch(error){
+      if(!readerAcquired)cleanup(error);
+      throw error;
     }
-    const body=await readBoundedJsonBody(response,{controller,aborted});
-    if(/^\s*[A-Za-z_$][\w$.[\]]*\s*\(/.test(body))fail('ArcGIS JSONP responses are not accepted');
-    let value;
-    try{value=JSON.parse(body);}catch{fail('ArcGIS metadata response contains malformed JSON');}
-    if(value===null||typeof value!=='object'||Array.isArray(value))fail('ArcGIS metadata response must be a JSON object');
-    if(value.error&&typeof value.error==='object'){
-      const code=Number.isFinite(value.error.code)?` ${value.error.code}`:'';
-      const message=typeof value.error.message==='string'&&value.error.message.trim()?`: ${value.error.message}`:'';
-      const details=Array.isArray(value.error.details)&&value.error.details.length?` (${value.error.details.join('; ')})`:'';
-      throw new Error(`ArcGIS error${code}${message}${details}`);
-    }
-    return value;
   }finally{
     clearTimeout(timer);
     controller.signal.removeEventListener('abort',rejectAbort);
