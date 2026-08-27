@@ -128,6 +128,62 @@ test('template import previews without mutation and replaces only after explicit
   assert.equal(store.values.has('logo-old'),false);assert.equal(store.values.size,1);
 });
 
+test('successful import retires a staged manual logo so a later text save keeps the imported asset',async t=>{
+  const old=await asset(),incoming=await asset('logo-import-source','Imported Brand'),store=memoryStore([old]);
+  const template=await exportCompanyTemplate({profile:incoming.profile,assetStore:memoryStore([incoming]),Zip:JSZip});
+  const fixture=setup({persisted:old.profile,store});t.after(()=>{fixture.controller.destroy();fixture.dom.window.close();});
+  await fixture.controller.refresh();await fixture.controller.open();const document=fixture.dom.window.document,logoInput=document.getElementById('companyLogo');
+  fixture.dom.window.createImageBitmap=async()=>({width:640,height:320,close(){}});
+  await logoInput.onchange({target:{files:[new Blob([PNG],{type:'image/png'})]}});
+  Object.defineProperty(logoInput,'value',{value:'C:\\fakepath\\manual-a.png',writable:true,configurable:true});
+  fixture.dom.window.createImageBitmap=async()=>({width:320,height:160,close(){}});
+  await document.getElementById('importCompanyTemplateFile').onchange({target:{files:[template.blob],value:'template-b.zip'}});
+  assert.equal(await document.getElementById('confirmCompanyImport').onclick(),true);
+  const importedId=fixture.saved.logoAssetId;
+  assert.equal(logoInput.value,'');assert.equal(store.values.size,1);assert.equal(store.values.has(importedId),true);
+  await fixture.controller.open();document.getElementById('companyName').value='Imported Brand Edited';
+  assert.equal(await document.getElementById('companyProfileForm').onsubmit({preventDefault(){}}),true);
+  assert.equal(fixture.saved.logoAssetId,importedId);assert.equal(fixture.saved.logoWidth,320);
+  assert.deepEqual([...store.values.keys()],[importedId]);
+});
+
+test('successful import clears a stale manual logo error before a later text save',async t=>{
+  const old=await asset(),incoming=await asset('logo-import-source','Valid Imported Brand'),store=memoryStore([old]);
+  const template=await exportCompanyTemplate({profile:incoming.profile,assetStore:memoryStore([incoming]),Zip:JSZip});
+  const fixture=setup({persisted:old.profile,store});t.after(()=>{fixture.controller.destroy();fixture.dom.window.close();});
+  await fixture.controller.refresh();await fixture.controller.open();const document=fixture.dom.window.document,logoInput=document.getElementById('companyLogo');
+  await logoInput.onchange({target:{files:[new Blob(['not an image'],{type:'image/png'})]}});
+  assert.match(document.getElementById('logoError').textContent,/signature|PNG or JPEG/i);
+  await document.getElementById('importCompanyTemplateFile').onchange({target:{files:[template.blob],value:'template-b.zip'}});
+  assert.equal(await document.getElementById('confirmCompanyImport').onclick(),true);
+  const importedId=fixture.saved.logoAssetId;
+  assert.equal(document.getElementById('logoError').textContent,'');assert.equal(logoInput.getAttribute('aria-invalid'),null);
+  await fixture.controller.open();document.getElementById('companyName').value='Valid Imported Brand Edited';
+  assert.equal(await document.getElementById('companyProfileForm').onsubmit({preventDefault(){}}),true);
+  assert.equal(fixture.saved.logoAssetId,importedId);assert.deepEqual([...store.values.keys()],[importedId]);
+});
+
+test('failed import preserves a staged manual logo for saving after import cancellation',async t=>{
+  const old=await asset(),incoming=await asset('logo-import-source','Rejected Import'),store=memoryStore([old]);
+  const template=await exportCompanyTemplate({profile:incoming.profile,assetStore:memoryStore([incoming]),Zip:JSZip});
+  let saved=structuredClone(old.profile),rejectImport=true;
+  const fixture=setup({persisted:old.profile,store,saveProfile:profile=>{if(rejectImport)throw Error('metadata unavailable');saved=structuredClone(profile);}});
+  t.after(()=>{fixture.controller.destroy();fixture.dom.window.close();});
+  await fixture.controller.refresh();await fixture.controller.open();const document=fixture.dom.window.document,logoInput=document.getElementById('companyLogo');
+  fixture.dom.window.createImageBitmap=async()=>({width:640,height:320,close(){}});
+  await logoInput.onchange({target:{files:[new Blob([PNG],{type:'image/png'})]}});
+  Object.defineProperty(logoInput,'value',{value:'C:\\fakepath\\manual-a.png',writable:true,configurable:true});
+  fixture.dom.window.createImageBitmap=async()=>({width:320,height:160,close(){}});
+  await document.getElementById('importCompanyTemplateFile').onchange({target:{files:[template.blob],value:'template-b.zip'}});
+  assert.equal(await document.getElementById('confirmCompanyImport').onclick(),false);
+  assert.equal(logoInput.value,'C:\\fakepath\\manual-a.png');assert.deepEqual([...store.values.keys()],['logo-old']);
+  assert.equal(document.getElementById('cancelCompanyImport').onclick(),true);
+  rejectImport=false;document.getElementById('companyName').value='Manual Draft Saved';
+  assert.equal(await document.getElementById('companyProfileForm').onsubmit({preventDefault(){}}),true);
+  assert.equal(saved.companyName,'Manual Draft Saved');assert.equal(saved.logoWidth,640);assert.notEqual(saved.logoAssetId,'logo-old');
+  assert.equal(store.values.size,1);assert.equal(store.values.has(saved.logoAssetId),true);assert.equal(store.values.has('logo-old'),false);
+});
+
 test('template export downloads safely, revokes its URL, and closing edit restores keyboard focus',async t=>{
   const current=await asset(),fixture=setup({persisted:current.profile,store:memoryStore([current])});
   const document=fixture.dom.window.document,edit=document.getElementById('editCompanyProfile');

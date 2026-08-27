@@ -109,6 +109,10 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
   }
   function fieldControl(field){return byId(FIELD_IDS[field]||({logoAssetId:'companyLogo',logoPlacement:'companyLogoScale'}[field]));}
   function clearErrors(){for(const [field,id] of Object.entries(ERROR_IDS)){byId(id).textContent='';fieldControl(field)?.removeAttribute('aria-invalid');}}
+  function retireManualLogoDraft(){
+    logoGeneration++;pendingLogo=null;selectedLogo=null;logoSelectionError=null;
+    const input=byId('companyLogo');input.value='';input.removeAttribute('aria-invalid');byId('logoError').textContent='';
+  }
   function showErrors(errors){
     clearErrors();
     for(const error of errors){const node=byId(ERROR_IDS[error.field]),control=fieldControl(error.field);if(node)node.textContent=error.message;control?.setAttribute('aria-invalid','true');}
@@ -270,6 +274,7 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
       try{
         const result=await saveProfile(profile);if(result===false)throw new Error('Company profile metadata could not be saved.');
       }catch(error){try{await assetStore.delete(profile.logoAssetId);}catch{}throw error;}
+      retireManualLogoDraft();
       if(destroyed)current=snapshotCompanyProfile(profile);else await notify(profile);
       let cleanupWarning='';if(old?.logoAssetId&&old.logoAssetId!==profile.logoAssetId){try{await assetStore.delete(old.logoAssetId);}catch{cleanupWarning=' The older logo could not be cleaned up.';}}
       if(!destroyed){
