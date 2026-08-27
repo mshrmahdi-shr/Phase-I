@@ -184,7 +184,7 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
       });
     }
   });
-  await t.test('native preview refuses imported extents below the shared figure minimum',async()=>{
+  await t.test('native preview treats imported extent as display metadata rather than a geometry minimum',async()=>{
     choose('A');p.figures.A.extentMeters=100;
     // jsdom cannot navigate after JSON import; assert that expected boundary
     // without treating its navigation diagnostic as an application failure.
@@ -192,6 +192,7 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
     await $('importJson').onchange({target:{files:[{text:async()=>JSON.stringify(p)}]}});
     assert.equal(navigation.length,1);assert.match(navigation[0].message,/navigation/);
     assert.equal(await $('printA3').onclick(),false);
-    assert.match($('printStatus').textContent,/500 m/);$('closePrint').click();
+    assert.doesNotMatch($('printStatus').textContent,/500 m/);
+    assert.match($('printStatus').textContent,/No map tiles/i);$('closePrint').click();
   });
 });

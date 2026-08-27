@@ -22,15 +22,12 @@ export function metricScale(bounds,pixelWidth,maxPixelWidth=160){
 export function sheetGeometry(project,code,dpi=300){
   const defaults=figureDefaults(),figure=project?.figures?.[code];
   if(!defaults[code]||!figure)throw new Error('Choose a valid figure A-E.');
-  if(!Number.isFinite(dpi)||dpi<72||dpi>300)throw new Error('Unsafe composition DPI; choose 300 DPI (or 150 DPI).');
-  if(!Number.isFinite(figure.extentMeters)||figure.extentMeters<defaults[code].extentMeters)throw new Error(`Figure ${code} requires at least ${defaults[code].extentMeters} m.`);
-  const minimum=figureBounds(project.location,defaults[code].extentMeters);
+  if(![150,300].includes(dpi))throw new Error('Unsafe composition DPI; choose 300 DPI (or 150 DPI).');
   let required;
   if(figure.bounds!=null){
     if(!validFigureBounds(figure.bounds,project.location))throw new Error(`Figure ${code}: keep SITE inside the saved A3 view.`);
-    required={north:Math.max(figure.bounds.north,minimum.north),south:Math.min(figure.bounds.south,minimum.south),
-      east:Math.max(figure.bounds.east,minimum.east),west:Math.min(figure.bounds.west,minimum.west)};
-  }else required=figureBounds(project.location,figure.extentMeters);
+    required={...figure.bounds};
+  }else required=figureBounds(project.location,defaults[code].extentMeters);
   if(required.west<-180||required.east>180||required.south<-85||required.north>85)throw new Error('This sheet crosses the supported Mercator map bounds; reduce its extent.');
   const mapFrame={x:9.3,y:9.3,width:332.4,height:278.4};
   const sw=projectPoint([required.west,required.south]),ne=projectPoint([required.east,required.north]);
@@ -49,9 +46,9 @@ export function captureFigureView(project,code,bounds){
   const defaults=figureDefaults();
   if(!defaults[code]||!project?.figures?.[code])throw new Error('Choose a valid figure A-E.');
   if(!validFigureBounds(bounds,project.location))throw new Error('Keep SITE visible inside the map before saving this A3 view.');
-  const draft={...project,figures:{...project.figures,[code]:{...project.figures[code],extentMeters:defaults[code].extentMeters,bounds:{...bounds}}}};
+  const draft={...project,figures:{...project.figures,[code]:{...project.figures[code],bounds:{...bounds}}}};
   const geometry=sheetGeometry(draft,code,150);
-  return {bounds:geometry.bounds,extentMeters:Math.max(defaults[code].extentMeters,Math.ceil(groundHeight(geometry.bounds)))};
+  return {bounds:geometry.bounds,extentMeters:Math.ceil(groundHeight(geometry.bounds))};
 }
 export function mapPoint(point,geometry,width=geometry.raster.width,height=geometry.raster.height){
   const [x,y]=projectPoint(point),b=geometry.projected;
