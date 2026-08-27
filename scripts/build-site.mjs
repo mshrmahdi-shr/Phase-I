@@ -19,7 +19,7 @@ export function releaseModuleSource(source,revision){
   const versioned=url=>releaseUrl(url,revision);
   return source
     .replace(relativeStaticModuleSpecifier,(match,_quote,url)=>match.replace(url,versioned(url)))
-    .replace(/(new URL\(\s*['\"])(\.\.\/(?:vendor|assets\/fonts)\/[^'\"]+)(['\"]\s*,\s*import\.meta\.url\s*\))/g,(_,before,url,after)=>before+versioned(url)+after);
+    .replace(/(new URL\(\s*['\"])((?:\.\.\/)+(?:vendor|assets\/fonts)\/[^'\"]+)(['\"]\s*,\s*import\.meta\.url\s*\))/g,(_,before,url,after)=>before+versioned(url)+after);
 }
 
 async function versionModuleTree(directory,revision){
@@ -43,7 +43,7 @@ export async function buildSite({output=path.join(root,'_site'),revision=process
   await versionModuleTree(path.join(output,'src'),revision);
   await fs.mkdir(path.join(output,'vendor'),{recursive:true});
   await fs.mkdir(path.join(output,'assets/fonts'),{recursive:true});
-  for(const [from,to] of [['node_modules/jspdf/dist/jspdf.umd.min.js','vendor/jspdf.umd.min.js'],['node_modules/jspdf/LICENSE','vendor/jspdf.LICENSE'],['assets/fonts/DejaVuSans.ttf','assets/fonts/DejaVuSans.ttf'],['assets/fonts/LICENSE.txt','assets/fonts/LICENSE.txt']])await fs.copyFile(path.join(root,from),path.join(output,to));
+  for(const [from,to] of [['node_modules/jspdf/dist/jspdf.umd.min.js','vendor/jspdf.umd.min.js'],['node_modules/jspdf/LICENSE','vendor/jspdf.LICENSE'],['node_modules/geotiff/dist-browser/geotiff.js','vendor/geotiff.js'],['node_modules/geotiff/LICENSE','vendor/geotiff.LICENSE'],['assets/fonts/DejaVuSans.ttf','assets/fonts/DejaVuSans.ttf'],['assets/fonts/LICENSE.txt','assets/fonts/LICENSE.txt']])await fs.copyFile(path.join(root,from),path.join(output,to));
   await fs.writeFile(path.join(output,'version.json'),JSON.stringify({revision,builtAt:new Date().toISOString()},null,2));
   console.log('Pages source staged in '+output);
 }
