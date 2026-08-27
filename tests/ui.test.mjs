@@ -28,6 +28,7 @@ test('index exposes the core Phase I workflow controls', () => {
     'editCompanyProfile','exportCompanyTemplate','importCompanyTemplate','companyProfileDialog','printCompanyLogo','printCompanyName','printCompanyContact']) {
     assert.match(html,new RegExp(`id=["']${id}["']`),`missing #${id}`);
   }
+  assert.match(html,/Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels\./);
 });
 
 test('print panel stays visible until all live requirements are corrected',async()=>{
@@ -55,8 +56,9 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   for(const key of ['window','document','navigator','localStorage','location','DOMParser','Element'])Object.defineProperty(globalThis,key,{value:key==='window'?dom.window:dom.window[key],configurable:true,writable:true});
   const L=(await import('leaflet')).default;globalThis.L=L;globalThis.JSZip=(await import('jszip')).default;
   L.Browser.svg=true;
-  let map;L.Map.addInitHook(function(){map=this;});
+  let map,drawingBindings;L.Map.addInitHook(function(){map=this;});
   const document=dom.window.document,$=id=>document.getElementById(id),container=$('map');
+  let oldBindingsAborted=false;document[Symbol.for('phase-i-esa.drawing-bindings')]={abort(){oldBindingsAborted=true;}};
   Object.defineProperties(container,{clientWidth:{value:900},clientHeight:{value:650}});
   const p={...createProject({name:'QA',projectNo:'FE 26-15876',address:'Toronto',date:'2026-08-26'}),location:{lat:43.65,lng:-79.38}};
   localStorage.setItem('phase-i-esa-project-v2',JSON.stringify(p));
@@ -68,10 +70,36 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
     sha256:'0'.repeat(64),createdAt:'2026-08-26T12:00:00Z'},blob:logoBlob});
   globalThis.createImageBitmap=dom.window.createImageBitmap=async()=>({width:1,height:1,close(){}});
   globalThis.fetch=async()=>{throw Error('No network in this test');};
-  t.after(async()=>{map?.remove();await companyAssets.close();dom.window.close();for(const [key,descriptor] of Object.entries(previous))descriptor?Object.defineProperty(globalThis,key,descriptor):delete globalThis[key];});
+  t.after(async()=>{if(drawingBindings){dom.window.dispatchEvent(new dom.window.Event('pagehide'));assert.equal(drawingBindings.signal.aborted,true,'drawing listeners abort during page teardown');}map?.remove();await companyAssets.close();dom.window.close();for(const [key,descriptor] of Object.entries(previous))descriptor?Object.defineProperty(globalThis,key,descriptor):delete globalThis[key];});
   await import('../app.js?source-integration');
+  drawingBindings=document[Symbol.for('phase-i-esa.drawing-bindings')];assert.equal(oldBindingsAborted,true,'module replacement aborts the prior drawing listeners');
   const choose=code=>[...document.querySelectorAll('.figure-row')].find(row=>row.querySelector('.figure-code').textContent===`FIGURE ${code}`).querySelector('button').click();
   assert.equal($('projectNo').value,'FE 26-15876');assert.equal($('projectNo').placeholder,'AB-12345');
+  container.scrollIntoView=()=>{};
+  $('drawSite').click();
+  for(const [lat,lng] of [[43.65,-79.38],[43.65,-79.37],[43.66,-79.37]])map.fire('click',{latlng:L.latLng(lat,lng)});
+  document.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true}));
+  let saved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2'));
+  assert.deepEqual(saved.siteBoundary,[[-79.38,43.65],[-79.37,43.65],[-79.37,43.66],[-79.38,43.65]]);
+  assert.equal($('drawState').textContent,'Site boundary completed.');
+  const inactiveMenu=new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true});container.dispatchEvent(inactiveMenu);
+  assert.equal(inactiveMenu.defaultPrevented,false,'inactive map context menu stays available');
+  $('drawBuilding').click();
+  for(const [lat,lng] of [[43.651,-79.379],[43.651,-79.378],[43.652,-79.378]])map.fire('click',{latlng:L.latLng(lat,lng)});
+  const outsideMenu=new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true});$('drawState').dispatchEvent(outsideMenu);
+  assert.equal(outsideMenu.defaultPrevented,false,'an active draft does not block context menus outside the map');
+  assert.equal($('drawState').textContent,'Drawing building');
+  const activeMenu=new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true});container.dispatchEvent(activeMenu);
+  assert.equal(activeMenu.defaultPrevented,true,'active map context menu finishes instead of opening');
+  saved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2'));
+  assert.deepEqual(saved.buildingBoundary,[[-79.379,43.651],[-79.378,43.651],[-79.378,43.652],[-79.379,43.651]]);
+  assert.equal($('drawState').textContent,'Building boundary completed.');
+  $('drawSite').click();
+  for(const [lat,lng] of [[43.653,-79.379],[43.653,-79.377],[43.654,-79.377],[43.654,-79.379]])map.fire('click',{latlng:L.latLng(lat,lng)});
+  $('undoPoint').click();$('finishDraw').click();
+  saved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2'));
+  assert.deepEqual(saved.siteBoundary,[[-79.379,43.653],[-79.377,43.653],[-79.377,43.654],[-79.379,43.653]],'buttons share the controller draft and finish paths');
+  $('clearGeometry').click();
   choose('C');
   const layers=()=>Object.values(map._layers).filter(layer=>layer instanceof L.TileLayer);
   assert.equal(layers().length,1);assert.match(layers()[0]._url,/toporama_en$/);

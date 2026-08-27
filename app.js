@@ -10,9 +10,13 @@ import {exportCombinedPdf} from './src/pdf-export.mjs';
 import {createAssetStore} from './src/asset-store.mjs';
 import {normalizeCompanyProfile} from './src/company-profile.mjs';
 import {createCompanyProfileDialog} from './src/company-ui.mjs';
+import {createDrawingController} from './src/drawing-controller.mjs';
 const $=id=>document.getElementById(id), STORAGE='phase-i-esa-project-v2', COMPANY_STORAGE='phase-i-esa-company-profile-v1', MRD='./data/mrd128.kml';
+const DRAWING_BINDINGS=Symbol.for('phase-i-esa.drawing-bindings');
+document[DRAWING_BINDINGS]?.abort();
+const drawingBindings=new window.AbortController();document[DRAWING_BINDINGS]=drawingBindings;
 let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject()})();
-let active='A',draw=null,pts=[],siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,exportBusy=false,companyProfile=null,printBranding=null;
+let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,exportBusy=false,companyProfile=null,printBranding=null;
 const assetStore=createAssetStore();
 function loadCompanyProfile(){try{const saved=localStorage.getItem(COMPANY_STORAGE);return saved?normalizeCompanyProfile(JSON.parse(saved)):null;}catch{return null;}}
 function saveCompanyProfile(profile){const normalized=normalizeCompanyProfile(profile);localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized));return normalized;}
@@ -87,25 +91,26 @@ function setMarker(p){
   siteMarker.on('dragend',()=>{const q=siteMarker.getLatLng();siteChanged({lat:q.lat,lng:q.lng});});
   $('coords').textContent=`${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`;
 }
-function stopDrawing(){draw=null;pts=[];draft?.remove();draft=null;$('drawState').textContent='Idle';map.getContainer().style.cursor='';map.doubleClickZoom.enable();}
-function begin(mode){if(exportBusy)return;stopDrawing();draw=mode;$('drawState').textContent=mode==='marker'?'Tap site':mode==='site'?'Drawing site':'Drawing building';map.getContainer().style.cursor='crosshair';map.doubleClickZoom.disable();$('map').scrollIntoView({behavior:'smooth',block:'center'});}
-function drawDraft(){draft?.remove();draft=pts.length?L.polyline(pts.map(([x,y])=>[y,x]),{color:'#fbbf24',dashArray:'7 5'}).addTo(map):null;}
-$('setSite').onclick=()=>begin('marker');$('drawSite').onclick=()=>begin('site');$('drawBuilding').onclick=()=>begin('building');
-$('undoPoint').onclick=()=>{pts.pop();drawDraft();};
-$('clearGeometry').onclick=()=>{stopDrawing();project.siteBoundary=[];project.buildingBoundary=[];redraw();save();};
-map.on('click',e=>{
-  if(!draw||exportBusy)return;
-  if(draw==='marker'){siteChanged({lat:e.latlng.lat,lng:e.latlng.lng});stopDrawing();return;}
-  pts.push([e.latlng.lng,e.latlng.lat]);drawDraft();
+function deactivateDrawing(){map.getContainer().style.cursor='';map.doubleClickZoom.enable();}
+const drawingController=createDrawingController({closeRing,validBoundary,
+  onDraft:points=>{draft?.remove();draft=points.length?L.polyline(points.map(([x,y])=>[y,x]),{color:'#fbbf24',dashArray:'7 5'}).addTo(map):null;},
+  onCommit:(mode,ring)=>{if(mode==='site')project.siteBoundary=ring;else project.buildingBoundary=ring;deactivateDrawing();redraw();save();},
+  onCancel:()=>deactivateDrawing(),onStatus:message=>$('drawState').textContent=message
 });
-$('finishDraw').onclick=()=>{
-  if(!draw)return;
-  if(draw==='marker'){stopDrawing();return;}
-  const ring=closeRing(pts);
-  if(!validBoundary(ring)){$('drawState').textContent='Use 3+ corners; no crossing edges';return;}
-  if(draw==='site')project.siteBoundary=ring;else project.buildingBoundary=ring;
-  stopDrawing();redraw();save();
-};
+function beginDrawing(mode){if(exportBusy)return;drawingController.begin(mode);map.getContainer().style.cursor='crosshair';map.doubleClickZoom.disable();$('map').scrollIntoView({behavior:'smooth',block:'center'});}
+$('setSite').onclick=()=>beginDrawing('marker');$('drawSite').onclick=()=>beginDrawing('site');$('drawBuilding').onclick=()=>beginDrawing('building');
+$('undoPoint').onclick=()=>drawingController.undo();
+$('finishDraw').onclick=()=>drawingController.finish();
+$('clearGeometry').onclick=()=>{drawingController.cancel();project.siteBoundary=[];project.buildingBoundary=[];redraw();save();};
+map.on('click',e=>{
+  const mode=drawingController.state().mode;
+  if(!mode||exportBusy)return;
+  if(mode==='marker'){siteChanged({lat:e.latlng.lat,lng:e.latlng.lng});drawingController.cancel();return;}
+  drawingController.add([e.latlng.lng,e.latlng.lat]);
+});
+document.addEventListener('keydown',event=>drawingController.handleKey(event),{signal:drawingBindings.signal});
+map.getContainer().addEventListener('contextmenu',event=>drawingController.handleContextMenu(event),{signal:drawingBindings.signal});
+window.addEventListener('pagehide',()=>{drawingBindings.abort();if(document[DRAWING_BINDINGS]===drawingBindings)delete document[DRAWING_BINDINGS];},{once:true,signal:drawingBindings.signal});
 function redraw(){siteLayer?.remove();buildingLayer?.remove();if(project.siteBoundary?.length)siteLayer=L.polygon(project.siteBoundary.map(([x,y])=>[y,x]),{color:'#ef4444',weight:4,fill:false}).addTo(map);if(project.buildingBoundary?.length)buildingLayer=L.polygon(project.buildingBoundary.map(([x,y])=>[y,x]),{color:'#111827',weight:3,dashArray:'6 4',fillColor:'#fff',fillOpacity:.1}).addTo(map)}
 function renderFigures(){const h=$('figureList');h.innerHTML='';for(const [c,f] of Object.entries(project.figures)){const d=document.createElement('div');d.className='figure-row'+(c===active?' active':'');d.innerHTML=`<div class="figure-top"><div><div class="figure-code">FIGURE ${c}</div><div class="figure-title">${esc(f.title)}</div></div><span class="badge" title="${f.bounds?'Saved A3 map span':'Default A3 map span'}">${fmt(f.extentMeters)}</span></div><div class="figure-actions"><button title="${f.bounds?'Restore the saved A3 map position and zoom':'Show the current A3 map extent'}">${f.bounds?'View saved':'View'}</button><button title="Save the current map position and zoom for A3/PDF">${f.bounds?'Update A3 view':'Use for A3'}</button></div>`;d.children[1].children[0].onclick=()=>selectFig(c,true);d.children[1].children[1].onclick=()=>useForA3(c);h.appendChild(d)}}
 function fmt(m){return m>=1000?`${m/1000} km`:`${m} m`;}
@@ -117,7 +122,7 @@ function requiredGeologyBounds(kind='surficial',includeView=false){
 }
 function selectFig(code,fit){
   if(exportBusy)return;
-  active=code;stopDrawing();renderFigures();
+  active=code;drawingController.cancel();renderFigures();
   setBasemap(assignedBasemap());
   if(fit)zoom(code);renderGeo();detect();refreshPrint();preflight.refresh();
   const kind=geologyKind();
@@ -258,11 +263,11 @@ function printState(){
 }
 preflight=createPreflight({document,getState:printState});
 printSession=createPrintSession({document,map,validate:()=>preflight.check(),fit:()=>zoom(active,true),render:()=>{renderGeo();refreshPrint();updateScale();},waitForTiles:()=>waitForMapTiles($('map')),onRestore:()=>{renderGeo();updateScale();}});
-$('printA3').onclick=async()=>{if(exportBusy)return false;stopDrawing();setBasemap(assignedBasemap());try{printBranding=await companyDialog.outputSnapshot(companyProfile);renderCompanyBrand(printBranding);return await printSession.open();}catch(error){printBranding=null;status('saveMessage',`A3 output blocked: ${error.message}`,'error');await companyDialog.refresh();preflight.check();await companyDialog.open();return false;}};
+$('printA3').onclick=async()=>{if(exportBusy)return false;drawingController.cancel();setBasemap(assignedBasemap());try{printBranding=await companyDialog.outputSnapshot(companyProfile);renderCompanyBrand(printBranding);return await printSession.open();}catch(error){printBranding=null;status('saveMessage',`A3 output blocked: ${error.message}`,'error');await companyDialog.refresh();preflight.check();await companyDialog.open();return false;}};
 $('closePrint').onclick=()=>{printSession.close();printBranding=null;};
 $('confirmPrint').onclick=()=>{if(!$('confirmPrint').disabled&&preflight.check())window.print();};
-window.addEventListener('afterprint',()=>{printSession.close();printBranding=null;});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('exportDialog').hidden&&$('companyProfileDialog').hidden){printSession.close();printBranding=null;}});
+window.addEventListener('afterprint',()=>{printSession.close();printBranding=null;},{signal:drawingBindings.signal});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('exportDialog').hidden&&$('companyProfileDialog').hidden){printSession.close();printBranding=null;}},{signal:drawingBindings.signal});
 function datasets(){return Object.fromEntries(['surficial','bedrock'].map(kind=>[kind,{features:geoReady[kind]?geo[kind]:[],source:geoSource[kind],coverage:geoCoverage[kind]}]));}
 let busyControls=[],busyHandlers=[];
 function setExportBusy(value){
