@@ -16,6 +16,7 @@
       <button id="editCompanyProfile" class="ghost">Edit Company Profile</button>
       <button id="exportCompanyTemplate" class="ghost">Export Company Template</button>
       <button id="importCompanyTemplate" class="ghost">Import Company Template</button>
+      <button id="manageHistoricalHeader" class="ghost">Historical Imagery</button>
       <input id="importCompanyTemplateFile" type="file" accept=".zip,.phasei-template.zip,application/zip" hidden />
       <button id="newProject" class="ghost">New Project</button><button id="saveProject" class="primary">Save</button>
     </div>
@@ -39,11 +40,11 @@
       </section>
 
       <section>
-        <div class="section-heading"><h2>Imagery</h2><span class="badge">High-res source</span></div>
-        <label>Current / historical aerial<input id="uploadAerial" type="file" accept="image/*,.tif,.tiff" /></label>
-        <div class="two-col"><label>Year<input id="aerialYear" type="number" min="1900" max="2100" placeholder="1960" /></label><label>Composition DPI<select id="dpi"><option>150</option><option selected>300</option><option value="600">600 (too large for A3)</option></select></label></div>
+        <div class="section-heading"><h2>Imagery</h2><span class="badge">Official + manual</span></div>
+        <button id="manageHistorical" class="primary wide">Find or add historical imagery</button>
+        <label>Composition DPI<select id="dpi"><option>150</option><option selected>300</option><option value="600">600 (too large for A3)</option></select></label>
         <button id="openEarth">Open site in Google Earth</button>
-        <div id="imageryStatus" class="helper">Upload the highest-resolution original available.</div>
+        <div id="imageryStatus" class="helper">Search approved official sources or add a validated local image.</div>
       </section>
 
       <section>
@@ -68,7 +69,7 @@
 
     <section class="workspace">
       <div class="map-toolbar"><div class="segmented"><button class="basemap active" data-map="street">Street</button><button class="basemap" data-map="satellite">Satellite</button><button class="basemap" data-map="toporama">Toporama</button></div><div class="coords" id="coords">No site selected</div></div>
-      <div id="mapHome" class="map-home"><div id="map"></div></div>
+      <div id="mapHome" class="map-home"><div id="map"></div><div id="historicalCropFrame" hidden aria-hidden="true"><span>A3 crop</span></div></div>
       <div class="map-note" id="mapSourceStatus" role="status"></div>
       <div class="map-note">Assigned output sources: A/D/E OpenStreetMap, B Esri imagery, C NRCan Toporama. Preview and PDF use those sources. Composition DPI does not increase source detail.</div>
     </section>
@@ -77,9 +78,48 @@
       <div class="section-heading"><h2>Figures</h2><span class="badge">A3</span></div>
       <div id="figureList"></div>
       <div class="legend-card"><div class="section-heading"><h3>Detected geology</h3><span class="badge" id="geoUnitBadge">—</span></div><div id="geoLegend" class="helper">Select Figure D/E and load the geology source.</div></div>
-      <div class="aerial-card"><div class="section-heading"><h3>Historical aerials</h3><span class="badge" id="aerialCount">0</span></div><div id="aerialList" class="helper">No historical imagery added.</div></div>
+      <div class="aerial-card"><div class="section-heading"><h3>Historical aerials</h3><span class="badge" id="aerialCount">0</span></div><div id="historicalApprovedList" class="helper">No historical imagery approved.</div></div>
     </aside>
   </main>
+
+  <div id="historicalDialog" hidden role="dialog" aria-modal="true" aria-labelledby="historicalHeading" aria-describedby="historicalHelp">
+    <section class="historical-panel">
+      <div class="historical-heading"><div><div class="eyebrow">A3 HISTORICAL FIGURES</div><h2 id="historicalHeading">Historical Imagery</h2></div><button id="closeHistorical" type="button">Close</button></div>
+      <p id="historicalHelp">Search curated official metadata or place a local image. Only explicitly exportable sources can be added to the project.</p>
+      <div class="historical-modes" role="tablist" aria-label="Historical imagery source">
+        <button id="historicalOfficialMode" type="button" role="tab" aria-selected="true">Search official sources</button>
+        <button id="historicalManualMode" type="button" role="tab" aria-selected="false">Manual upload</button>
+      </div>
+      <section id="historicalOfficialPanel" role="tabpanel">
+        <div class="inline-input"><label>Acquisition year<input id="historicalYear" type="number" min="1850" max="2100" inputmode="numeric" placeholder="1972" /></label><button id="searchHistorical" type="button" class="primary">Search</button><button id="cancelHistoricalSearch" type="button" hidden>Cancel search</button></div>
+        <div id="historicalSearchProgress" class="helper" role="status" aria-live="polite"></div>
+        <div id="historicalProviderErrors"></div>
+        <section class="historical-results-section"><h3>Exact year</h3><div data-result-group="exact"></div></section>
+        <section class="historical-results-section"><h3>Nearby years</h3><div data-result-group="nearby"></div></section>
+        <button id="showAllHistorical" type="button" hidden>Show all available years</button>
+        <section class="historical-results-section" data-result-group="remaining-section" hidden><h3>All other years</h3><div data-result-group="remaining" hidden></div></section>
+      </section>
+      <section id="historicalManualPanel" role="tabpanel" hidden>
+        <div class="two-col"><label>Acquisition year<input id="manualHistoricalYear" type="number" min="1850" max="2100" inputmode="numeric" /></label><label>World file CRS<select id="manualWorldCrs"><option value="EPSG:4326">WGS 84 (EPSG:4326)</option><option value="EPSG:3857">Web Mercator (EPSG:3857)</option><option value="EPSG:26915">NAD83 / UTM 15N</option><option value="EPSG:26916">NAD83 / UTM 16N</option><option value="EPSG:26917">NAD83 / UTM 17N</option><option value="EPSG:26918">NAD83 / UTM 18N</option></select></label></div>
+        <label>Image file (PNG, JPEG, or supported GeoTIFF)<input id="manualHistoricalFile" type="file" accept="image/png,image/jpeg,image/tiff,.png,.jpg,.jpeg,.tif,.tiff" /></label>
+        <label>Optional matching world file<input id="manualWorldFile" type="file" accept=".wld,.pgw,.jgw,.j2w,.tfw,.gfw" /></label>
+        <label>Source / citation <span aria-hidden="true">*</span><textarea id="manualCitation" rows="2" maxlength="1000" required></textarea></label>
+        <label>Official source URL (optional)<input id="manualSourceUrl" type="url" maxlength="8192" placeholder="https://…" /></label>
+        <label class="permission-check"><input id="manualPermission" type="checkbox" /> I confirm I have permission to reproduce this image in the project package.</label>
+        <button id="previewManualHistorical" type="button" class="primary">Place image and crop</button>
+        <fieldset id="manualPlacementControls" hidden><legend>Image placement</legend>
+          <div class="three-col"><label>Centre latitude<input id="manualCenterLat" type="number" step="any" /></label><label>Centre longitude<input id="manualCenterLng" type="number" step="any" /></label><label>Rotation °<input id="manualRotation" type="number" min="-180" max="180" step="0.1" /></label></div>
+          <div class="two-col"><label>Ground width (m)<input id="manualGroundWidth" type="number" min="0.01" step="0.1" /></label><label>Ground height (m)<input id="manualGroundHeight" type="number" min="0.01" step="0.1" /></label></div>
+          <div class="button-grid"><button id="applyManualPlacement" type="button">Apply placement</button><button id="drawManualExtent" type="button">Draw extent on map</button></div>
+        </fieldset>
+      </section>
+      <section id="historicalCropControls" class="historical-crop-controls" hidden aria-label="Historical crop editor">
+        <h3 id="historicalCropTitle">Crop editor</h3><p>The outlined landscape frame is the saved A3 map area. SITE and drawn boundaries remain on the shared map.</p>
+        <div class="historical-crop-actions"><button id="useHistoricalCrop" type="button">Use current crop</button><button id="resetHistoricalCrop" type="button">Reset to SITE</button><button id="cancelHistoricalCrop" type="button">Cancel</button><button id="commitHistorical" type="button" class="primary" disabled>Add to package</button></div>
+      </section>
+      <div id="historicalStatus" class="helper" role="status" aria-live="polite"></div>
+    </section>
+  </div>
 
   <div id="companyProfileDialog" hidden role="dialog" aria-modal="true" aria-labelledby="companyProfileHeading" aria-describedby="companyProfileHelp">
     <section class="company-profile-panel">

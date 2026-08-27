@@ -1,4 +1,134 @@
 import {normalizeCompanyProfile,snapshotCompanyProfile,validateCompanyProfile} from './company-profile.mjs';
+import {validatePlacement} from './imagery/placement.mjs';
+import {validateProviderUrl} from './imagery/provider-registry.mjs';
+
+const HISTORICAL_FIELDS=['id','year','sequence','title','mode','providerId','sourceUrl','licenseUrl','attribution','policy','resolutionMeters','bounds','placement','assetId','officialExport','createdAt','updatedAt'];
+const LEGACY_HISTORICAL_FIELDS=['id','year','name','size','dataUrl'];
+const HISTORICAL_BOUNDS_FIELDS=['north','south','east','west'];
+const OFFICIAL_EXPORT_FIELDS=['kind','url','layer','maxWidth','maxHeight'];
+const PLACEMENT_FIELDS=['center','groundWidth','groundHeight','sourceWidth','sourceHeight','rotationDegrees'];
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PROVIDER_ID=/^[a-z][a-z0-9-]{0,63}$/;
+const KIND=/^[a-z][a-z0-9-]{0,63}$/;
+
+function exactRecord(value,fields,label){
+  if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(`${label} must be a plain record.`);
+  let prototype,keys;try{prototype=Object.getPrototypeOf(value);keys=Reflect.ownKeys(value);}catch{throw new Error(`${label} must be inspectable.`);}
+  if(prototype!==Object.prototype&&prototype!==null||keys.some(key=>typeof key==='symbol'))throw new Error(`${label} must be a plain record.`);
+  const strings=keys.filter(key=>typeof key==='string');
+  if(strings.length!==fields.length||strings.some(key=>!fields.includes(key))||fields.some(key=>!strings.includes(key)))throw new Error(`${label} must have exact fields.`);
+  const copy={};
+  for(const key of fields){const descriptor=Object.getOwnPropertyDescriptor(value,key);if(!descriptor||!Object.hasOwn(descriptor,'value')||!descriptor.enumerable)throw new Error(`${label}.${key} must be an enumerable data field.`);copy[key]=descriptor.value;}
+  return copy;
+}
+
+function historicalText(value,label,{maximum=1000,nullable=false}={}){
+  if(nullable&&value===null)return null;
+  if(typeof value!=='string'||!value.trim()||value.length>maximum||/[\u0000-\u001f\u007f]/.test(value))throw new Error(`${label} must be nonempty bounded text.`);
+  return value.trim();
+}
+
+function historicalYear(value,label='Historical imagery year'){
+  const maximum=new Date().getUTCFullYear();
+  if(!Number.isInteger(value)||value<1850||value>maximum)throw new Error(`${label} must be a four-digit integer from 1850 through ${maximum}.`);
+  return value;
+}
+
+function safeHistoricalUrl(value,label,{nullable=false}={}){
+  if(nullable&&value===null)return null;
+  if(typeof value!=='string'||!value.trim()||value.length>8192||value.startsWith('//')||/[\u0000-\u001f\u007f\\]/.test(value))throw new Error(`${label} must be a safe HTTPS URL.`);
+  try{validateProviderUrl(value,null,{label});}catch(error){throw new Error(`${label} must be a safe HTTPS URL: ${error.message}`);}
+  let url;try{url=new URL(value);}catch{throw new Error(`${label} must be a safe HTTPS URL.`);}
+  if(url.protocol!=='https:'||url.username||url.password||url.hash)throw new Error(`${label} must be a safe HTTPS URL.`);
+  return url.href;
+}
+
+function historicalBounds(value,location){
+  const fields=exactRecord(value,HISTORICAL_BOUNDS_FIELDS,'Historical imagery bounds');
+  const bounds={north:fields.north,south:fields.south,east:fields.east,west:fields.west};
+  if(!validFigureBounds(bounds,location))throw new Error('Historical imagery bounds are invalid or do not contain SITE.');
+  return bounds;
+}
+
+function historicalPlacement(value,location){
+  const fields=exactRecord(value,PLACEMENT_FIELDS,'Historical imagery placement');
+  if(!Array.isArray(fields.center)||fields.center.length!==2)throw new Error('Historical imagery placement centre is invalid.');
+  const placement={center:[...fields.center],groundWidth:fields.groundWidth,groundHeight:fields.groundHeight,
+    sourceWidth:fields.sourceWidth,sourceHeight:fields.sourceHeight,rotationDegrees:fields.rotationDegrees};
+  try{validatePlacement(placement,{location});}catch(error){throw new Error(`Historical imagery placement is invalid: ${error.message}`);}
+  return placement;
+}
+
+function historicalTimestamp(value,label){
+  if(typeof value!=='string'||value.length>40||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)||Number.isNaN(Date.parse(value)))throw new Error(`${label} must be an ISO timestamp.`);
+  return value;
+}
+
+function officialExport(value){
+  const fields=exactRecord(value,OFFICIAL_EXPORT_FIELDS,'Historical imagery official export');
+  if(typeof fields.kind!=='string'||!KIND.test(fields.kind))throw new Error('Historical imagery official export kind is invalid.');
+  const layer=fields.layer;
+  if(layer!==null&&!(typeof layer==='string'&&layer.trim())&&!(Number.isInteger(layer)&&layer>=0))throw new Error('Historical imagery official export layer is invalid.');
+  for(const key of ['maxWidth','maxHeight'])if(!Number.isSafeInteger(fields[key])||fields[key]<=0||fields[key]>32767)throw new Error(`Historical imagery official export ${key} is invalid.`);
+  return {kind:fields.kind,url:safeHistoricalUrl(fields.url,'Historical imagery official export URL'),layer,maxWidth:fields.maxWidth,maxHeight:fields.maxHeight};
+}
+
+function approvedHistoricalItem(value,location){
+  const fields=exactRecord(value,HISTORICAL_FIELDS,'Historical imagery item');
+  if(typeof fields.id!=='string'||!UUID.test(fields.id))throw new Error('Historical imagery item ID must be a UUID.');
+  const year=historicalYear(fields.year);
+  if(!Number.isSafeInteger(fields.sequence)||fields.sequence<=0||fields.sequence>1_000_000)throw new Error('Historical imagery sequence must be a positive stable integer.');
+  const mode=fields.mode;if(mode!=='official'&&mode!=='manual')throw new Error('Historical imagery mode must be official or manual.');
+  if(fields.policy!=='exportable')throw new Error('Approved historical imagery policy must be exportable.');
+  if(fields.resolutionMeters!==null&&(!(fields.resolutionMeters>0)||!Number.isFinite(fields.resolutionMeters)))throw new Error('Historical imagery resolution must be positive or null.');
+  const common={id:fields.id,year,sequence:fields.sequence,title:historicalText(fields.title,'Historical imagery title',{maximum:240}),mode,
+    attribution:historicalText(fields.attribution,'Historical imagery attribution'),policy:'exportable',resolutionMeters:fields.resolutionMeters,
+    bounds:historicalBounds(fields.bounds,location),createdAt:historicalTimestamp(fields.createdAt,'Historical imagery createdAt'),updatedAt:historicalTimestamp(fields.updatedAt,'Historical imagery updatedAt')};
+  if(Date.parse(common.updatedAt)<Date.parse(common.createdAt))throw new Error('Historical imagery updatedAt cannot precede createdAt.');
+  if(mode==='official'){
+    if(typeof fields.providerId!=='string'||!PROVIDER_ID.test(fields.providerId))throw new Error('Official historical imagery provider ID is invalid.');
+    if(fields.placement!==null||fields.assetId!==null)throw new Error('Official historical imagery cannot contain manual placement or asset fields.');
+    return {...common,providerId:fields.providerId,sourceUrl:safeHistoricalUrl(fields.sourceUrl,'Historical imagery source URL'),
+      licenseUrl:safeHistoricalUrl(fields.licenseUrl,'Historical imagery license URL'),placement:null,assetId:null,officialExport:officialExport(fields.officialExport)};
+  }
+  if(fields.providerId!==null||fields.officialExport!==null)throw new Error('Manual historical imagery cannot contain official provider or export fields.');
+  if(typeof fields.assetId!=='string'||!UUID.test(fields.assetId))throw new Error('Manual historical imagery asset ID must be a UUID.');
+  return {...common,providerId:null,sourceUrl:safeHistoricalUrl(fields.sourceUrl,'Historical imagery source URL',{nullable:true}),
+    licenseUrl:safeHistoricalUrl(fields.licenseUrl,'Historical imagery license URL',{nullable:true}),placement:historicalPlacement(fields.placement,location),assetId:fields.assetId,officialExport:null};
+}
+
+function legacyHistoricalItem(value){
+  const fields=exactRecord(value,LEGACY_HISTORICAL_FIELDS,'Legacy historical imagery item');
+  historicalText(fields.id,'Legacy historical imagery ID',{maximum:200});historicalYear(fields.year);historicalText(fields.name,'Legacy historical imagery filename',{maximum:255});
+  if(!Number.isSafeInteger(fields.size)||fields.size<=0||fields.size>64_000_000)throw new Error('Legacy historical imagery size is invalid.');
+  if(typeof fields.dataUrl!=='string'||fields.dataUrl.length>90_000_000||!/^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/]*={0,2}$/i.test(fields.dataUrl))throw new Error('Legacy historical imagery data URL is invalid.');
+  return {id:fields.id,year:fields.year,name:fields.name,size:fields.size,dataUrl:fields.dataUrl};
+}
+
+function restoredHistorical(items,location){
+  const restored=[],ids=new Set(),sequences=new Set();
+  for(const item of items){
+    const isLegacy=item&&typeof item==='object'&&Object.hasOwn(item,'dataUrl');
+    const normalized=isLegacy?legacyHistoricalItem(item):approvedHistoricalItem(item,location);
+    const idKey=`${isLegacy?'legacy':'approved'}:${normalized.id}`;if(ids.has(idKey))throw new Error('Historical imagery IDs must be unique.');ids.add(idKey);
+    if(!isLegacy){const sequenceKey=`${normalized.year}:${normalized.sequence}`;if(sequences.has(sequenceKey))throw new Error('Historical imagery sequences must be unique within each year.');sequences.add(sequenceKey);}
+    restored.push(normalized);
+  }
+  return restored;
+}
+
+function restoredHistoricalCounters(value,items){
+  if(value===undefined)value={};
+  if(!value||typeof value!=='object'||Array.isArray(value)||Object.getPrototypeOf(value)!==Object.prototype)throw new Error('Historical imagery sequence counters are invalid.');
+  const counters={};
+  for(const key of Reflect.ownKeys(value)){
+    const descriptor=typeof key==='string'?Object.getOwnPropertyDescriptor(value,key):null;
+    if(typeof key!=='string'||!/^(?:18|19|20)\d{2}$/.test(key)||!descriptor||!Object.hasOwn(descriptor,'value')||!descriptor.enumerable||!Number.isSafeInteger(descriptor.value)||descriptor.value<0||descriptor.value>1_000_000)throw new Error('Historical imagery sequence counters must contain enumerable data fields with valid integers.');
+    counters[key]=descriptor.value;
+  }
+  for(const item of items)if(Object.hasOwn(item,'sequence'))counters[item.year]=Math.max(counters[item.year]||0,item.sequence);
+  return counters;
+}
 
 export function figureDefaults(){
   return {
@@ -15,7 +145,7 @@ export function createProject({name='',projectNo='',address='',date='',company='
     id: (globalThis.crypto?.randomUUID?.() || `p-${Date.now()}`),
     name, projectNo, address, date, company,
     location:null,
-    siteBoundary:[], buildingBoundary:[], historical:[],
+    siteBoundary:[], buildingBoundary:[], historical:[],historicalSequenceCounters:{},
     geology:{surficial:null,bedrock:null},
     dpi:300,
     companyProfileSnapshot:null,
@@ -81,6 +211,8 @@ export function restoreProject(value){
   if(p.location!==null&&!validLocation(p.location)) throw new Error('The project has invalid SITE coordinates.');
   for(const key of ['siteBoundary','buildingBoundary']) if(!Array.isArray(p[key])||(p[key].length&&!validBoundary(p[key]))) throw new Error('The project contains an invalid boundary.');
   if(!Array.isArray(p.historical)) throw new Error('The project has an invalid aerial image list.');
+  p.historical=restoredHistorical(p.historical,p.location);
+  p.historicalSequenceCounters=restoredHistoricalCounters(value.historicalSequenceCounters,p.historical);
   p.figures=Object.fromEntries(Object.entries(figureDefaults()).map(([code,defaults])=>{
     const f={...defaults,...value.figures[code]};
     if(typeof f.title!=='string'||!Number.isFinite(f.extentMeters)||f.extentMeters<=0) throw new Error('The project contains invalid figure settings.');
@@ -109,7 +241,7 @@ export function restoreProject(value){
       throw new Error(`The project contains an invalid company profile snapshot: ${error.message}`);
     }
   }
-  p.schemaVersion=4;
+  p.schemaVersion=5;
   return p;
 }
 

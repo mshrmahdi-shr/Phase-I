@@ -11,12 +11,16 @@ import {createAssetStore} from './src/asset-store.mjs';
 import {normalizeCompanyProfile} from './src/company-profile.mjs';
 import {createCompanyProfileDialog} from './src/company-ui.mjs';
 import {createDrawingController} from './src/drawing-controller.mjs';
+import {createHistoricalImageryUI,migrateLegacyHistoricalImagery} from './src/historical-ui.mjs';
+import {ONTARIO_IMAGERY_PROVIDER} from './src/imagery/providers/ontario.mjs';
+import {TORONTO_IMAGERY_PROVIDER} from './src/imagery/providers/toronto.mjs';
+import {OTTAWA_IMAGERY_PROVIDER} from './src/imagery/providers/ottawa.mjs';
 const $=id=>document.getElementById(id), STORAGE='phase-i-esa-project-v2', COMPANY_STORAGE='phase-i-esa-company-profile-v1', MRD='./data/mrd128.kml';
 const DRAWING_BINDINGS=Symbol.for('phase-i-esa.drawing-bindings');
 document[DRAWING_BINDINGS]?.abort();
 const drawingBindings=new window.AbortController();document[DRAWING_BINDINGS]=drawingBindings;
 let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject()})();
-let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,exportBusy=false,companyProfile=null,printBranding=null;
+let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,exportBusy=false,companyProfile=null,printBranding=null;
 const assetStore=createAssetStore();
 function loadCompanyProfile(){try{const saved=localStorage.getItem(COMPANY_STORAGE);return saved?normalizeCompanyProfile(JSON.parse(saved)):null;}catch{return null;}}
 function saveCompanyProfile(profile){const normalized=normalizeCompanyProfile(profile);localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized));return normalized;}
@@ -59,9 +63,15 @@ function save(){
   status('saveMessage','Saved in this browser. Export Project for a backup.');
   preflight?.refresh();exportDialog?.refresh();return true;
 }
+function persistHistoricalProject(next){
+  next.updatedAt=new Date().toISOString();
+  try{localStorage.setItem(STORAGE,JSON.stringify(next));}
+  catch{status('saveMessage','Browser storage is unavailable or full. Export Project now to keep a backup.','error');return false;}
+  project=next;$('saveState').textContent='Saved';status('saveMessage','Saved in this browser. Export Project for a backup.');preflight?.refresh();exportDialog?.refresh();return true;
+}
 function status(id,t,k=''){$(id).textContent=t;$(id).dataset.kind=k}
 function loadingButton(id,value){const button=$(id);button.dataset.loading=String(value);button.disabled=value||exportBusy;}
-function sync(){for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).value=project[k]||'';$('dpi').value=project.dpi||300;$('dpiBadge').textContent=`${project.dpi||300} DPI`;if(project.location){map.setView([project.location.lat,project.location.lng],16);setMarker(project.location)};redraw();renderFigures();renderAerials();refreshPrint();updateLegend();updateScale();updateMapSourceStatus()}
+function sync(){for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).value=project[k]||'';$('dpi').value=project.dpi||300;$('dpiBadge').textContent=`${project.dpi||300} DPI`;if(project.location){map.setView([project.location.lat,project.location.lng],16);setMarker(project.location)};redraw();renderFigures();historicalUI?.refresh();refreshPrint();updateLegend();updateScale();updateMapSourceStatus()}
 for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).oninput=e=>{project[k]=e.target.value;save();refreshPrint()};$('dpi').onchange=e=>{project.dpi=+e.target.value;$('dpiBadge').textContent=`${project.dpi} DPI`;save()};
 $('searchAddress').onclick=async()=>{
   const q=$('address').value.trim();if(!q)return;
@@ -83,7 +93,7 @@ function siteChanged(location){
   const moved=!project.location||project.location.lat!==location.lat||project.location.lng!==location.lng;
   project.location=location;
   if(moved)for(const figure of Object.values(project.figures))delete figure.bounds;
-  locationRevision++;setMarker(location);detect();renderFigures();save();refreshPrint();
+  locationRevision++;setMarker(location);detect();renderFigures();save();historicalUI?.refresh();refreshPrint();
 }
 function setMarker(p){
   siteMarker?.remove();
@@ -111,7 +121,7 @@ map.on('click',e=>{
 });
 document.addEventListener('keydown',event=>drawingController.handleKey(event),{signal:drawingBindings.signal});
 map.getContainer().addEventListener('contextmenu',event=>drawingController.handleContextMenu(event),{signal:drawingBindings.signal});
-window.addEventListener('pagehide',event=>{if(event.persisted)return;drawingBindings.abort();if(document[DRAWING_BINDINGS]===drawingBindings)delete document[DRAWING_BINDINGS];},{signal:drawingBindings.signal});
+window.addEventListener('pagehide',event=>{if(event.persisted)return;historicalUI?.destroy();drawingBindings.abort();if(document[DRAWING_BINDINGS]===drawingBindings)delete document[DRAWING_BINDINGS];},{signal:drawingBindings.signal});
 function redraw(){siteLayer?.remove();buildingLayer?.remove();if(project.siteBoundary?.length)siteLayer=L.polygon(project.siteBoundary.map(([x,y])=>[y,x]),{color:'#ef4444',weight:4,fill:false}).addTo(map);if(project.buildingBoundary?.length)buildingLayer=L.polygon(project.buildingBoundary.map(([x,y])=>[y,x]),{color:'#111827',weight:3,dashArray:'6 4',fillColor:'#fff',fillOpacity:.1}).addTo(map)}
 function renderFigures(){const h=$('figureList');h.innerHTML='';for(const [c,f] of Object.entries(project.figures)){const d=document.createElement('div');d.className='figure-row'+(c===active?' active':'');d.innerHTML=`<div class="figure-top"><div><div class="figure-code">FIGURE ${c}</div><div class="figure-title">${esc(f.title)}</div></div><span class="badge" title="${f.bounds?'Saved A3 map span':'Default A3 map span'}">${fmt(f.extentMeters)}</span></div><div class="figure-actions"><button title="${f.bounds?'Restore the saved A3 map position and zoom':'Show the current A3 map extent'}">${f.bounds?'View saved':'View'}</button><button title="Save the current map position and zoom for A3/PDF">${f.bounds?'Update A3 view':'Use for A3'}</button></div>`;d.children[1].children[0].onclick=()=>selectFig(c,true);d.children[1].children[1].onclick=()=>useForA3(c);h.appendChild(d)}}
 function fmt(m){return m>=1000?`${m/1000} km`:`${m} m`;}
@@ -165,7 +175,7 @@ function setBasemap(kind){
 }
 for(const b of document.querySelectorAll('.basemap'))b.onclick=()=>setBasemap(b.dataset.map);
 
-$('uploadAerial').onchange=async e=>{const f=e.target.files?.[0];if(!f||exportBusy)return;const y=+$('aerialYear').value||new Date().getFullYear(),u=await new Promise((ok,no)=>{const r=new FileReader;r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f)});if(exportBusy){status('imageryStatus','Reimport the aerial after PDF export finishes.');return;}project.historical=project.historical||[];project.historical.push({id:crypto.randomUUID(),year:y,name:f.name,size:f.size,dataUrl:u});save();renderAerials();status('imageryStatus',`Added ${f.name} for ${y}`,'ok')};function renderAerials(){const a=project.historical||[];$('aerialCount').textContent=a.length;$('aerialList').innerHTML=a.length?a.map(x=>`<div class="aerial-item"><b>${esc(x.year)}</b> — ${esc(x.name)}</div>`).join(''):'No historical imagery added.'}$('openEarth').onclick=()=>project.location?window.open(`https://earth.google.com/web/@${project.location.lat},${project.location.lng},500a,1000d,35y,0h,0t,0r`,'_blank'):alert('Set the site location first.');
+$('openEarth').onclick=()=>project.location?window.open(`https://earth.google.com/web/@${project.location.lat},${project.location.lng},500a,1000d,35y,0h,0t,0r`,'_blank','noopener,noreferrer'):alert('Set the site location first.');
 $('loadMrd128').onclick=()=>loadMRD(true);
 async function loadMRD(user=true){
   if(exportBusy)return;
@@ -306,4 +316,13 @@ function renderCompanyBrand({companyProfile:profile,companyLogoDataUrl}){
 }
 
 function dl(n,t,ty){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:ty}));a.download=n;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}function safe(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}function esc(s=''){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+
+try{
+  const migration=await migrateLegacyHistoricalImagery({project,assetStore,saveProject:persistHistoricalProject});
+  project=migration.project;if(migration.migrated)status('imageryStatus','Legacy historical imagery was validated and moved to IndexedDB. Export Project for a fresh backup.','ok');
+}catch(error){status('imageryStatus',error.message,'error');status('saveMessage','Legacy imagery was not changed. Export Project now to preserve the original data before retrying.','error');}
+historicalUI=createHistoricalImageryUI({document,map,L,assetStore,providers:[ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER],getProject:()=>project,
+  saveProject:persistHistoricalProject,onChanged:()=>{preflight?.refresh();exportDialog?.refresh();}});
+const openHistorical=()=>{if(exportBusy)return;drawingController.cancel();historicalUI.open();};
+$('manageHistorical').onclick=openHistorical;$('manageHistoricalHeader').onclick=openHistorical;
 sync();await companyDialog.refresh();if(!companyProfile)await companyDialog.open();

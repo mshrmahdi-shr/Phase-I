@@ -51,7 +51,7 @@ test('new project keeps project number blank and restores a profile snapshot',()
   p.companyProfileSnapshot=snapshotCompanyProfile(validProfile);
   const restored=core.restoreProject(p);
   assert.equal(restored.companyProfileSnapshot.companyName,'ABC Engineering');
-  assert.equal(restored.schemaVersion,4);
+  assert.equal(restored.schemaVersion,5);
 });
 
 test('restoreProject gives legacy projects no profile snapshot and rejects invalid snapshots',()=>{
@@ -59,6 +59,61 @@ test('restoreProject gives legacy projects no profile snapshot and rejects inval
   assert.equal(core.restoreProject(legacy).companyProfileSnapshot,null);
   legacy.companyProfileSnapshot={companyName:'Unsafe'};
   assert.throws(()=>core.restoreProject(legacy),/company profile snapshot/i);
+});
+
+test('restoreProject validates approved historical items and preserves duplicate-year stable sequences',()=>{
+  const project=createProject();
+  const stamp='2026-08-27T12:00:00.000Z';
+  const item=(id,sequence)=>({
+    id,year:1972,sequence,title:`Flight ${sequence}`,mode:'official',providerId:'toronto',
+    sourceUrl:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer',
+    licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto',policy:'exportable',
+    resolutionMeters:null,bounds:{north:43.66,south:43.64,east:-79.37,west:-79.39},placement:null,assetId:null,
+    officialExport:{kind:'arcgis-export',url:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096},
+    createdAt:stamp,updatedAt:stamp
+  });
+  project.location={lat:43.65,lng:-79.38};
+  project.historical=[item('74f14168-4de6-4c5f-88f4-87db8ec731c2',2),item('9833e469-c7e8-4ef1-84f1-b89c608c2126',1)];
+  project.historicalSequenceCounters={'1972':2};
+
+  const restored=core.restoreProject(project);
+  assert.deepEqual(restored.historical.map(value=>[value.id,value.sequence]),[
+    ['74f14168-4de6-4c5f-88f4-87db8ec731c2',2],['9833e469-c7e8-4ef1-84f1-b89c608c2126',1]
+  ]);
+  assert.equal(restored.schemaVersion,5);
+  assert.equal(restored.historicalSequenceCounters['1972'],2);
+
+  project.historical.push(item('3caa1022-b2e7-4c63-8ca8-12f4845e1be1',2));
+  assert.throws(()=>core.restoreProject(project),/sequence|duplicate/i);
+});
+
+test('restoreProject leaves legacy data URLs intact for the explicit asynchronous startup migration',()=>{
+  const project=createProject();
+  const legacy={id:'legacy-1',year:1960,name:'flight.png',size:8,dataUrl:'data:image/png;base64,iVBORw0KGgo='};
+  project.historical=[legacy];
+  const restored=core.restoreProject(project);
+  assert.deepEqual(restored.historical,[legacy]);
+  assert.notEqual(restored.historical[0],legacy);
+});
+
+test('restoreProject rejects malformed historical IDs, URLs, bounds, policy, placement and extra fields',()=>{
+  const project=createProject();project.location={lat:43.65,lng:-79.38};
+  const stamp='2026-08-27T12:00:00.000Z';
+  const base={id:'74f14168-4de6-4c5f-88f4-87db8ec731c2',year:1972,sequence:1,title:'Flight',mode:'official',providerId:'toronto',
+    sourceUrl:'https://gis.toronto.ca/source',licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto',policy:'exportable',resolutionMeters:null,
+    bounds:{north:43.66,south:43.64,east:-79.37,west:-79.39},placement:null,assetId:null,
+    officialExport:{kind:'arcgis-export',url:'https://gis.toronto.ca/export',layer:null,maxWidth:4096,maxHeight:4096},createdAt:stamp,updatedAt:stamp};
+  for(const mutate of [
+    value=>({...value,id:'not-a-uuid'}),value=>({...value,sourceUrl:'javascript:alert(1)'}),
+    value=>({...value,sourceUrl:'https://gis.toronto.ca/%252e%252e/private'}),
+    value=>({...value,policy:'unknown'}),value=>({...value,bounds:{...value.bounds,north:43.64}}),
+    value=>({...value,placement:{center:[0,0]}}),value=>({...value,unexpected:true})
+  ]){
+    project.historical=[mutate(base)];
+    assert.throws(()=>core.restoreProject(project),/historical|item|field|URL|bounds|policy|placement|UUID/i);
+  }
+  let reads=0;const counters={};Object.defineProperty(counters,'1972',{enumerable:true,get(){reads++;return 1;}});project.historical=[base];project.historicalSequenceCounters=counters;
+  assert.throws(()=>core.restoreProject(project),/counter|data field|accessor/i);assert.equal(reads,0);
 });
 
 test('closeRing appends the first point only when needed', () => {

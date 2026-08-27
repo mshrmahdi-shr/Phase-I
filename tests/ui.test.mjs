@@ -24,7 +24,8 @@ const LOGO_BYTES=pngBytes();
 
 test('index exposes the core Phase I workflow controls', () => {
   const html=fs.readFileSync(new URL('../index.html', import.meta.url),'utf8');
-  for (const id of ['address','searchAddress','drawSite','drawBuilding','finishDraw','figureList','uploadAerial','uploadGeology','printA3','exportDxf',
+  for (const id of ['address','searchAddress','drawSite','drawBuilding','finishDraw','figureList','manageHistorical','historicalDialog','historicalYear',
+    'searchHistorical','manualHistoricalFile','manualWorldFile','manualCitation','manualPermission','historicalCropFrame','historicalApprovedList','uploadGeology','printA3','exportDxf',
     'editCompanyProfile','exportCompanyTemplate','importCompanyTemplate','companyProfileDialog','printCompanyLogo','printCompanyName','printCompanyContact']) {
     assert.match(html,new RegExp(`id=["']${id}["']`),`missing #${id}`);
   }
