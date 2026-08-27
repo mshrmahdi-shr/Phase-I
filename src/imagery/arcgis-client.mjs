@@ -65,6 +65,56 @@ function jsonContentType(value){
   return type==='application/json'||type.endsWith('+json')||type==='text/plain';
 }
 
+async function readBoundedJsonBody(response,{controller,aborted}){
+  if(!response.body||typeof response.body.getReader!=='function'){
+    fail('ArcGIS metadata response body streaming is unavailable');
+  }
+  let reader;
+  try{reader=response.body.getReader();}catch{fail('ArcGIS metadata response body stream cannot be read');}
+  if(!reader||typeof reader.read!=='function'||typeof reader.cancel!=='function'||typeof reader.releaseLock!=='function'){
+    fail('ArcGIS metadata response body stream reader is invalid');
+  }
+
+  let complete=false,cancelled=false,released=false;
+  const release=()=>{
+    if(released)return;
+    try{reader.releaseLock();released=true;}catch{}
+  };
+  const cancel=reason=>{
+    if(cancelled)return;
+    cancelled=true;
+    let cancellation;
+    try{cancellation=Promise.resolve(reader.cancel(reason));}catch{release();return;}
+    cancellation.catch(()=>{}).finally(release);
+    release();
+  };
+  const decoder=new TextDecoder('utf-8',{fatal:true});
+  let byteLength=0,body='';
+  try{
+    while(true){
+      const chunk=await Promise.race([Promise.resolve().then(()=>reader.read()),aborted]);
+      if(!chunk||typeof chunk!=='object'||typeof chunk.done!=='boolean')fail('ArcGIS metadata response body stream returned an invalid chunk');
+      if(chunk.done){
+        complete=true;
+        try{body+=decoder.decode();}catch{fail('ArcGIS metadata response contains malformed UTF-8');}
+        return body;
+      }
+      if(!(chunk.value instanceof Uint8Array))fail('ArcGIS metadata response body chunks must be Uint8Array bytes');
+      byteLength+=chunk.value.byteLength;
+      if(byteLength>MAX_JSON_BYTES){
+        const error=new TypeError(`ArcGIS metadata response exceeds the ${MAX_JSON_BYTES}-byte size limit`);
+        cancel(error);
+        controller.abort(error);
+        throw error;
+      }
+      try{body+=decoder.decode(chunk.value,{stream:true});}catch{fail('ArcGIS metadata response contains malformed UTF-8');}
+    }
+  }finally{
+    if(!complete)cancel(controller.signal.reason);
+    release();
+  }
+}
+
 export async function fetchArcGisJson(url,{signal,fetchImpl=globalThis.fetch,allowedOrigins,allowedRoots}={}){
   if(typeof fetchImpl!=='function')fail('fetchImpl must be a function');
   if(signal?.aborted)throw abortReason(signal);
@@ -99,8 +149,7 @@ export async function fetchArcGisJson(url,{signal,fetchImpl=globalThis.fetch,all
       if(!Number.isFinite(bytes)||bytes<0)fail('ArcGIS metadata response has an invalid content length');
       if(bytes>MAX_JSON_BYTES)fail(`ArcGIS metadata response exceeds the ${MAX_JSON_BYTES}-byte size limit`);
     }
-    const body=await Promise.race([Promise.resolve().then(()=>response.text()),aborted]);
-    if(new TextEncoder().encode(body).byteLength>MAX_JSON_BYTES)fail(`ArcGIS metadata response exceeds the ${MAX_JSON_BYTES}-byte size limit`);
+    const body=await readBoundedJsonBody(response,{controller,aborted});
     if(/^\s*[A-Za-z_$][\w$.[\]]*\s*\(/.test(body))fail('ArcGIS JSONP responses are not accepted');
     let value;
     try{value=JSON.parse(body);}catch{fail('ArcGIS metadata response contains malformed JSON');}

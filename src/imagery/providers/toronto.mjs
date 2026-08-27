@@ -32,7 +32,7 @@ async function search({location,signal,fetchImpl=globalThis.fetch}){
     if(!contains(coverage,location))return null;
     const operation=arcGisServiceExport(metadata);
     const verified=COPYRIGHT_ALLOWLIST.has(typeof metadata.copyrightText==='string'?metadata.copyrightText.trim():'');
-    const policy=!operation?'link-only':verified?'exportable':'unknown';
+    const policy=!verified?'unknown':operation?'exportable':'link-only';
     return {
       id:stableIdentity(service.name),providerId:'toronto',title:`City of Toronto aerial imagery ${year}`,year,
       resolutionMeters:resolution(service.name),coverage,
