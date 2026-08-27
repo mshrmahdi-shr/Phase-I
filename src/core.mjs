@@ -141,13 +141,50 @@ function dxfPolyline(layer, points){
   return s;
 }
 
-function dxfText(layer,value,x,y,height=2.5){
+function dxfTextTokens(value){
   const content=String(value??'').replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\s+/g,' ').trim();
-  if(!content)return '';
-  return `0\nTEXT\n8\n${layer}\n10\n${x}\n20\n${y}\n40\n${height}\n1\n${content}\n`;
+  return [...content].map(character=>{
+    const code=character.codePointAt(0);
+    if(code>=32&&code<=126&&code!==92)return {value:character,width:1};
+    const escaped=code<=0xffff
+      ?`\\U+${code.toString(16).toUpperCase().padStart(4,'0')}`
+      :(()=>{const offset=code-0x10000,high=0xd800+(offset>>10),low=0xdc00+(offset&0x3ff);return `\\U+${high.toString(16).toUpperCase()}\\U+${low.toString(16).toUpperCase()}`;})();
+    return {value:escaped,width:1};
+  });
 }
 
-export function buildDxf({siteBoundary=[],buildingBoundary=[],name='',projectNo=''}={}, {companyProfile}={}){
+function dxfTextChunks(value,maxEncodedLength=240){
+  const chunks=[];let encoded='',width=0;
+  for(const token of dxfTextTokens(value)){
+    if(encoded&&encoded.length+token.value.length>maxEncodedLength){chunks.push({encoded,width});encoded='';width=0;}
+    encoded+=token.value;width+=token.width;
+  }
+  if(encoded)chunks.push({encoded,width});
+  return chunks;
+}
+
+function dxfTextBlock(layer,value,x,y,extent,preferredHeight){
+  const chunks=dxfTextChunks(value);if(!chunks.length)return {content:'',nextY:y};
+  const widest=Math.max(...chunks.map(chunk=>chunk.width));
+  const height=Math.max(extent*.001,Math.min(extent*preferredHeight,extent*1.2/(Math.max(widest,1)*.65)));
+  const rowStep=Math.max(height*1.5,extent*.025);
+  return {
+    content:chunks.map((chunk,index)=>`0\nTEXT\n8\n${layer}\n10\n${x}\n20\n${y-index*rowStep}\n40\n${height}\n1\n${chunk.encoded}\n`).join(''),
+    nextY:y-chunks.length*rowStep
+  };
+}
+
+function dxfDrawingFrame(siteBoundary,buildingBoundary,location){
+  const points=[...(siteBoundary||[]),...(buildingBoundary||[])].filter(point=>Array.isArray(point)&&Number.isFinite(point[0])&&Number.isFinite(point[1]));
+  if(!points.length&&Number.isFinite(location?.lng)&&Number.isFinite(location?.lat))points.push([location.lng,location.lat]);
+  if(!points.length)points.push([0,0]);
+  const xs=points.map(point=>point[0]),ys=points.map(point=>point[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const measured=Math.max(maxX-minX,maxY-minY);
+  return {minX,maxX,minY,maxY,extent:measured>0?Math.max(measured,1e-9):.001};
+}
+
+export function buildDxf({siteBoundary=[],buildingBoundary=[],name='',projectNo='',location=null}={}, {companyProfile}={}){
   let company;
   try{company=normalizeCompanyProfile(companyProfile||{});}catch(error){throw new Error(`Company profile is invalid: ${error.message}`,{cause:error});}
   const companyErrors=validateCompanyProfile(company);
@@ -158,14 +195,15 @@ export function buildDxf({siteBoundary=[],buildingBoundary=[],name='',projectNo=
   if(company.companyName.length>160||contacts.some(value=>value.length>220)||contacts.join(' | ').length>500){
     throw new Error('Company contact text is too long to fit the DXF title block.');
   }
-  const origin=siteBoundary[0]||buildingBoundary[0]||[0,0],x=origin[0],y=origin[1];
-  const text=[
-    dxfText('COMPANY_TEXT',company.companyName,x,y+12,3.5),
-    dxfText('COMPANY_TEXT',contacts.join(' | '),x,y+8,2.2),
-    dxfText('TITLE_BLOCK',title,x,y+4,3),
-    dxfText('TITLE_BLOCK',projectNo,x,y,2.5)
-  ].join('');
-  return `0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n${dxfPolyline('SITE_BOUNDARY',siteBoundary)}${dxfPolyline('BUILDING_BOUNDARY',buildingBoundary)}${text}0\nENDSEC\n0\nEOF\n`;
+  const frame=dxfDrawingFrame(siteBoundary,buildingBoundary,location);let cursor=frame.minY-frame.extent*.06,text='';
+  for(const [layer,value,height] of [
+    ['COMPANY_TEXT',company.companyName,.04],['COMPANY_TEXT',contacts.join(' | '),.018],
+    ['TITLE_BLOCK',title,.03],['TITLE_BLOCK',projectNo,.022]
+  ]){
+    const block=dxfTextBlock(layer,value,frame.minX,cursor,frame.extent,height);text+=block.content;cursor=block.nextY-frame.extent*.01;
+  }
+  const header='0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1021\n9\n$DWGCODEPAGE\n3\nANSI_1252\n0\nENDSEC\n';
+  return `${header}0\nSECTION\n2\nENTITIES\n${dxfPolyline('SITE_BOUNDARY',siteBoundary)}${dxfPolyline('BUILDING_BOUNDARY',buildingBoundary)}${text}0\nENDSEC\n0\nEOF\n`;
 }
 
 const MRD128_LEGEND = {

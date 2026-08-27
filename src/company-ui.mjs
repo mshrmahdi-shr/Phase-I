@@ -82,10 +82,16 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
   if(!assetStore||typeof assetStore.get!=='function'||typeof assetStore.put!=='function'||typeof assetStore.delete!=='function')throw new Error('A readable and writable asset store is required.');
   if(typeof loadProfile!=='function'||typeof saveProfile!=='function')throw new Error('Company profile load and save functions are required.');
   const byId=id=>document.getElementById(id),dialog=byId('companyProfileDialog'),form=byId('companyProfileForm');
-  let current=null,selectedLogo=null,importCandidate=null,returnFocus=null,background=[],destroyed=false;
+  let current=null,selectedLogo=null,logoSelectionError=null,importCandidate=null,returnFocus=null,background=[],destroyed=false;
+  let logoGeneration=0,importGeneration=0,pendingLogo=null,pendingImport=null;
 
   function status(message,kind=''){
     const node=byId('companyProfileStatus');node.textContent=message;node.dataset.kind=kind;
+  }
+  function updateBusy(){
+    const busy=Boolean(pendingLogo||pendingImport);
+    byId('saveCompanyProfile').disabled=busy;
+    byId('confirmCompanyImport').disabled=busy||!importCandidate;
   }
   function fieldControl(field){return byId(FIELD_IDS[field]||({logoAssetId:'companyLogo',logoPlacement:'companyLogoScale'}[field]));}
   function clearErrors(){for(const [field,id] of Object.entries(ERROR_IDS)){byId(id).textContent='';fieldControl(field)?.removeAttribute('aria-invalid');}}
@@ -125,7 +131,7 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
   }
   async function notify(profile){current=profile?snapshotCompanyProfile(profile):null;await onChanged(current);return current;}
   async function refresh(){
-    clearErrors();selectedLogo=null;importCandidate=null;byId('companyImportPreview').hidden=true;
+    logoGeneration++;importGeneration++;pendingLogo=pendingImport=null;clearErrors();selectedLogo=null;logoSelectionError=null;importCandidate=null;updateBusy();byId('companyImportPreview').hidden=true;
     const loaded=validProfile(await loadProfile());
     if(!loaded){fields(loaded);previewLogo('','');await notify(null);return null;}
     try{
@@ -144,10 +150,13 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
     status(current?'Review and save your reusable company details.':'Complete every required field and add a decoded PNG or JPEG logo before creating outputs.');
     byId('companyName').focus();return current;
   }
+  function releaseDialog(){
+    dialog.hidden=true;document.body.classList.remove('company-profile-open');background.forEach(([node,inert])=>node.inert=inert);background=[];
+    returnFocus?.focus();returnFocus=null;
+  }
   function close(){
     if(dialog.hidden||!current)return false;
-    dialog.hidden=true;document.body.classList.remove('company-profile-open');background.forEach(([node,inert])=>node.inert=inert);background=[];
-    returnFocus?.focus();return true;
+    releaseDialog();return true;
   }
   async function finishSave(profile,newAsset,oldProfile=current){
     let stored=false;
@@ -163,11 +172,13 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
     if(oldProfile?.logoAssetId&&oldProfile.logoAssetId!==profile.logoAssetId){
       try{await assetStore.delete(oldProfile.logoAssetId);}catch{cleanupWarning=' The older logo could not be cleaned up.';}
     }
-    selectedLogo=null;byId('closeCompanyProfile').disabled=false;status(`Company profile saved.${cleanupWarning}`,'ok');
+    selectedLogo=null;logoSelectionError=null;byId('closeCompanyProfile').disabled=false;status(`Company profile saved.${cleanupWarning}`,'ok');
     fields(profile);return profile;
   }
   async function submit(event){
     event?.preventDefault?.();clearErrors();
+    while(pendingLogo){const operation=pendingLogo;await operation;if(destroyed)return false;}
+    if(logoSelectionError){showErrors([{field:'logoAssetId',message:logoSelectionError.message}]);status('Choose a valid decoded logo before saving.','error');return false;}
     let profile;
     try{profile=profileFromForm();}catch(error){status(error.message,'error');return false;}
     const errors=validateCompanyProfile(profile);if(errors.length){showErrors(errors);status('Correct the highlighted company profile fields.','error');return false;}
@@ -180,28 +191,45 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
   }
   async function selectLogo(event){
     clearErrors();const file=event?.target?.files?.[0];if(!file)return;
-    try{
-      const decoded=await decodeLogo(file,document),id=`company-logo-${crypto.randomUUID()}`;
-      selectedLogo={...decoded,id,sha256:await sha256(decoded.bytes),createdAt:new Date().toISOString()};
-      previewLogo(dataUrl(decoded.bytes,decoded.mime,document),'Selected company logo preview');status('Logo decoded. Save the profile to use it on outputs.','ok');
-    }catch(error){selectedLogo=null;previewLogo('','');byId('logoError').textContent=error.message;status(error.message,'error');}
+    const ticket=++logoGeneration;selectedLogo=null;logoSelectionError=null;status('Decoding and securely preparing the selected logo…');
+    const operation=(async()=>{
+      try{
+        const decoded=await decodeLogo(file,document),id=`company-logo-${crypto.randomUUID()}`,hash=await sha256(decoded.bytes);
+        if(ticket!==logoGeneration||destroyed)return false;
+        selectedLogo={...decoded,id,sha256:hash,createdAt:new Date().toISOString()};
+        previewLogo(dataUrl(decoded.bytes,decoded.mime,document),'Selected company logo preview');status('Logo decoded. Save the profile to use it on outputs.','ok');return true;
+      }catch(error){
+        if(ticket!==logoGeneration||destroyed)return false;
+        selectedLogo=null;logoSelectionError=error;previewLogo('','');byId('logoError').textContent=error.message;status(error.message,'error');return false;
+      }
+    })();
+    pendingLogo=operation;updateBusy();
+    try{return await operation;}finally{if(pendingLogo===operation){pendingLogo=null;updateBusy();}}
   }
   async function previewImport(event){
     const file=event?.target?.files?.[0];if(!file)return false;
-    importCandidate=null;byId('companyImportPreview').hidden=true;
-    try{
-      const candidate=await inspectCompanyTemplate(file,{Zip}),decoded=await decodeLogo(candidate.logoBlob,document);
-      if(decoded.mime!==candidate.logoMetadata.mime||decoded.width!==candidate.logoMetadata.width||decoded.height!==candidate.logoMetadata.height){
-        throw new Error('The imported logo decoded dimensions do not match its template metadata.');
-      }
-      importCandidate={...candidate,logoBlob:decoded.blob};
-      byId('companyImportSummary').textContent=[candidate.profile.companyName,candidate.profile.address,candidate.profile.phone,candidate.profile.email,candidate.profile.website].join(' · ');
-      const image=byId('companyImportLogo');image.src=dataUrl(decoded.bytes,decoded.mime,document);image.alt=`${candidate.profile.companyName} imported logo`;
-      await open();byId('companyImportPreview').hidden=false;byId('confirmCompanyImport').focus();status('Review this company template, then confirm replacement.');return true;
-    }catch(error){status(`Company template import failed: ${error.message}`,'error');return false;}
-    finally{event.target.value='';}
+    if(dialog.hidden)await open();if(destroyed)return false;
+    const ticket=++importGeneration;importCandidate=null;byId('companyImportPreview').hidden=true;status('Inspecting and decoding the company template…');
+    const operation=(async()=>{
+      try{
+        const candidate=await inspectCompanyTemplate(file,{Zip}),decoded=await decodeLogo(candidate.logoBlob,document);
+        if(ticket!==importGeneration||destroyed)return false;
+        if(decoded.mime!==candidate.logoMetadata.mime||decoded.width!==candidate.logoMetadata.width||decoded.height!==candidate.logoMetadata.height){
+          throw new Error('The imported logo decoded dimensions do not match its template metadata.');
+        }
+        importCandidate={...candidate,logoBlob:decoded.blob};
+        byId('companyImportSummary').textContent=[candidate.profile.companyName,candidate.profile.address,candidate.profile.phone,candidate.profile.email,candidate.profile.website].join(' · ');
+        const image=byId('companyImportLogo');image.src=dataUrl(decoded.bytes,decoded.mime,document);image.alt=`${candidate.profile.companyName} imported logo`;
+        byId('companyImportPreview').hidden=false;status('Review this company template, then confirm replacement.');return true;
+      }catch(error){if(ticket===importGeneration&&!destroyed)status(`Company template import failed: ${error.message}`,'error');return false;}
+      finally{event.target.value='';}
+    })();
+    pendingImport=operation;updateBusy();
+    try{const result=await operation;if(result&&ticket===importGeneration)byId('confirmCompanyImport').focus();return result;}
+    finally{if(pendingImport===operation){pendingImport=null;updateBusy();}}
   }
   async function confirmImport(){
+    while(pendingImport){const operation=pendingImport;await operation;if(destroyed)return false;}
     if(!importCandidate)return false;const old=current;let profile;
     try{
       profile=await commitCompanyTemplate(importCandidate,{assetStore});
@@ -210,7 +238,7 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
       }catch(error){try{await assetStore.delete(profile.logoAssetId);}catch{}throw error;}
       await notify(profile);
       let cleanupWarning='';if(old?.logoAssetId&&old.logoAssetId!==profile.logoAssetId){try{await assetStore.delete(old.logoAssetId);}catch{cleanupWarning=' The older logo could not be cleaned up.';}}
-      importCandidate=null;byId('companyImportPreview').hidden=true;fields(profile);byId('closeCompanyProfile').disabled=false;
+      importCandidate=null;updateBusy();byId('companyImportPreview').hidden=true;fields(profile);byId('closeCompanyProfile').disabled=false;
       const decoded=await storedLogo(profile);previewLogo(dataUrl(decoded.bytes,decoded.mime,document),`${profile.companyName} logo`);
       status(`Imported company profile saved.${cleanupWarning}`,'ok');close();return true;
     }catch(error){status(`Company profile was not replaced: ${error.message}`,'error');return false;}
@@ -243,11 +271,11 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
   byId('editCompanyProfile').onclick=()=>open();byId('exportCompanyTemplate').onclick=exportTemplate;
   const chooseImport=()=>byId('importCompanyTemplateFile').click();
   byId('importCompanyTemplate').onclick=chooseImport;byId('importCompanyTemplateInDialog').onclick=chooseImport;byId('importCompanyTemplateFile').onchange=previewImport;
-  byId('confirmCompanyImport').onclick=confirmImport;byId('cancelCompanyImport').onclick=()=>{importCandidate=null;byId('companyImportPreview').hidden=true;status('Import cancelled. The saved company profile was not changed.');};
+  byId('confirmCompanyImport').onclick=confirmImport;byId('cancelCompanyImport').onclick=()=>{importGeneration++;pendingImport=null;importCandidate=null;updateBusy();byId('companyImportPreview').hidden=true;status('Import cancelled. The saved company profile was not changed.');};
   document.addEventListener('keydown',keydown);
 
   return {open,close,refresh,outputSnapshot,destroy(){
-    if(destroyed)return;destroyed=true;document.removeEventListener('keydown',keydown);close();
+    if(destroyed)return;destroyed=true;logoGeneration++;importGeneration++;pendingLogo=pendingImport=null;selectedLogo=null;logoSelectionError=null;importCandidate=null;updateBusy();document.removeEventListener('keydown',keydown);if(!dialog.hidden)releaseDialog();
     for(const id of ['companyProfileForm','companyLogo','companyLogoAlign','companyLogoScale','closeCompanyProfile','editCompanyProfile','exportCompanyTemplate','importCompanyTemplate','importCompanyTemplateInDialog','importCompanyTemplateFile','confirmCompanyImport','cancelCompanyImport']){
       const node=byId(id);if(node){node.onclick=null;node.onchange=null;node.onsubmit=null;}
     }

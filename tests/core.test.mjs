@@ -7,6 +7,30 @@ import {emptyCompanyProfile,snapshotCompanyProfile} from '../src/company-profile
 
 const mrd128 = fs.readFileSync(new URL('../data/mrd128.kml', import.meta.url), 'utf8');
 
+function dxfPairs(dxf){
+  const lines=dxf.trimEnd().split('\n');assert.equal(lines.length%2,0);
+  return Array.from({length:lines.length/2},(_,index)=>({code:lines[index*2],value:lines[index*2+1]}));
+}
+
+function dxfTextEntities(dxf){
+  const entities=[];let entity=null;
+  for(const pair of dxfPairs(dxf)){
+    if(pair.code==='0'){
+      if(entity)entities.push(entity);
+      entity=pair.value==='TEXT'?{}:null;continue;
+    }
+    if(!entity)continue;
+    if(pair.code==='8')entity.layer=pair.value;
+    if(pair.code==='10')entity.x=Number(pair.value);
+    if(pair.code==='20')entity.y=Number(pair.value);
+    if(pair.code==='40')entity.height=Number(pair.value);
+    if(pair.code==='1')entity.value=pair.value;
+  }
+  return entities;
+}
+
+function decodeDxfText(value){return value.replace(/\\U\+([0-9A-F]{4})/g,(_,hex)=>String.fromCharCode(Number.parseInt(hex,16)));}
+
 test('createProject creates the five core figures with expected extents', () => {
   const p = createProject({ name: 'Test', address: '92 Orchard Road' });
   assert.equal(p.name, 'Test');
@@ -62,9 +86,41 @@ test('buildDxf includes company/title text on separate layers without raster log
   assert.match(dxf, /SITE_BOUNDARY/);
   assert.match(dxf, /LWPOLYLINE/);
   assert.match(dxf, /10\n-79/);
+  assert.match(dxf,/9\n\$ACADVER\n1\nAC1021/);
+  assert.match(dxf,/9\n\$DWGCODEPAGE\n3\nANSI_1252/);
   assert.match(dxf,/8\nCOMPANY_TEXT\n[^]*1\nAcme Engineering/);
   assert.match(dxf,/8\nTITLE_BLOCK\n[^]*1\nPhase I Study/);
   assert.doesNotMatch(dxf,/IMAGE|logo-1|PNG/i);
+});
+
+test('buildDxf keeps title text positions and heights proportional to geographic drawing bounds',()=>{
+  const companyProfile={...emptyCompanyProfile(),companyName:'Acme Engineering',address:'1 Main Street',phone:'555-0100',email:'info@acme.test',website:'https://acme.test',
+    logoAssetId:'logo-1',logoMime:'image/png',logoWidth:320,logoHeight:160};
+  const siteBoundary=[[-79.3,43.7],[-79.299,43.7],[-79.299,43.7006],[-79.3,43.7006]];
+  const dxf=buildDxf({name:'Phase I Study',projectNo:'AB-12345',siteBoundary},{companyProfile});
+  const text=dxfTextEntities(dxf),span=.001,minX=-79.3,maxX=-79.299,minY=43.7,maxY=43.7006;
+  assert.ok(text.length>=4);
+  for(const entity of text){
+    assert.ok(entity.x>=minX-span&&entity.x<=maxX+span,`${entity.layer} x ${entity.x}`);
+    assert.ok(entity.y>=minY-span&&entity.y<=maxY+span,`${entity.layer} y ${entity.y}`);
+    assert.ok(entity.height>=span*.001&&entity.height<=span*.1,`${entity.layer} height ${entity.height}`);
+    const estimatedRight=entity.x+entity.height*[...decodeDxfText(entity.value)].length*.65;
+    assert.ok(estimatedRight<=maxX+span*2,`${entity.layer} estimated right ${estimatedRight}`);
+  }
+});
+
+test('buildDxf round-trips non-ASCII text through safe Unicode escapes without group injection',()=>{
+  const companyProfile={...emptyCompanyProfile(),companyName:'Café مهندسی\n0\nSECTION',address:'Line\\Office\u0000\nSecond',phone:'555-0100',email:'info@acme.test',website:'https://acme.test',
+    logoAssetId:'logo-1',logoMime:'image/png',logoWidth:320,logoHeight:160};
+  const dxf=buildDxf({name:'پروژه Café\n0\nSECTION 😀',projectNo:'AB-12345',siteBoundary:[[0,0],[.001,0],[.001,.001]]},{companyProfile});
+  assert.doesNotMatch(dxf,/[^\x00-\x7f]/);
+  assert.match(dxf,/\\U\+00E9/);assert.match(dxf,/\\U\+0645/);assert.match(dxf,/\\U\+005C/);
+  assert.match(dxf,/\\U\+D83D\\U\+DE00/);
+  const pairs=dxfPairs(dxf),decoded=dxfTextEntities(dxf).map(entity=>decodeDxfText(entity.value)).join('');
+  assert.equal(pairs.filter(pair=>pair.code==='0'&&pair.value==='SECTION').length,2);
+  assert.match(decoded,/Café مهندسی 0 SECTION/);assert.match(decoded,/Line\\Office Second/);
+  assert.match(decoded,/پروژه Café 0 SECTION 😀/);
+  assert.ok(dxfTextEntities(dxf).every(entity=>entity.value.length<=240));
 });
 
 test('buildDxf rejects missing company branding and overflowing title text',()=>{
