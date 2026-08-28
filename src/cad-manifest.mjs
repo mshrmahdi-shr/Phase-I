@@ -1,5 +1,6 @@
 const SCHEMA_VERSION=1;
 const FORMAT='phase-i-cad-manifest';
+export const CAD_RASTER_NORMALIZATION='physical-resolution-stripped';
 const FIGURE_CODES=Object.freeze(['A','B','C','D','E']);
 const SHA256=/^[a-f0-9]{64}$/;
 const HISTORICAL_CODE=/^H-(\d{4})-([1-9]\d{0,6})$/;
@@ -16,7 +17,7 @@ const EXTENSION_MIMES=Object.freeze({
 });
 const FILE_FIELDS=Object.freeze(['path','sha256','mime','bytes','pixelWidth','pixelHeight','worldFilePath']);
 const ITEM_FIELDS=Object.freeze(['code','year','provider','sourceResolutionMeters','geographicCorners','projectedCorners','attribution','license','redistributionEvidence','imagePath','rotation']);
-const INPUT_FIELDS=Object.freeze(['project','companyProfile','crs','files','items','logoAttachment']);
+const INPUT_FIELDS=Object.freeze(['project','companyProfile','crs','rasterNormalization','files','items','logoAttachment']);
 
 function fail(message){throw new Error(message);}
 
@@ -40,8 +41,8 @@ function exactRecord(value,fields,label){
 
 function normalizedText(value,label,{maximum=4000,required=true}={}){
   if(typeof value!=='string')fail(`${label} must contain text.`);
-  const normalized=value.replace(/\r\n?/g,'\n').trim();
-  if(required&&!normalized)fail(`${label} must contain nonempty text.`);
+  const normalized=value.replace(/\r\n?/g,'\n');
+  if(required&&!normalized.trim())fail(`${label} must contain nonempty text.`);
   if([...normalized].length>maximum)fail(`${label} exceeds its bounded text limit.`);
   if(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(normalized))fail(`${label} contains unsafe control text.`);
   return normalized;
@@ -176,10 +177,12 @@ function attachmentGeometry(corners,pixelWidth,pixelHeight,rotation,label){
   if(Math.abs(column[0]*row[0]+column[1]*row[1])>orthogonalTolerance)fail(`${label} attachment frame must have perpendicular pixel axes.`);
   const columnScale=columnLength/pixelWidth,rowScale=rowLength/pixelHeight,tolerance=Math.max(columnScale,rowScale)*1e-10;
   if(!Number.isFinite(columnScale)||!Number.isFinite(rowScale)||Math.abs(columnScale-rowScale)>tolerance)fail(`${label} attachment frame must have one uniform pixel scale.`);
-  const scale=canonicalNumber((columnScale+rowScale)/2,`${label} attachment scale`);if(!(scale>0))fail(`${label} attachment scale must remain positive.`);
+  const pixelSizeMetres=canonicalNumber((columnScale+rowScale)/2,`${label} pixel size`);if(!(pixelSizeMetres>0))fail(`${label} pixel size must remain positive.`);
+  const attachmentWidthMetres=canonicalNumber(columnLength,`${label} attachment width`),attachmentHeightMetres=canonicalNumber(rowLength,`${label} attachment height`);
+  if(!(attachmentWidthMetres>0)||!(attachmentHeightMetres>0))fail(`${label} attachment dimensions must remain positive.`);
   let derived=Math.atan2(column[1],column[0])*180/Math.PI;if(derived<0)derived+=360;derived=canonicalNumber(derived,`${label} derived rotation`);
   const supplied=normalizedAngle(rotation,`${label} rotation`);if(angularDistance(derived,supplied)>1e-8)fail(`${label} attachment rotation does not match its projected corners.`);
-  return {projectedCorners:checked,insertionPoint:[...lowerLeft],scale,rotation:supplied};
+  return {projectedCorners:checked,insertionPoint:[...lowerLeft],pixelSizeMetres,attachmentWidthMetres,attachmentHeightMetres,rotation:supplied};
 }
 
 function itemRank(item){
@@ -215,7 +218,8 @@ function checkedItems(value,fileByPath){
       license:normalizedText(row.license,`CAD manifest item ${code} license`,{maximum:4000}),
       redistributionEvidence:normalizedText(row.redistributionEvidence,`CAD manifest item ${code} redistribution evidence`,{maximum:1000}),
       imagePath,worldFilePath:image.worldFilePath,mime:image.mime,bytes:image.bytes,pixelWidth:image.pixelWidth,pixelHeight:image.pixelHeight,sha256:image.sha256,
-      insertionPoint:attachment.insertionPoint,scale:attachment.scale,rotation:attachment.rotation
+      insertionPoint:attachment.insertionPoint,pixelSizeMetres:attachment.pixelSizeMetres,attachmentWidthMetres:attachment.attachmentWidthMetres,
+      attachmentHeightMetres:attachment.attachmentHeightMetres,rotation:attachment.rotation
     });
     if(!(items.at(-1).sourceResolutionMeters>0)||items.at(-1).sourceResolutionMeters>100_000)fail(`CAD manifest item ${code} source resolution must be positive and plausible.`);
   }
@@ -243,14 +247,15 @@ function crossCheckFiles(files,fileByPath,items,imagePaths,logo){
   }
 }
 
-function csvNeutral(value){const text=String(value);return /^[\t ]*[=+\-@]/.test(text)?`'${text}`:text;}
+function csvNeutral(value){const text=String(value);return /^[\t \r\n]*[=+\-@]/.test(text)?`'${text}`:text;}
 function csvCell(value){
   const text=csvNeutral(value).replace(/\r\n?|\n/g,'\r\n');return /[",\r\n]/.test(text)?`"${text.replace(/"/g,'""')}"`:text;
 }
 function coordinateCell(point){return `[${decimal(point[0])} ${decimal(point[1])}]`;}
-function csv(items,crs){
-  const headers=['Code','Year','Provider','Source resolution (m)','Attribution','License','Redistribution evidence','Image path','World file path','MIME type','Bytes','Pixel width','Pixel height','SHA-256','Rotation (deg)','CRS EPSG','CRS name','CRS units','Geographic upper left','Geographic upper right','Geographic lower right','Geographic lower left','Projected upper left','Projected upper right','Projected lower right','Projected lower left'];
+function csv(project,company,items,crs){
+  const headers=['Project name','Project number','Project address','Project date','Company name','Company address','Company phone','Company email','Company website','Prepared by','Reviewed by','Code','Year','Provider','Source resolution (m)','Attribution','License','Redistribution evidence','Image path','World file path','MIME type','Bytes','Pixel width','Pixel height','SHA-256','Rotation (deg)','CRS EPSG','CRS name','CRS units','Geographic upper left','Geographic upper right','Geographic lower right','Geographic lower left','Projected upper left','Projected upper right','Projected lower right','Projected lower left'];
   const rows=[headers,...items.map(item=>[
+    project.name,project.projectNo,project.address,project.date,company.companyName,company.address,company.phone,company.email,company.website,company.preparedBy,company.reviewedBy,
     item.code,item.year,item.provider,decimal(item.sourceResolutionMeters),item.attribution,item.license,item.redistributionEvidence,item.imagePath,item.worldFilePath,item.mime,item.bytes,item.pixelWidth,item.pixelHeight,item.sha256,decimal(item.rotation),crs.epsg,crs.name,crs.units,
     ...item.geographicCorners.map(coordinateCell),...item.projectedCorners.map(coordinateCell)
   ])];
@@ -261,7 +266,7 @@ function displayValue(value){return String(value).replace(/\n/g,'\n    ');}
 function sources(project,company,crs,items){
   const lines=['PHASE I CAD PACKAGE SOURCE RECORD','', 'PROJECT',`Name: ${displayValue(project.name)}`,`Project number: ${displayValue(project.projectNo)}`,`Address: ${displayValue(project.address)}`,`Date: ${displayValue(project.date)}`,'',
     'COMPANY',`Name: ${displayValue(company.companyName)}`,`Address: ${displayValue(company.address)}`,`Phone: ${displayValue(company.phone)}`,`Email: ${displayValue(company.email)}`,`Website: ${displayValue(company.website)}`,`Prepared by: ${displayValue(company.preparedBy)}`,`Reviewed by: ${displayValue(company.reviewedBy)}`,'',
-    'COORDINATE REFERENCE SYSTEM',`EPSG: ${crs.epsg}`,`Name: ${crs.name}`,`Units: ${crs.units} (metres)`,'','SOURCES AND LICENCES'];
+    'COORDINATE REFERENCE SYSTEM',`EPSG: ${crs.epsg}`,`Name: ${crs.name}`,`Units: ${crs.units} (metres)`,`Raster normalization: ${CAD_RASTER_NORMALIZATION}`,'','SOURCES AND LICENCES'];
   for(const [index,item] of items.entries())lines.push('',`${index+1}. ${item.code}`,`Year: ${item.year}`,`Provider: ${displayValue(item.provider)}`,`Source resolution: ${decimal(item.sourceResolutionMeters)} m`,
     `Attribution: ${displayValue(item.attribution)}`,`Licence: ${displayValue(item.license)}`,`Redistribution evidence: ${displayValue(item.redistributionEvidence)}`,`Image: ${item.imagePath}`,`World file: ${item.worldFilePath}`,`SHA-256: ${item.sha256}`);
   return lines.join('\n')+'\n';
@@ -278,6 +283,7 @@ function readme(project,crs){
     'WHAT IS EDITABLE','Boundaries, frames, labels, title block, company text, logo frame, and notes are editable vector entities.',
     'Map imagery and company logo remain external raster references that can be moved, scaled, rotated, clipped, detached, or replaced.',
     'Raster pixels are not editable CAD vectors. Editing the linework does not change the source image pixels.','',
+    'IMAGE SCALE','All packaged raster files have embedded physical-resolution metadata stripped. The attachment script therefore supplies each full projected image width in drawing metres; pixel size remains in the world files and manifests.','',
     'FILES','Manifest.csv is the spreadsheet-friendly source list. Manifest.json is the machine-readable file and geometry record.',
     'Sources-and-Licences.txt records source, attribution, licence, resolution, hash, and redistribution evidence. World files beside each map image preserve its georeferencing.',''
   ].join('\n');
@@ -287,7 +293,7 @@ function decimal(value){
   const canonical=canonicalNumber(value,'Attachment number'),text=canonical.toFixed(12).replace(/(?:\.0+|(?:(\.[0-9]*?)0+))$/,'$1');
   if(!/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text))fail('Attachment number cannot be represented as an invariant plain decimal.');return text==='-0'?'0':text;
 }
-function scriptLine(path,attachment){return ['_-IMAGEATTACH',`"${path}"`,`${decimal(attachment.insertionPoint[0])},${decimal(attachment.insertionPoint[1])}`,decimal(attachment.scale),decimal(attachment.rotation)].join('\r\n')+'\r\n';}
+function scriptLine(path,attachment){return ['_-IMAGEATTACH',`"${path}"`,`${decimal(attachment.insertionPoint[0])},${decimal(attachment.insertionPoint[1])}`,decimal(attachment.attachmentWidthMetres),decimal(attachment.rotation)].join('\r\n')+'\r\n';}
 function attachmentScript(items,logo){return [...items.map(item=>scriptLine(item.imagePath,item)),scriptLine(logo.imagePath,logo)].join('');}
 
 function manifestCompany(company){const {logoMime:unusedMime,logoWidth:unusedWidth,logoHeight:unusedHeight,...result}=company;return result;}
@@ -312,7 +318,8 @@ export function allocateCadFilenames(candidates){
 
 export function buildCadManifest(input){
   const fields=exactRecord(input,INPUT_FIELDS,'CAD manifest input'),project=checkedProject(fields.project),company=checkedCompany(fields.companyProfile),crs=checkedCrs(fields.crs),files=checkedFiles(fields.files),fileByPath=new Map(files.map(file=>[file.path,file]));
+  if(fields.rasterNormalization!==CAD_RASTER_NORMALIZATION)fail(`CAD manifest raster normalization must be exactly ${CAD_RASTER_NORMALIZATION}.`);
   const {items,imagePaths}=checkedItems(fields.items,fileByPath),logo=checkedLogo(company,files,fileByPath,fields.logoAttachment);crossCheckFiles(files,fileByPath,items,imagePaths,logo);
-  const manifest={company:manifestCompany(company),crs,files,format:FORMAT,items,logoAttachment:logo,project,schemaVersion:SCHEMA_VERSION};
-  return Object.freeze({json:stableJson(manifest),csv:csv(items,crs),sourcesText:sources(project,company,crs,items),readmeText:readme(project,crs),attachScript:attachmentScript(items,logo)});
+  const manifest={company:manifestCompany(company),crs,files,format:FORMAT,items,logoAttachment:logo,project,rasterNormalization:CAD_RASTER_NORMALIZATION,schemaVersion:SCHEMA_VERSION};
+  return Object.freeze({json:stableJson(manifest),csv:csv(project,company,items,crs),sourcesText:sources(project,company,crs,items),readmeText:readme(project,crs),attachScript:attachmentScript(items,logo)});
 }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const manifestModule=()=>import('../src/cad-manifest.mjs');
-const HASHES=Object.freeze({a:'a'.repeat(64),b:'b'.repeat(64),c:'c'.repeat(64),d:'d'.repeat(64),e:'e'.repeat(64),f:'f'.repeat(64),zero:'0'.repeat(64)});
+const HASHES=Object.freeze({a:'a'.repeat(64),b:'b'.repeat(64),c:'c'.repeat(64),d:'d'.repeat(64),e:'e'.repeat(64),f:'f'.repeat(64),g:'1'.repeat(64),h:'2'.repeat(64),zero:'0'.repeat(64)});
 
 function project(overrides={}){
   return {name:'Phase I Environmental Site Assessment',projectNo:'AB-12345',address:'92 Orchard Road',date:'2026-08-28',...overrides};
@@ -17,6 +17,7 @@ function company(overrides={}){
 
 const crs=Object.freeze({zone:17,epsg:'EPSG:26917',name:'NAD83 / UTM zone 17N',units:'m'});
 const figureProjected=[[630000,4831000],[630240,4831000],[630240,4830840],[630000,4830840]];
+const tiffProjected=[[632000,4831000],[632080,4831060],[632110,4831020],[632030,4830960]];
 const historicalProjected=[[631000,4830000],[631000,4830400],[631200,4830400],[631200,4830000]];
 const logoProjected=[[629900,4830800],[629916,4830800],[629916,4830792],[629900,4830792]];
 
@@ -37,16 +38,23 @@ function item(overrides={}){
 function input(overrides={}){
   return structuredClone({
     project:project(),companyProfile:company(),crs,
+    rasterNormalization:'physical-resolution-stripped',
     files:[
       file('Project.dxf',HASHES.a,'application/dxf',8192),
       file('images/Figure-A.png',HASHES.b,'image/png',120000,2400,1600,'images/Figure-A.pgw'),
       file('images/Figure-A.pgw',HASHES.c,'text/plain',96),
       file('images/H-1960-1.jpg',HASHES.d,'image/jpeg',80000,2000,1000,'images/H-1960-1.jgw'),
       file('images/H-1960-1.jgw',HASHES.e,'text/plain',96),
+      file('images/Figure-B.tif',HASHES.g,'image/tiff',160000,1000,500,'images/Figure-B.tfw'),
+      file('images/Figure-B.tfw',HASHES.h,'text/plain',96),
       file('company/logo.png',HASHES.f,'image/png',4000,320,160,null)
     ],
     items:[
       item(),
+      item({code:'B',year:2024,provider:'Ontario imagery programme',sourceResolutionMeters:0.1,
+        geographicCorners:[[-79.38,43.7],[-79.379,43.701],[-79.378,43.7005],[-79.379,43.6995]],
+        projectedCorners:tiffProjected,attribution:'Ontario imagery programme',license:'Open Government Licence - Ontario',
+        redistributionEvidence:'official-provider-exportable-policy',imagePath:'images/Figure-B.tif',rotation:36.8698976458}),
       item({code:'H-1960-1',year:1960,provider:'City of Toronto Archives',sourceResolutionMeters:0.2,
         geographicCorners:[[-79.39,43.69],[-79.39,43.693],[-79.387,43.693],[-79.387,43.69]],
         projectedCorners:historicalProjected,attribution:'City of Toronto Archives, Series 12',license:'Reproduction permission on file',
@@ -81,28 +89,39 @@ test('builds deterministic canonical JSON with complete CRS, file, company, sour
   assert.equal(first.json.endsWith('\n'),true);assert.equal(first.json.includes('\r'),false);
   const manifest=JSON.parse(first.json);
   assert.deepEqual(manifest.crs,crs);assert.equal(manifest.schemaVersion,1);assert.equal(manifest.format,'phase-i-cad-manifest');
-  assert.deepEqual(manifest.files.map(entry=>entry.path),['Project.dxf','company/logo.png','images/Figure-A.pgw','images/Figure-A.png','images/H-1960-1.jgw','images/H-1960-1.jpg']);
-  assert.deepEqual(manifest.items.map(entry=>entry.code),['A','H-1960-1']);
+  assert.deepEqual(manifest.files.map(entry=>entry.path),['Project.dxf','company/logo.png','images/Figure-A.pgw','images/Figure-A.png','images/Figure-B.tfw','images/Figure-B.tif','images/H-1960-1.jgw','images/H-1960-1.jpg']);
+  assert.deepEqual(manifest.items.map(entry=>entry.code),['A','B','H-1960-1']);
   assert.equal(manifest.files.find(entry=>entry.path==='images/Figure-A.png').sha256,HASHES.b);
   assert.equal(manifest.items[0].worldFilePath,'images/Figure-A.pgw');
-  assert.deepEqual(manifest.items[1].projectedCorners,historicalProjected);
-  assert.equal(manifest.items[1].redistributionEvidence,'manual-permission-confirmed');
+  assert.deepEqual({pixelSizeMetres:manifest.items[0].pixelSizeMetres,width:manifest.items[0].attachmentWidthMetres,height:manifest.items[0].attachmentHeightMetres},{pixelSizeMetres:0.1,width:240,height:160});
+  assert.deepEqual({pixelSizeMetres:manifest.items[1].pixelSizeMetres,width:manifest.items[1].attachmentWidthMetres,height:manifest.items[1].attachmentHeightMetres},{pixelSizeMetres:0.1,width:100,height:50});
+  assert.deepEqual(manifest.items[2].projectedCorners,historicalProjected);
+  assert.equal(manifest.items[2].redistributionEvidence,'manual-permission-confirmed');
   assert.deepEqual(manifest.company,{address:'1 Main Street',companyName:'Acme Environmental',email:'info@acme.test',phone:'416-555-0100',preparedBy:'A. Author',reviewedBy:'R. Reviewer',website:'https://acme.test'});
+  assert.deepEqual({pixelSizeMetres:manifest.logoAttachment.pixelSizeMetres,width:manifest.logoAttachment.attachmentWidthMetres,height:manifest.logoAttachment.attachmentHeightMetres},{pixelSizeMetres:0.05,width:16,height:8});
   assert.deepEqual(Object.keys(manifest).sort(),Object.keys(manifest),'canonical top-level keys are lexically ordered');
 });
 
 test('emits RFC 4180 CSV with CRLF, doubled quotes, embedded newlines, and formula-neutral text cells',async()=>{
   const {buildCadManifest}=await manifestModule(),source=input();
-  source.project=project({name:'=CMD|\' /C calc\'!A0',address:'line one\r\nline "two"'});
-  source.companyProfile=company({companyName:'+SUM(1,1)',address:'@attacker',preparedBy:'-2+3'});
+  source.project=project({name:' \t=CMD|\' /C calc\'!A0',projectNo:'+SUM(1,1)',address:'-2+3',date:'@NOW()'});
+  source.companyProfile=company({companyName:'\t=COMPANY()',address:'\n+ADDRESS()',phone:' -PHONE()',email:'@EMAIL()',website:'=WEBSITE()',preparedBy:'+PREPARED()',reviewedBy:'-REVIEWED()'});
   source.items[0].provider='=HYPERLINK("https://bad.test","click")';source.items[0].attribution='first line\nsecond, "quoted" line';
   const output=buildCadManifest(source),rows=csvRows(output.csv),header=rows[0],figure=rows[1];
   assert.equal(output.csv.endsWith('\r\n'),true);assert.equal(/(^|[^\r])\n/.test(output.csv),false,'CSV contains no lone LF');
-  assert.equal(rows.length,3);assert.equal(header[0],'Code');
+  assert.equal(rows.length,4);assert.equal(header[0],'Project name');
+  const expectedMetadata={
+    'Project name':'\' \t=CMD|\' /C calc\'!A0','Project number':'\'+SUM(1,1)','Project address':'\'-2+3','Project date':'\'@NOW()',
+    'Company name':'\'\t=COMPANY()','Company address':'\'\r\n+ADDRESS()','Company phone':'\' -PHONE()','Company email':'\'@EMAIL()',
+    'Company website':'\'=WEBSITE()','Prepared by':'\'+PREPARED()','Reviewed by':'\'-REVIEWED()'
+  };
+  for(const [column,expected] of Object.entries(expectedMetadata))assert.equal(figure[header.indexOf(column)],expected,column);
   assert.equal(figure[header.indexOf('Provider')],'\'=HYPERLINK("https://bad.test","click")');
   assert.equal(figure[header.indexOf('Attribution')],'first line\r\nsecond, "quoted" line');
   assert.equal(output.csv.includes('"first line\r\nsecond, ""quoted"" line"'),true);
-  assert.doesNotMatch(output.csv,/(?:^|\r\n)[=+\-@]/);
+  for(const row of rows.slice(1))for(const cell of row)assert.doesNotMatch(cell,/^[\t \r\n]*[=+\-@]/);
+  const manifest=JSON.parse(output.json);assert.equal(manifest.project.name,' \t=CMD|\' /C calc\'!A0');assert.equal(manifest.company.companyName,'\t=COMPANY()');
+  assert.match(output.sourcesText,/Name:  \t=CMD/);assert.doesNotMatch(output.sourcesText,/Name: '\s*=CMD/);
 });
 
 test('writes a source record and beginner guide with explicit vector/raster limitations and numbered CAD steps',async()=>{
@@ -120,11 +139,20 @@ test('emits generated-path-only CRLF IMAGEATTACH commands with invariant geometr
   source.items[0].provider='\r\n_.ERASE\r\nALL';source.items[1].license='"\n_.QUIT';
   const script=buildCadManifest(source).attachScript;
   assert.equal(script.endsWith('\r\n'),true);assert.equal(/(^|[^\r])\n/.test(script),false);assert.match(script,/^[\x20-\x7e\r\n]+$/);
-  assert.equal((script.match(/_-IMAGEATTACH/g)||[]).length,3);
-  assert.match(script,/_-IMAGEATTACH\r\n"images\/Figure-A\.png"\r\n630000,4830840\r\n0\.1\r\n0\r\n/);
-  assert.match(script,/_-IMAGEATTACH\r\n"images\/H-1960-1\.jpg"\r\n631200,4830000\r\n0\.2\r\n90\r\n/);
-  assert.match(script,/_-IMAGEATTACH\r\n"company\/logo\.png"\r\n629900,4830792\r\n0\.05\r\n0\r\n/);
+  assert.equal((script.match(/_-IMAGEATTACH/g)||[]).length,4);
+  assert.match(script,/_-IMAGEATTACH\r\n"images\/Figure-A\.png"\r\n630000,4830840\r\n240\r\n0\r\n/);
+  assert.match(script,/_-IMAGEATTACH\r\n"images\/Figure-B\.tif"\r\n632030,4830960\r\n100\r\n36\.8698976458\r\n/);
+  assert.match(script,/_-IMAGEATTACH\r\n"images\/H-1960-1\.jpg"\r\n631200,4830000\r\n400\r\n90\r\n/);
+  assert.match(script,/_-IMAGEATTACH\r\n"company\/logo\.png"\r\n629900,4830792\r\n16\r\n0\r\n/);
+  const lines=script.trimEnd().split('\r\n'),attachments=new Map();
+  for(let index=0;index<lines.length;index+=5){assert.equal(lines[index],'_-IMAGEATTACH');attachments.set(lines[index+1].slice(1,-1),{width:Number(lines[index+3]),rotation:Number(lines[index+4])});}
+  for(const [path,pixelWidth,pixelHeight,width,height,rotation] of [
+    ['images/Figure-A.png',2400,1600,240,160,0],['images/Figure-B.tif',1000,500,100,50,36.8698976458],
+    ['images/H-1960-1.jpg',2000,1000,400,200,90],['company/logo.png',320,160,16,8,0]
+  ]){const attached=attachments.get(path);assert.equal(attached.width,width,path);assert.equal(attached.width*pixelHeight/pixelWidth,height,`${path} reconstructed height`);assert.equal(attached.rotation,rotation,path);}
   assert.doesNotMatch(script,/ERASE|SHELL|QUIT|Acme|Toronto|Licence|AB-12345/i);assert.equal(script.includes(','),true);assert.doesNotMatch(script,/\d,\d{3}(?:\D|$)/,'numbers never use grouped thousands separators');
+  const denser=input();denser.files.find(file=>file.path==='images/Figure-A.png').pixelWidth=4800;denser.files.find(file=>file.path==='images/Figure-A.png').pixelHeight=3200;
+  assert.equal(buildCadManifest(denser).attachScript,buildCadManifest(input()).attachScript,'normalized image pixel density does not change projected attachment width');
 });
 
 test('allocates ASCII raster paths deterministically and suffixes normalized collisions independent of input order',async()=>{
@@ -153,7 +181,7 @@ test('rejects unsafe, ambiguous, duplicate, reserved, and extension/media-mismat
   for(const bad of ['../Figure-A.png','/images/Figure-A.png','C:/images/Figure-A.png','images\\Figure-A.png','images/%2e%2e/Figure-A.png','images/bad\u0000.png','images/CON.png','images/Figure-A.png.','images/Ｆigure-A.png']){
     const value=input();value.files[1].path=bad;value.items[0].imagePath=bad;cases.push(value);
   }
-  {const value=input();value.files.push(file('IMAGES/figure-a.PNG',HASHES.zero,'image/png',1,1,1,'images/other.pgw'));cases.push(value);}
+  {const value=input();value.files.push(file('IMAGES/figure-c.PNG',HASHES.zero,'image/png',1,1,1,'images/other.pgw'));cases.push(value);}
   {const value=input();value.files[1].mime='image/jpeg';cases.push(value);}
   {const value=input();value.files[1].path='images/Figure-A.exe';value.items[0].imagePath='images/Figure-A.exe';cases.push(value);}
   for(const value of cases)assert.throws(()=>buildCadManifest(value),/path|relative|ASCII|duplicate|reserved|extension|media|canonical|safe|world/i);
@@ -178,7 +206,7 @@ test('rejects malformed or mismatched CRS, item identity, source metadata, paths
     value=>{value.items[0].imagePath='images/H-1960-1.jpg';},value=>{value.items[0].geographicCorners[0]=[-181,43.7];},
     value=>{value.items[0].geographicCorners=[[-79.4,43.7],[-79.396,43.7],[-79.4,43.696],[-79.397,43.696]];},
     value=>{value.items[0].projectedCorners[0]=[NaN,4831000];},value=>{value.items[0].projectedCorners[2]=value.items[0].projectedCorners[1];},
-    value=>{value.items[0].rotation=5;},value=>{value.items[1].year=1961;},value=>{value.items.push(clone(value.items[0]));},value=>{value.items[0].extra='x';}
+    value=>{value.items[0].rotation=5;},value=>{value.items[2].year=1961;},value=>{value.items.push(clone(value.items[0]));},value=>{value.items[0].extra='x';}
   ];
   for(const mutate of mutations){const value=input();mutate(value);assert.throws(()=>buildCadManifest(value),/CRS|EPSG|zone|unit|item|code|year|provider|resolution|text|licen|evidence|image|corner|finite|affine|rotation|duplicate|exact|path/i);}
 });
@@ -187,7 +215,7 @@ test('requires every selected raster and logo to match exactly one valid attachm
   const {buildCadManifest}=await manifestModule(),mutations=[
     value=>{value.items.pop();},value=>{value.files.splice(3,2);},value=>{value.files.push(file('images/Figure-B.png',HASHES.zero,'image/png',10,10,10,'images/Figure-B.pgw'));value.files.push(file('images/Figure-B.pgw',HASHES.zero,'text/plain',10));},
     value=>{value.logoAttachment=null;},value=>{delete value.logoAttachment;},value=>{value.logoAttachment.projectedCorners[2][0]+=1;},value=>{value.logoAttachment.rotation=90;},
-    value=>{value.files[5].pixelWidth=321;},value=>{value.companyProfile.logoWidth=319;},value=>{value.companyProfile.logoMime='image/jpeg';},
+    value=>{value.files[7].pixelWidth=321;},value=>{value.companyProfile.logoWidth=319;},value=>{value.companyProfile.logoMime='image/jpeg';},
     value=>{value.items[0].projectedCorners[2][1]-=20;},value=>{value.items[0].projectedCorners[1][1]+=1;value.items[0].projectedCorners[2][1]+=1;},
     value=>{value.files.push(file('company/logo.jpg',HASHES.zero,'image/jpeg',5000,320,160,null));}
   ];
@@ -198,10 +226,19 @@ test('is locale-independent and rejects nonfinite or unsafe numeric inputs befor
   const {buildCadManifest}=await manifestModule(),source=input(),original=Number.prototype.toLocaleString;
   Number.prototype.toLocaleString=function(){return '9.999,5';};
   try{
-    const output=buildCadManifest(source);assert.match(output.attachScript,/0\.1/);assert.doesNotMatch(output.attachScript,/9\.999,5/);
+    const output=buildCadManifest(source);assert.match(output.attachScript,/240/);assert.doesNotMatch(output.attachScript,/9\.999,5/);
   }finally{Number.prototype.toLocaleString=original;}
   for(const mutate of [
     value=>{value.logoAttachment.projectedCorners[0][0]=Infinity;},value=>{value.logoAttachment.rotation=NaN;},
     value=>{value.items[0].sourceResolutionMeters=Infinity;},value=>{value.files[0].bytes=Number.MAX_SAFE_INTEGER+1;}
   ]){const value=input();mutate(value);assert.throws(()=>buildCadManifest(value),/finite|safe|number|byte|resolution|corner|rotation/i);}
+});
+
+test('requires an explicit physical-resolution-stripped raster contract for IMAGEATTACH width semantics',async()=>{
+  const {buildCadManifest,CAD_RASTER_NORMALIZATION}=await manifestModule(),valid=input(),output=buildCadManifest(valid);
+  assert.equal(CAD_RASTER_NORMALIZATION,'physical-resolution-stripped');
+  assert.equal(JSON.parse(output.json).rasterNormalization,'physical-resolution-stripped');
+  assert.match(output.readmeText,/physical-resolution metadata.*stripped/i);assert.match(output.sourcesText,/Raster normalization: physical-resolution-stripped/);
+  const missing={...valid};delete missing.rasterNormalization;
+  for(const value of [missing,{...valid,rasterNormalization:null},{...valid,rasterNormalization:'preserve-embedded-dpi'},{...valid,rasterNormalization:' physical-resolution-stripped'}])assert.throws(()=>buildCadManifest(value),/raster|resolution|normaliz|exact/i);
 });
