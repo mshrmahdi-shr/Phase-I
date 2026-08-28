@@ -161,7 +161,8 @@ export function figureDefaults(){
   };
 }
 
-export function createProject({name='',projectNo='',address='',date='',company=''}={}){
+export function createProject({name='',projectNo='',address='',date='',company='',companyProfileSnapshot=null}={}){
+  const branding=companyProfileSnapshot===null?null:validatedCompanySnapshot(companyProfileSnapshot,'New project company profile');
   return {
     id: (globalThis.crypto?.randomUUID?.() || `p-${Date.now()}`),
     name, projectNo, address, date, company,
@@ -169,7 +170,7 @@ export function createProject({name='',projectNo='',address='',date='',company='
     siteBoundary:[], buildingBoundary:[], historical:[],historicalSequenceCounters:{},
     geology:{surficial:null,bedrock:null},
     dpi:300,
-    companyProfileSnapshot:null,
+    companyProfileSnapshot:branding,
     exportPreferences:{codes:[],selection:[],sources:{A:'osm',B:'esri-imagery',C:'toporama',D:'osm',E:'osm'}},
     figures:figureDefaults(),
     createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()
@@ -348,6 +349,23 @@ function dxfTextBlock(layer,value,x,y,extent,preferredHeight){
     content:chunks.map((chunk,index)=>`0\nTEXT\n8\n${layer}\n10\n${x}\n20\n${y-index*rowStep}\n40\n${height}\n1\n${chunk.encoded}\n`).join(''),
     nextY:y-chunks.length*rowStep
   };
+}
+
+function validatedCompanySnapshot(value,label='Project company profile'){
+  let profile;try{profile=normalizeCompanyProfile(value);}catch(error){throw new Error(`${label} is invalid: ${error.message}`,{cause:error});}
+  const errors=validateCompanyProfile(profile);if(errors.length)throw new Error(`${label} is incomplete: ${errors.map(error=>error.message).join(' ')}`);
+  return snapshotCompanyProfile(profile);
+}
+
+export function requireProjectCompanyProfile(project){
+  if(!project?.companyProfileSnapshot)throw new Error('Project branding is not assigned. Use Apply Current Company Template to this project before creating outputs.');
+  return validatedCompanySnapshot(project.companyProfileSnapshot);
+}
+
+export function applyCompanyProfileToProject(project,profile,{updatedAt=new Date().toISOString()}={}){
+  const restored=restoreProject(project),snapshot=validatedCompanySnapshot(profile,'Reusable company template');
+  if(typeof updatedAt!=='string'||Number.isNaN(Date.parse(updatedAt)))throw new Error('Project branding update time must be an ISO timestamp.');
+  return restoreProject({...restored,companyProfileSnapshot:snapshot,updatedAt});
 }
 
 function dxfDrawingFrame(siteBoundary,buildingBoundary,location){

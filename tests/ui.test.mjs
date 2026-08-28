@@ -27,7 +27,7 @@ test('index exposes the core Phase I workflow controls', () => {
   for (const id of ['address','searchAddress','drawSite','drawBuilding','finishDraw','figureList','manageHistorical','historicalDialog','historicalYear',
     'searchHistorical','manualHistoricalFile','manualWorldFile','manualCitation','manualPermission','historicalCropFrame','historicalApprovedList','historicalViewControls','cancelHistoricalView','uploadGeology','printA3','exportDxf',
     'exportProjectPackage','importProjectPackage','importProjectPackageFile','projectPackageDialog','projectPackageStatus','confirmProjectPackageImport','cancelProjectPackage',
-    'editCompanyProfile','exportCompanyTemplate','importCompanyTemplate','companyProfileDialog','printCompanyLogo','printCompanyName','printCompanyContact',
+    'editCompanyProfile','applyCompanyTemplate','exportCompanyTemplate','importCompanyTemplate','companyProfileDialog','printCompanyLogo','printCompanyName','printCompanyContact',
     'downloadCad','cadSelectionCount','cadCrs','cadReadiness']) {
     assert.match(html,new RegExp(`id=["']${id}["']`),`missing #${id}`);
   }
@@ -38,7 +38,7 @@ test('index exposes the core Phase I workflow controls', () => {
 test('app wires the current historical provider registry and asset store into PDF planning',()=>{
   const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
   assert.match(source,/const HISTORICAL_PROVIDERS=Object\.freeze\(\[ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER\]\)/);
-  assert.match(source,/getState:\(\)=>\(\{project,datasets:datasets\(\),companyProfile,providers:HISTORICAL_PROVIDERS,assetStore\}\)/);
+  assert.match(source,/getState:\(\)=>\(\{project,datasets:datasets\(\),companyProfile:project\.companyProfileSnapshot,providers:HISTORICAL_PROVIDERS,assetStore\}\)/);
   assert.match(source,/providers:HISTORICAL_PROVIDERS,getProject:/);
 });
 
@@ -48,6 +48,17 @@ test('app wires the atomic CAD package through the shared export dialog and save
   assert.match(source,/createExportDialog\([\s\S]*prepareCadBranding[\s\S]*exportCadPackage/);
   assert.doesNotMatch(source,/prepareCadBranding[\s\S]{0,500}assetStore\.get/);
   assert.match(source,/return\s+Object\.freeze\(\{companyProfile:branding\.companyProfile,companyLogo:branding\.companyLogo\}\)/);
+});
+
+test('app keeps project branding authoritative for every output and exposes only an explicit template apply action',()=>{
+  const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
+  assert.match(source,/function projectOutputProfile\(\)\{return requireProjectCompanyProfile\(project\);\}/);
+  assert.match(source,/exportDxf[\s\S]{0,300}outputSnapshot\(projectOutputProfile\(\)\)/);
+  assert.match(source,/printState\(\)[\s\S]{0,500}companyProfile:printBranding\?\.companyProfile\|\|project\.companyProfileSnapshot/);
+  assert.match(source,/printA3[\s\S]{0,400}outputSnapshot\(projectOutputProfile\(\)\)/);
+  assert.match(source,/getState:\(\)=>\(\{project,datasets:datasets\(\),companyProfile:project\.companyProfileSnapshot,providers:HISTORICAL_PROVIDERS,assetStore\}\)/);
+  assert.match(source,/applyCompanyTemplate[\s\S]{0,700}applyCompanyProfileToProject\(project,companyProfile/);
+  assert.doesNotMatch(source,/companyProfileSnapshot\s*=\s*companyProfile/);
 });
 
 test('app wires compensated project-package persistence and keeps JSON import/export explicitly legacy',()=>{
@@ -90,7 +101,7 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   const document=dom.window.document,$=id=>document.getElementById(id),container=$('map');
   let oldBindingsAborted=false;document[Symbol.for('phase-i-esa.drawing-bindings')]={abort(){oldBindingsAborted=true;}};
   Object.defineProperties(container,{clientWidth:{value:900},clientHeight:{value:650}});
-  const p={...createProject({name:'QA',projectNo:'FE 26-15876',address:'Toronto',date:'2026-08-26'}),location:{lat:43.65,lng:-79.38}};
+  const p={...createProject({name:'QA',projectNo:'FE 26-15876',address:'Toronto',date:'2026-08-26',companyProfileSnapshot:COMPANY_PROFILE}),location:{lat:43.65,lng:-79.38}};
   localStorage.setItem('phase-i-esa-project-v2',JSON.stringify(p));
   localStorage.setItem('phase-i-esa-company-profile-v1',JSON.stringify(COMPANY_PROFILE));
   globalThis.indexedDB=new IDBFactory();

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import JSZip from 'jszip';
+import * as core from '../src/core.mjs';
 import {createProject} from '../src/core.mjs';
 import {projectWebMercator,unprojectWebMercator} from '../src/imagery/placement.mjs';
 import {decodeManualImage} from '../src/imagery/manual-image.mjs';
@@ -41,6 +42,11 @@ function companyProfile(){
     logoMime:'image/png',logoWidth:3,logoHeight:2,logoPlacement:{align:'left',scale:1},updatedAt:STAMP};
 }
 
+function companyProfileB(){
+  return {...companyProfile(),id:'company-bravo',companyName:'Bravo Environmental',address:'90 B Street',email:'hello@bravo.test',website:'https://bravo.test',
+    logoAssetId:'company-logo-bravo',updatedAt:'2026-08-27T12:00:00Z'};
+}
+
 function manualItem({id,assetId,year,sequence,title}){
   return {id,year,sequence,title,mode:'manual',providerId:null,sourceUrl:null,licenseUrl:null,attribution:`Archive permission for ${title}`,
     policy:'exportable',resolutionMeters:null,bounds:a3Bounds(SITE),placement:{center:projectWebMercator([SITE.lng,SITE.lat]),groundWidth:100,
@@ -67,6 +73,7 @@ function projectFixture(){
     manualItem({id:IDS.secondItem,assetId:IDS.secondAsset,year:1960,sequence:2,title:'scan two.png'}),officialItem()
   ];
   project.historicalSequenceCounters={'1960':2,'1972':1};
+  project.companyProfileSnapshot=structuredClone(companyProfile());
   return project;
 }
 
@@ -154,6 +161,22 @@ test('exports a deterministic versioned package and round-trips two manual image
   assert.deepEqual(manifest.entries.filter(entry=>entry.kind==='historical-image').map(entry=>entry.redistribution.evidence),['manual-permission-confirmed','manual-permission-confirmed']);
   assert.equal(manifest.entries.some(entry=>entry.referenceIds.includes(IDS.officialItem)),false,'official imagery remains metadata-only');
   assert.match(await archive.file('project.json').async('text'),/Official Toronto 1972/);
+});
+
+test('project package preserves archived Company A when reusable Company B changes until explicit apply',async()=>{
+  const value=await fixture(),companyB=companyProfileB();
+  value.store.values.set(companyB.logoAssetId,{metadata:{...value.assets[0].metadata,id:companyB.logoAssetId},blob:value.assets[0].blob});
+  const unchanged=await exportProjectPackage({project:value.project,companyProfile:companyB,assetStore:value.store,Zip:JSZip});
+  const importedA=await inspectPackage(unchanged.blob,{Zip:JSZip});
+  assert.equal(importedA.companyProfile.companyName,'Acme Environmental');
+  assert.equal(importedA.companyProfile.logoAssetId,'company-logo-acme');
+  assert.equal(importedA.assets[0].metadata.id,'company-logo-acme','the current template logo cannot substitute for the project logo');
+
+  const applied=core.applyCompanyProfileToProject(value.project,companyB,{updatedAt:'2026-08-28T12:00:00Z'});
+  const changed=await exportProjectPackage({project:applied,companyProfile:companyB,assetStore:value.store,Zip:JSZip});
+  const importedB=await inspectPackage(changed.blob,{Zip:JSZip});
+  assert.equal(importedB.companyProfile.companyName,'Bravo Environmental');
+  assert.equal(importedB.companyProfile.logoAssetId,'company-logo-bravo');
 });
 
 test('export fails closed for missing, foreign-kind, mismatched-hash, unpermitted, stale, and aborted assets without producing a partial package',async()=>{

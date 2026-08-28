@@ -74,15 +74,15 @@ function checkedProfile(value,{strict=false}={}){
   if(!SAFE_ID.test(profile.id)||!SAFE_ID.test(profile.logoAssetId))fail('Company profile and logo asset IDs must use safe bounded characters.');
   if(strict&&!equalValue(profile,value))fail('Company profile JSON is not canonical or contains unsupported values.');return profile;
 }
-function checkedProject(value,profile,{strict=false}={}){
+function checkedProject(value,{strict=false}={}){
   if(strict)exactObject(value,PROJECT_FIELDS,'Project package project');
-  const candidate={...value,companyProfileSnapshot:profile},project=restoreProject(candidate);
+  const project=restoreProject(value);
   if(!SAFE_ID.test(project.id))fail('Project ID must use safe bounded characters.');
   isoTimestamp(project.createdAt,'Project createdAt');isoTimestamp(project.updatedAt,'Project updatedAt');
   if(Date.parse(project.updatedAt)<Date.parse(project.createdAt))fail('Project updatedAt cannot precede createdAt.');
   if(![150,300].includes(project.dpi))fail('Project DPI must be 150 or 300.');
   if(project.schemaVersion!==6)fail('Project package requires project schema version 6.');
-  project.companyProfileSnapshot=profile;
+  if(!project.companyProfileSnapshot)fail('Project branding is not assigned. Apply the current company template to this project before packaging it.');
   if(strict&&!equalValue(project,value))fail('Project JSON is not canonical, has unsupported fields, or attempts a legacy trust upgrade.');
   return project;
 }
@@ -157,9 +157,9 @@ function metadataEntry({path,kind,bytes,asset=null,owner,referenceIds,policy,evi
 }
 async function hashEntries(entries){for(const entry of entries)entry.sha256=await sha256(entry.bytes);return entries;}
 
-export async function exportProjectPackage({project,companyProfile,assetStore,Zip=globalThis.JSZip,signal,onProgress=()=>{}}={}){
+export async function exportProjectPackage({project,assetStore,Zip=globalThis.JSZip,signal,onProgress=()=>{}}={}){
   const Constructor=zipConstructor(Zip);throwIfAborted(signal);if(!assetStore||typeof assetStore.get!=='function')fail('An asset store is required.');
-  const profile=checkedProfile(companyProfile),snapshot=checkedProject(project,profile),references=projectReferences(snapshot,profile),assets=[];
+  const snapshot=checkedProject(project),profile=checkedProfile(snapshot.companyProfileSnapshot),references=projectReferences(snapshot,profile),assets=[];
   let completed=0;for(const [id,reference] of references){
     throwIfAborted(signal);const stored=await assetStore.get(id);throwIfAborted(signal);if(!stored)fail(`Referenced ${reference.kind} asset "${id}" is missing.`);
     const asset=await checkedAsset(stored,{...reference,id,signal});assets.push({...asset,reference});onProgress({phase:'reading-assets',completed:++completed,total:references.size,assetId:id});
@@ -287,7 +287,8 @@ export async function inspectProjectPackage(file,{Zip=globalThis.JSZip,signal,de
   const payload=new Map();for(const entry of manifest.entries){const bytes=await inflate(byPath.get(entry.path)??fail(`Project package is missing "${entry.path}".`),budget,signal);if(bytes.byteLength!==entry.size)fail(`Project package entry "${entry.path}" size does not match its manifest.`);if(await sha256(bytes)!==entry.sha256)fail(`Project package entry "${entry.path}" hash does not match its manifest.`);payload.set(entry.path,bytes);throwIfAborted(signal);}
   const projectEntry=manifest.entries.find(entry=>entry.kind==='project-json'),profileEntry=manifest.entries.find(entry=>entry.kind==='company-profile-json'),readmeEntry=manifest.entries.find(entry=>entry.kind==='readme');
   if(!projectEntry||!profileEntry||!readmeEntry)fail('Project package is missing required project, company profile, or README entries.');
-  const profile=checkedProfile(parseJson(payload.get(profileEntry.path),'company-profile.json'),{strict:true}),project=checkedProject(parseJson(payload.get(projectEntry.path),'project.json'),profile,{strict:true});
+  const profile=checkedProfile(parseJson(payload.get(profileEntry.path),'company-profile.json'),{strict:true}),project=checkedProject(parseJson(payload.get(projectEntry.path),'project.json'),{strict:true});
+  if(!equalValue(project.companyProfileSnapshot,profile))fail('Project package company profile does not exactly match the archived project branding snapshot.');
   if(manifest.projectId!==project.id||manifest.companyProfileId!==profile.id)fail('Project package manifest owner IDs do not match project/profile data.');
   expectedMetadataEntry(projectEntry,{kind:'project-json',path:'project.json',mediaType:'application/json',owner:{type:'project',id:project.id},referenceIds:[project.id],policy:'metadata',evidence:'required-project-data'});
   expectedMetadataEntry(profileEntry,{kind:'company-profile-json',path:'company-profile.json',mediaType:'application/json',owner:{type:'company-profile',id:profile.id},referenceIds:[profile.id],policy:'metadata',evidence:'required-company-profile'});

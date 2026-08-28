@@ -1,7 +1,7 @@
 # Historical Imagery, Editable CAD Package, and Company Template Design
 
-**Date:** 2026-08-26  
-**Repository:** `mshrmahdi-shr/Phase-I`  
+**Date:** 2026-08-26
+**Repository:** `mshrmahdi-shr/Phase-I`
 **Status:** Proposed for user review
 
 ## 1. Objective

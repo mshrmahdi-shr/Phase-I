@@ -33,7 +33,7 @@ function memoryStore(initial=[]){
   };
 }
 
-function setup({persisted=null,store=memoryStore(),loadProfile,saveProfile}={}){
+function setup({persisted=null,store=memoryStore(),loadProfile,saveProfile,isAssetReferenced=()=>false}={}){
   const dom=new JSDOM(fs.readFileSync(new URL('../index.html',import.meta.url),'utf8'),{url:'https://example.test/',pretendToBeVisual:true});
   dom.window.createImageBitmap=async()=>({width:320,height:160,close(){}});
   let saved=persisted?structuredClone(persisted):null;
@@ -41,7 +41,7 @@ function setup({persisted=null,store=memoryStore(),loadProfile,saveProfile}={}){
   const controller=createCompanyProfileDialog({
     document:dom.window.document,assetStore:store,Zip:JSZip,
     loadProfile:loadProfile||(()=>saved),
-    saveProfile:saveProfile||((profile)=>{saved=structuredClone(profile);}),
+    saveProfile:saveProfile||((profile)=>{saved=structuredClone(profile);}),isAssetReferenced,
     onChanged:profile=>changes.push(profile)
   });
   return {dom,store,controller,changes,get saved(){return saved;},set saved(value){saved=value;}};
@@ -85,6 +85,19 @@ test('output snapshot returns the exact saved logo record and Blob that it verif
   const saved=await asset(),fixture=setup({persisted:saved.profile,store:memoryStore([saved])});t.after(()=>{fixture.controller.destroy();fixture.dom.window.close();});
   await fixture.controller.refresh();const snapshot=await fixture.controller.outputSnapshot(saved.profile);
   assert.deepEqual(snapshot.companyLogo.metadata,saved.metadata);assert.equal(snapshot.companyLogo.blob,saved.blob);assert.match(snapshot.companyLogoDataUrl,/^data:image\/png;base64,/);
+});
+
+test('replacing the reusable template keeps an older logo that is still referenced by a project snapshot',async t=>{
+  const old=await asset(),store=memoryStore([old]),fixture=setup({persisted:old.profile,store,isAssetReferenced:id=>id===old.profile.logoAssetId});
+  t.after(()=>{fixture.controller.destroy();fixture.dom.window.close();});
+  await fixture.controller.refresh();await fixture.controller.open();const document=fixture.dom.window.document;
+  document.getElementById('companyName').value='Reusable Company B';
+  await document.getElementById('companyLogo').onchange({target:{files:[new Blob([PNG],{type:'image/png'})]}});
+  assert.equal(await document.getElementById('companyProfileForm').onsubmit({preventDefault(){}}),true);
+  assert.equal(store.values.has(old.profile.logoAssetId),true,'project Company A logo must remain available');
+  assert.equal(store.values.has(fixture.saved.logoAssetId),true);
+  const snapshot=await fixture.controller.outputSnapshot(old.profile);
+  assert.equal(snapshot.companyLogo.blob,old.blob,'project output must receive the exact Company A logo Blob');
 });
 
 test('logo selection rejects spoofed, over-4-MiB and over-16-megapixel files before storage',async t=>{

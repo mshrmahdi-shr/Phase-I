@@ -14,6 +14,7 @@
     <div><div class="eyebrow">PHASE I ESA</div><h1>Mapping & Figure Generator</h1></div>
     <div class="top-actions">
       <button id="editCompanyProfile" class="ghost">Edit Company Profile</button>
+      <button id="applyCompanyTemplate" class="ghost">Apply Current Template to Project</button>
       <button id="exportCompanyTemplate" class="ghost">Export Company Template</button>
       <button id="importCompanyTemplate" class="ghost">Import Company Template</button>
       <button id="manageHistoricalHeader" class="ghost">Historical Imagery</button>
@@ -66,7 +67,7 @@
         <input id="importProjectPackageFile" type="file" accept="application/zip,.phasei-project.zip" hidden />
         <div class="legacy-project-tools"><span class="helper">Legacy compatibility</span><div class="button-grid"><button id="exportJson">Export Legacy JSON</button><label for="importJson" class="file-button">Import Legacy JSON<input id="importJson" type="file" accept="application/json,.json" /></label></div></div>
         <div id="printValidation" class="validation-panel" role="alert" hidden></div>
-        <p class="helper">The recommended .phasei-project.zip backup includes the project, company profile, logo, and permitted local historical files. JSON is legacy metadata-only compatibility. A3 opens a full-size preview before printing. DXF currently exports boundaries only; no raster package yet.</p>
+        <p class="helper">The recommended .phasei-project.zip backup includes the project branding snapshot, exact logo, and permitted local historical files. JSON is legacy metadata-only compatibility. A3 opens a full-size preview before printing. Export DXF creates a standalone boundary/title-block drawing; Export PDF / AutoCAD creates the complete raster package.</p>
       </section>
     </aside>
 

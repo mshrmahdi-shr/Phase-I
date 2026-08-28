@@ -29,6 +29,15 @@ test('CAD controls use the shared image count and show a fail-closed SITE CRS pr
   h.controller.destroy();h.dom.window.close();
 });
 
+test('CAD readiness visibly blocks a selected geology overlay with incomplete legal provenance',()=>{
+  const h=fixture(),byId=id=>h.document.getElementById(id);
+  h.snapshot=snapshot({selection:[{kind:'figure',code:'D'}],datasets:{surficial:{source:{id:'custom',name:'uploaded-surficial.kml'}}}});
+  h.controller.refresh();
+  assert.equal(byId('downloadCad').disabled,true);
+  assert.match(byId('cadReadiness').textContent,/Figure D.*source.*credits.*licen[cs]e.*permission.*before CAD export/i);
+  h.controller.destroy();h.dom.window.close();
+});
+
 test('CAD export snapshots once, prevents duplicate clicks, maps phases, and restores every control',async()=>{
   const gate=deferred();let calls=0,input;
   const h=fixture({exportPackage:async args=>{calls++;input=args;return gate.promise;}}),byId=id=>h.document.getElementById(id);

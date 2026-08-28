@@ -42,7 +42,7 @@ function companyProfile(overrides={}){
   return {schemaVersion:1,id:'company-1',companyName:'Acme Environmental',address:'22 King Street',phone:'416-555-0110',email:'hello@acme.test',website:'https://acme.test',preparedBy:'Pat Lee',reviewedBy:'Sam Roy',logoAssetId:'logo-1',logoMime:'image/png',logoWidth:3,logoHeight:2,logoPlacement:{align:'left',scale:1},updatedAt:STAMP,...overrides};
 }
 function projectFixture(){
-  const location={lat:43.7,lng:-79.3},project={...createProject({name:'Phase I Environmental Site Assessment',projectNo:'AB-12345',address:'92 Orchard Road',date:'2026-08-28'}),id:'project-cad-1',location,createdAt:STAMP,updatedAt:STAMP};
+  const location={lat:43.7,lng:-79.3},project={...createProject({name:'Phase I Environmental Site Assessment',projectNo:'AB-12345',address:'92 Orchard Road',date:'2026-08-28',companyProfileSnapshot:companyProfile()}),id:'project-cad-1',location,createdAt:STAMP,updatedAt:STAMP};
   const [cx,cy]=projectPoint([location.lng,location.lat]),item={
     id:IDS.item,year:1960,sequence:1,title:'Archive scan 1960',mode:'manual',providerId:null,sourceUrl:'https://archive.example.test/scan-1960',licenseUrl:null,
     attribution:'Municipal archive; reproduction permission on file',policy:'exportable',resolutionMeters:.4,bounds:a3Bounds(location),
@@ -116,6 +116,34 @@ test('one projected affine drives each world file, DXF frame, attachment command
   for(const path of names.filter(path=>path!=='Manifest.json')){const content=await bytes(zip,path),row=declared.get(path);assert.equal(row.bytes,content.byteLength,path);assert.equal(row.sha256,sha256(content),path);}
 });
 
+test('Figure B/D/E artifacts preserve unknown acquisition year and every composited basemap and geology source',async()=>{
+  const value=await fixture({selection:[{kind:'figure',code:'B'},{kind:'figure',code:'D'},{kind:'figure',code:'E'}]}),location=value.project.location;
+  value.project.siteBoundary=[[location.lng-.01,location.lat-.01],[location.lng+.01,location.lat-.01],[location.lng+.01,location.lat+.01],[location.lng-.01,location.lat-.01]];
+  const polygon={polygon:[[location.lng-.5,location.lat-.5],[location.lng+.5,location.lat-.5],[location.lng+.5,location.lat+.5],[location.lng-.5,location.lat+.5],[location.lng-.5,location.lat-.5]],holes:[],name:'Test unit',unitCode:'5D',description:'Test geology',color:'#22aa66',fillOpacity:.6};
+  value.options.datasets={
+    surficial:{features:[polygon],coverage:{west:-80,south:43,east:-79,north:44},source:{id:'MRD128-REV',name:'MRD128 / MRD128-REV Surficial Geology',credits:'Ontario Geological Survey',sourceUrl:'https://www.geologyontario.mndm.gov.on.ca/mndmaccess/mndm_dir.asp?type=pub&id=MRD128-REV',license:'https://www.ontario.ca/page/open-government-licence-ontario',redistributionEvidence:'official-open-government-licence'}},
+    bedrock:{features:[polygon],coverage:{west:-80,south:43,east:-79,north:44},source:{id:'custom',name:'Engineer supplied bedrock.kml',credits:'Prepared by Example Engineer',sourceUrl:'https://records.example.test/bedrock',license:'Written project-use and redistribution permission on file',redistributionEvidence:'user-supplied-permission-confirmed'}}
+  };
+  const result=await exportCadPackage(value.options),{zip}=await archiveEntries(result.blob),manifest=JSON.parse(await text(zip,'Manifest.json')),csv=await text(zip,'Manifest.csv'),sources=await text(zip,'Sources-and-Licences.txt'),readme=await text(zip,'README.txt');
+  const byCode=Object.fromEntries(manifest.items.map(item=>[item.code,item]));
+  for(const code of ['B','D','E']){assert.equal(byCode[code].acquisitionYear,null);assert.equal(byCode[code].acquisitionYearVerification,'unknown');}
+  assert.deepEqual(byCode.B.sources.map(source=>source.role),['basemap']);
+  assert.deepEqual(byCode.D.sources.map(source=>source.role),['basemap','geology-overlay']);
+  assert.deepEqual(byCode.E.sources.map(source=>source.role),['basemap','user-supplied-overlay']);
+  assert.match(JSON.stringify(byCode.D.sources),/OpenStreetMap.*MRD128|MRD128.*OpenStreetMap/);
+  assert.match(JSON.stringify(byCode.E.sources),/Engineer supplied bedrock\.kml/);
+  assert.doesNotMatch(JSON.stringify(manifest.items),/"acquisitionYear":2026/,'report year must never be fabricated as acquisition year');
+  for(const artifact of [csv,sources,readme]){assert.match(artifact,/Acquisition year|acquisition year/i);assert.match(artifact,/unknown/i);assert.match(artifact,/geology-overlay|geology overlay/i);}
+  assert.match(csv,/MRD128/);assert.match(csv,/Engineer supplied bedrock\.kml/);assert.match(sources,/official-open-government-licence/);assert.match(sources,/user-supplied-permission-confirmed/);
+});
+
+test('CAD export fails before composition when a selected geology overlay lacks licence provenance',async()=>{
+  const value=await fixture({selection:[{kind:'figure',code:'D'}]}),location=value.project.location,polygon={polygon:[[location.lng-.5,location.lat-.5],[location.lng+.5,location.lat-.5],[location.lng+.5,location.lat+.5],[location.lng-.5,location.lat+.5],[location.lng-.5,location.lat-.5]],holes:[],name:'Custom unit',unitCode:'X',description:'Custom',color:'#22aa66',fillOpacity:.6};
+  value.options.datasets={surficial:{features:[polygon],coverage:{west:-80,south:43,east:-79,north:44},source:{id:'custom',name:'unlicensed.kml'}}};
+  await assert.rejects(exportCadPackage(value.options),/geology.*licen[cs]e|provenance|permission/i);
+  assert.deepEqual(value.composed,[]);
+});
+
 test('production raster dimensions preserve true ordered UTM controls and fit one converged CAD affine within documented tolerance',async()=>{
   const exportPdf=async options=>{for(const selected of options.selection){const geometry=selected.kind==='figure'?(await import('../src/sheet-layout.mjs')).sheetGeometry(options.project,selected.code,options.dpi):(await import('../src/historical-layout.mjs')).historicalSheetGeometry(options.project,options.project.historical.find(item=>item.id===selected.id),options.dpi),surface=await (selected.kind==='figure'?options.compose({project:options.project,code:selected.code,geometry,features:[],signal:options.signal}):options.composeHistorical({project:options.project,item:options.project.historical.find(item=>item.id===selected.id),geometry,signal:options.signal}));surface.dispose();}return {blob:new Blob(['%PDF-1.3\n%%EOF\n'],{type:'application/pdf'}),pageCount:options.selection.length};};
   const {result}=await archiveResult({composeOptions:{productionDimensions:true},options:{exportPdf}}),{zip}=await archiveEntries(result.blob),manifest=JSON.parse(await text(zip,'Manifest.json')),dxf=await text(zip,'Project.dxf'),frames=dxfPolylines(dxf,'IMAGE_FRAMES'),script=await text(zip,'Attach-Images.scr'),readme=await text(zip,'README.txt'),sources=await text(zip,'Sources-and-Licences.txt'),projector=createProjector({lat:43.7,lng:-79.3});assert.match(readme,/contextual, not survey grade/i);assert.match(readme,/0\.15%/);assert.match(sources,/True-control residual:/);assert.match(sources,/Fitness: contextual-not-survey-grade/);
@@ -150,6 +178,13 @@ test('strict frozen preflight rejects duplicate, link-only, stale logo, and miss
     const value=await fixture();value.options.assetStore={get:async()=>null};cases.push([value,/missing.*historical|historical.*missing|asset/i]);
   }
   for(const [value,pattern] of cases){await assert.rejects(exportCadPackage(value.options),pattern);assert.deepEqual(value.composed,[]);assert.deepEqual(value.disposed,[]);}
+});
+
+test('CAD package rejects reusable branding that differs from the authoritative project snapshot',async()=>{
+  const value=await fixture(),companyB=companyProfile({id:'company-b',companyName:'Company B',logoAssetId:'logo-b'});
+  value.options.companyProfile=companyB;value.options.companyLogo={...value.stored.logo,metadata:{...value.stored.logo.metadata,id:'logo-b'}};
+  await assert.rejects(exportCadPackage(value.options),/project branding|snapshot|company.*match/i);
+  assert.deepEqual(value.composed,[]);
 });
 
 test('invalid mandatory logo blocks all historical asset, provider, composer, PDF, and ZIP work',async()=>{

@@ -31,6 +31,9 @@ function resultComparator(providers){
   return (left,right)=>{
     const leftResolution=left.resolutionMeters??Infinity,rightResolution=right.resolutionMeters??Infinity;
     if(leftResolution!==rightResolution)return leftResolution-rightResolution;
+    const policyRank=policy=>policy==='exportable'?0:policy==='link-only'?1:2;
+    const leftPolicy=policyRank(left.policy),rightPolicy=policyRank(right.policy);
+    if(leftPolicy!==rightPolicy)return leftPolicy-rightPolicy;
     const leftPriority=providers.get(left.providerId)?.priority??Infinity;
     const rightPriority=providers.get(right.providerId)?.priority??Infinity;
     if(leftPriority!==rightPriority)return leftPriority-rightPriority;

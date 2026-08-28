@@ -228,6 +228,22 @@ test('results within a year rank by resolution, provider priority, then stable I
   assert.deepEqual(grouped.exact.map(value=>value.id),['high:a','high:z','low:b','high:coarse','low:missing']);
 });
 
+test('same-year results rank exportable policy before provider priority with stable policy tie-breakers',()=>{
+  const exportable=provider({id:'exportable',priority:50,policy:'exportable'});
+  const linkOnly=provider({id:'link-only',priority:1,policy:'link-only'});
+  const unknown=provider({id:'unknown',priority:0,policy:'unknown'});
+  const values=[
+    normalizeProviderResult(unknown,result({id:'z',providerId:'unknown',policy:'unknown',export:null})),
+    normalizeProviderResult(linkOnly,result({id:'a',providerId:'link-only',policy:'link-only',export:null})),
+    normalizeProviderResult(exportable,result({id:'b',providerId:'exportable'})),
+    normalizeProviderResult(exportable,result({id:'a',providerId:'exportable'}))
+  ];
+  const grouped=groupImageryResults(values,1972,{providers:[unknown,linkOnly,exportable]});
+  assert.deepEqual(grouped.exact.map(value=>value.id),[
+    'exportable:a','exportable:b','link-only:a','unknown:z'
+  ]);
+});
+
 test('search canonicalizes stable IDs and returns deterministic ordering across provider and result order',async()=>{
   const first=provider({id:'first',priority:10,search:async()=>[
     result({id:'b',providerId:'first'}),result({id:'a',providerId:'first'})

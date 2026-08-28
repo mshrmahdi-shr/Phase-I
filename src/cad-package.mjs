@@ -1,4 +1,4 @@
-import {restoreProject} from './core.mjs';
+import {requireProjectCompanyProfile,restoreProject} from './core.mjs';
 import {normalizeCompanyProfile,snapshotCompanyProfile,validateCompanyProfile} from './company-profile.mjs';
 import {buildCadDxf} from './cad-dxf.mjs';
 import {allocateCadFilenames,buildCadManifest,CAD_RASTER_NORMALIZATION} from './cad-manifest.mjs';
@@ -36,9 +36,9 @@ const CAD_FRAME_GRID=100_000,CONTROL_FIT_MIN_METRES=2,CONTROL_FIT_RATIO=.0015;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MIME_EXTENSION=Object.freeze({'image/png':'png','image/jpeg':'jpg'});
 const FIGURE_LICENCE=Object.freeze({
-  osm:'OpenStreetMap contributors; Open Database Licence',
-  'esri-imagery':'Esri World Imagery source and use terms',
-  toporama:'Open Government Licence - Canada'
+  osm:'https://www.openstreetmap.org/copyright',
+  'esri-imagery':'https://www.esri.com/en-us/legal/terms/full-master-agreement',
+  toporama:'https://open.canada.ca/en/open-government-licence-canada'
 });
 
 function fail(message){throw new Error(message);}
@@ -138,15 +138,32 @@ function cornerFrame(bounds,width,height,projector){
   let rotation=Math.atan2(projected[1][1]-projected[0][1],projected[1][0]-projected[0][0])*180/Math.PI;if(rotation<0)rotation+=360;rotation=canonical(rotation);const projectedControls=Object.freeze(controls.map(point=>Object.freeze(point.map(canonical)))),maxResidualMetres=canonical(Math.max(...projectedControls.map((point,index)=>Math.hypot(point[0]-projected[index][0],point[1]-projected[index][1])))),diagonal=Math.hypot(projectedControls[2][0]-projectedControls[0][0],projectedControls[2][1]-projectedControls[0][1]),toleranceMetres=canonical(Math.max(CONTROL_FIT_MIN_METRES,diagonal*CONTROL_FIT_RATIO));
   if(maxResidualMetres>toleranceMetres)fail(`Projected raster controls cannot be represented by one contextual CAD image attachment within ${toleranceMetres} metres.`);const world=worldFileFromCorners({upperLeft:projected[0],upperRight:projected[1],lowerLeft:projected[3],pixelWidth:width,pixelHeight:height});return Object.freeze({geographicCorners:geographic,projectedControlCorners:projectedControls,projectedCorners:Object.freeze(projected),projectionFit:Object.freeze({method:'least-squares-similarity',residualMetres:maxResidualMetres,maxToleranceMetres:toleranceMetres,fitness:'contextual-not-survey-grade'}),rotation,world});
 }
-function sourceMetadata(project,selection,frame,raster,providerById){
+function sourceRecord({role,name,sourceUrl=null,attribution,license,redistributionEvidence,acquisitionYear=null,acquisitionYearVerification='unknown'}){
+  for(const [value,label] of [[role,'role'],[name,'name'],[attribution,'attribution'],[license,'licence'],[redistributionEvidence,'redistribution evidence']])if(typeof value!=='string'||!value.trim())fail(`CAD source provenance ${label} is required.`);
+  if(sourceUrl!==null&&(typeof sourceUrl!=='string'||!sourceUrl.trim()))fail('CAD source provenance URL must be nonempty text or null.');
+  return Object.freeze({role,name,sourceUrl,attribution,license,acquisitionYear,acquisitionYearVerification,redistributionEvidence});
+}
+function figureSources(code,datasets){
+  const base=sourceForFigure(code),sources=[sourceRecord({role:'basemap',name:base.label,sourceUrl:base.url,attribution:base.credits,license:FIGURE_LICENCE[base.id],redistributionEvidence:'approved-application-map-source'})];
+  const kind=code==='D'?'surficial':code==='E'?'bedrock':null;if(!kind)return sources;
+  const source=datasets?.[kind]?.source;if(!source||typeof source!=='object')fail(`Figure ${code} geology provenance is missing.`);
+  const custom=source.id==='custom',name=source.name,credits=source.credits,license=source.license,redistributionEvidence=source.redistributionEvidence;
+  if(typeof name!=='string'||!name.trim()||typeof credits!=='string'||!credits.trim()||typeof license!=='string'||!license.trim()||typeof redistributionEvidence!=='string'||!redistributionEvidence.trim())fail(`Figure ${code} geology source, credits, licence, and permission provenance are required before CAD export.`);
+  sources.push(sourceRecord({role:custom?'user-supplied-overlay':'geology-overlay',name,sourceUrl:source.sourceUrl??null,attribution:credits,license,redistributionEvidence}));return sources;
+}
+function aggregateSources(sources){
+  const join=field=>sources.map(source=>source[field]).join(' | ');return {provider:sources.map(source=>source.name).join(' + '),attribution:join('attribution'),license:join('license'),redistributionEvidence:join('redistributionEvidence')};
+}
+function sourceMetadata(project,selection,frame,raster,providerById,datasets){
   const pixelSize=Math.hypot(frame.projectedCorners[1][0]-frame.projectedCorners[0][0],frame.projectedCorners[1][1]-frame.projectedCorners[0][1])/raster.width;
   if(selection.kind==='figure'){
     const source=sourceForFigure(selection.code),latitude=project.location.lat*Math.PI/180,native=Math.cos(latitude)*2*Math.PI*6378137/(256*2**source.maxNativeZoom);
-    return {code:selection.code,year:Number(project.date.slice(0,4)),provider:source.label,sourceResolutionMeters:Math.max(pixelSize,native),attribution:source.credits,license:FIGURE_LICENCE[source.id],redistributionEvidence:'approved-application-map-source'};
+    const sources=figureSources(selection.code,datasets);return {code:selection.code,acquisitionYear:null,acquisitionYearVerification:'unknown',sources,...aggregateSources(sources),sourceResolutionMeters:Math.max(pixelSize,native)};
   }
   const item=project.historical.find(candidate=>candidate.id===selection.id),provider=item.mode==='official'?providerById.get(item.providerId)?.label:'Manual upload';
   const manualResolution=item.mode==='manual'?Math.max(item.placement.groundWidth/item.placement.sourceWidth,item.placement.groundHeight/item.placement.sourceHeight):0;
-  return {code:historicalCode(item),year:item.year,provider,sourceResolutionMeters:item.resolutionMeters??Math.max(pixelSize,manualResolution),attribution:item.attribution,license:item.licenseUrl??'Manual reproduction permission acknowledged',redistributionEvidence:item.mode==='official'?'current-provider-exportable-policy':'manual-permission-confirmed'};
+  const sources=[sourceRecord({role:item.mode==='official'?'historical-imagery':'user-supplied-imagery',name:provider,sourceUrl:item.sourceUrl,attribution:item.attribution,license:item.licenseUrl??'Manual reproduction permission acknowledged',redistributionEvidence:item.mode==='official'?'current-provider-exportable-policy':'manual-permission-confirmed',acquisitionYear:item.year,acquisitionYearVerification:'unverified'})];
+  return {code:historicalCode(item),acquisitionYear:item.year,acquisitionYearVerification:'unverified',sources,...aggregateSources(sources),sourceResolutionMeters:item.resolutionMeters??Math.max(pixelSize,manualResolution)};
 }
 function fileRow(path,mime,content,{pixelWidth=null,pixelHeight=null,worldFilePath=null}={}){return {path,mime,content,pixelWidth,pixelHeight,worldFilePath};}
 async function hashedFiles(rows,signal){
@@ -182,7 +199,8 @@ export async function exportCadPackage({
 }={}){
   throwIfAborted(signal);if(typeof Zip!=='function')fail('A JSZip-compatible constructor is required.');if(typeof composeMap!=='function'||typeof composeHistorical!=='function'||typeof exportPdf!=='function')fail('CAD package composers and PDF exporter must be functions.');if(typeof decodeImage!=='function')fail('A complete raster decoder is required.');if(!assetStore||typeof assetStore.get!=='function')fail('A historical asset store is required.');
   onProgress({phase:'preflight',completed:0,total:1});let snapshotProject;try{snapshotProject=restoreProject(structuredClone(project));}catch(error){throw new Error(`CAD package project preflight failed: ${error.message}`,{cause:error});}
-  const snapshotProfile=checkedCompany(companyProfile),snapshotDatasets=deepFreeze(structuredClone(datasets)),snapshotSelection=selectionSnapshot(snapshotProject,selection),snapshotProviders=freezeProviders(providers),providerById=new Map(snapshotProviders.map(provider=>[provider.id,provider])),projector=createProjector(snapshotProject.location,{...(proj4Impl?{proj4Impl}:{})});deepFreeze(snapshotProject);
+  const snapshotProfile=checkedCompany(companyProfile),projectProfile=requireProjectCompanyProfile(snapshotProject);if(!same(projectProfile,snapshotProfile))fail('CAD package company profile must exactly match the authoritative project branding snapshot.');
+  const snapshotDatasets=deepFreeze(structuredClone(datasets)),snapshotSelection=selectionSnapshot(snapshotProject,selection),snapshotProviders=freezeProviders(providers),providerById=new Map(snapshotProviders.map(provider=>[provider.id,provider])),projector=createProjector(snapshotProject.location,{...(proj4Impl?{proj4Impl}:{})});deepFreeze(snapshotProject);
   const entryEstimate=8+snapshotSelection.length*2;if(entryEstimate>ENTRY_LIMIT)fail(`CAD package would exceed the ${ENTRY_LIMIT}-entry archive limit.`);
   const normalizedLogo=await checkedLogo(companyLogo,snapshotProfile,{signal,decodeImage,decodeOptions});
   const manualAssets=new Map(),officialResults=new Map(),geometryByKey=new Map(),rasterDimensions=[];let manualBytes=0;
@@ -193,6 +211,7 @@ export async function exportCadPackage({
     const item=snapshotProject.historical.find(candidate=>candidate.id===selected.id),geometry=historicalSheetGeometry(snapshotProject,item,dpi);geometryByKey.set(`historical:${selected.id}`,deepFreeze(geometry));rasterDimensions.push({width:geometry.raster.width,height:geometry.raster.height});
   }
   planCadPackageBudget({rasters:rasterDimensions,logoBytes:normalizedLogo.bytes.byteLength,logoPixels:normalizedLogo.width*normalizedLogo.height,entryCount:entryEstimate});
+  for(const selected of snapshotSelection)if(selected.kind==='figure')figureSources(selected.code,snapshotDatasets);
   for(const selected of snapshotSelection){
     if(selected.kind==='figure')continue;throwIfAborted(signal);const item=snapshotProject.historical.find(candidate=>candidate.id===selected.id),code=historicalCode(item),geometry=geometryByKey.get(`historical:${selected.id}`);
     if(item.mode==='manual'){
@@ -211,7 +230,7 @@ export async function exportCadPackage({
     try{
       surface=await composer(args);activeDisposals.add(dispose);throwIfAborted(signal);if(!surface||!Number.isSafeInteger(surface.width)||!Number.isSafeInteger(surface.height)||surface.width<=0||surface.height<=0||!same(surface.bounds,args.geometry.bounds))fail(`${key}: composition returned incomplete or drifting raster geometry.`);
       const normalized=await normalizeRaster(dataUrlBlob(surface.dataUrl),{width:surface.width,height:surface.height,label:key,signal,decodeImage,decodeOptions});imageBytes+=normalized.bytes.byteLength;pixels+=normalized.width*normalized.height;if(imageBytes>TOTAL_IMAGE_BYTE_LIMIT)fail('CAD package raster bytes exceed the 128 MB aggregate limit.');if(pixels>TOTAL_PIXEL_LIMIT)fail('CAD package decoded rasters exceed the 160 million pixel aggregate limit.');
-      const frame=cornerFrame(args.geometry.bounds,normalized.width,normalized.height,projector),metadata=sourceMetadata(snapshotProject,selected,frame,normalized,providerById);rasters.set(key,Object.freeze({selected,geometry:expectedGeometry,normalized,frame,metadata}));
+      const frame=cornerFrame(args.geometry.bounds,normalized.width,normalized.height,projector),metadata=sourceMetadata(snapshotProject,selected,frame,normalized,providerById,snapshotDatasets);rasters.set(key,Object.freeze({selected,geometry:expectedGeometry,normalized,frame,metadata}));
       return {...surface,dispose};
     }catch(error){dispose();throw error;}
   };

@@ -26,13 +26,16 @@ function file(path,sha256,mime,bytes,pixelWidth=null,pixelHeight=null,worldFileP
 }
 
 function item(overrides={}){
-  return {
-    code:'A',year:2025,provider:'Natural Resources Canada',sourceResolutionMeters:0.1,
+  const value={
+    code:'A',acquisitionYear:2025,acquisitionYearVerification:'unverified',provider:'Natural Resources Canada',sourceResolutionMeters:0.1,
     geographicCorners:[[-79.4,43.7],[-79.397,43.7],[-79.397,43.698],[-79.4,43.698]],
     projectedCorners:figureProjected,attribution:'Contains information licensed under the Open Government Licence - Canada',
     license:'Open Government Licence - Canada',redistributionEvidence:'official-provider-exportable-policy',
     imagePath:'images/Figure-A.png',rotation:0,...overrides
   };
+  value.sources=overrides.sources??[{role:value.code.startsWith('H-')?'historical-imagery':'basemap',name:value.provider,sourceUrl:'https://source.example.test/data',attribution:value.attribution,license:value.license,
+    acquisitionYear:value.acquisitionYear,acquisitionYearVerification:value.acquisitionYearVerification,redistributionEvidence:value.redistributionEvidence}];
+  return value;
 }
 
 function input(overrides={}){
@@ -51,11 +54,11 @@ function input(overrides={}){
     ],
     items:[
       item(),
-      item({code:'B',year:2024,provider:'Ontario imagery programme',sourceResolutionMeters:0.1,
+      item({code:'B',acquisitionYear:2024,provider:'Ontario imagery programme',sourceResolutionMeters:0.1,
         geographicCorners:[[-79.38,43.7],[-79.379,43.701],[-79.378,43.7005],[-79.379,43.6995]],
         projectedCorners:tiffProjected,attribution:'Ontario imagery programme',license:'Open Government Licence - Ontario',
         redistributionEvidence:'official-provider-exportable-policy',imagePath:'images/Figure-B.tif',rotation:36.8698976458}),
-      item({code:'H-1960-1',year:1960,provider:'City of Toronto Archives',sourceResolutionMeters:0.2,
+      item({code:'H-1960-1',acquisitionYear:1960,provider:'City of Toronto Archives',sourceResolutionMeters:0.2,
         geographicCorners:[[-79.39,43.69],[-79.39,43.693],[-79.387,43.693],[-79.387,43.69]],
         projectedCorners:historicalProjected,attribution:'City of Toronto Archives, Series 12',license:'Reproduction permission on file',
         redistributionEvidence:'manual-permission-confirmed',imagePath:'images/H-1960-1.jpg',rotation:90})
@@ -88,7 +91,7 @@ test('builds deterministic canonical JSON with complete CRS, file, company, sour
   assert.deepEqual(first,second);assert.deepEqual(Object.keys(first),['json','csv','sourcesText','readmeText','attachScript']);
   assert.equal(first.json.endsWith('\n'),true);assert.equal(first.json.includes('\r'),false);
   const manifest=JSON.parse(first.json);
-  assert.deepEqual(manifest.crs,crs);assert.equal(manifest.schemaVersion,1);assert.equal(manifest.format,'phase-i-cad-manifest');
+  assert.deepEqual(manifest.crs,crs);assert.equal(manifest.schemaVersion,2);assert.equal(manifest.format,'phase-i-cad-manifest');
   assert.deepEqual(manifest.files.map(entry=>entry.path),['Project.dxf','company/logo.png','images/Figure-A.pgw','images/Figure-A.png','images/Figure-B.tfw','images/Figure-B.tif','images/H-1960-1.jgw','images/H-1960-1.jpg']);
   assert.deepEqual(manifest.items.map(entry=>entry.code),['A','B','H-1960-1']);
   assert.equal(manifest.files.find(entry=>entry.path==='images/Figure-A.png').sha256,HASHES.b);
@@ -112,7 +115,7 @@ test('emits RFC 4180 CSV with CRLF, doubled quotes, embedded newlines, and formu
   const {buildCadManifest}=await manifestModule(),source=input();
   source.project=project({name:' \t=CMD|\' /C calc\'!A0',projectNo:'+SUM(1,1)',address:'-2+3',date:'@NOW()'});
   source.companyProfile=company({companyName:'\t=COMPANY()',address:'\n+ADDRESS()',phone:' -PHONE()',email:'@EMAIL()',website:'=WEBSITE()',preparedBy:'+PREPARED()',reviewedBy:'-REVIEWED()'});
-  source.items[0].provider='=HYPERLINK("https://bad.test","click")';source.items[0].attribution='first line\nsecond, "quoted" line';
+  source.items[0].provider='=HYPERLINK("https://bad.test","click")';source.items[0].sources[0].name=source.items[0].provider;source.items[0].attribution='first line\nsecond, "quoted" line';source.items[0].sources[0].attribution=source.items[0].attribution;
   const output=buildCadManifest(source),rows=csvRows(output.csv),header=rows[0],figure=rows[1];
   assert.equal(output.csv.endsWith('\r\n'),true);assert.equal(/(^|[^\r])\n/.test(output.csv),false,'CSV contains no lone LF');
   assert.equal(rows.length,4);assert.equal(header[0],'Project name');
@@ -142,7 +145,7 @@ test('writes a source record and beginner guide with explicit vector/raster limi
 test('emits generated-path-only CRLF IMAGEATTACH commands with invariant geometry for every raster and logo',async()=>{
   const {buildCadManifest}=await manifestModule(),source=input();
   source.project=project({name:'PROJECT\r\n_.ERASE\r\nALL'});source.companyProfile=company({companyName:'"\r\n_.SHELL'});
-  source.items[0].provider='\r\n_.ERASE\r\nALL';source.items[1].license='"\n_.QUIT';
+  source.items[0].provider='\r\n_.ERASE\r\nALL';source.items[0].sources[0].name=source.items[0].provider;source.items[1].license='"\n_.QUIT';source.items[1].sources[0].license=source.items[1].license;
   const script=buildCadManifest(source).attachScript;
   assert.equal(script.endsWith('\r\n'),true);assert.equal(/(^|[^\r])\n/.test(script),false);assert.match(script,/^[\x20-\x7e\r\n]+$/);
   assert.equal((script.match(/_-IMAGEATTACH/g)||[]).length,4);
@@ -207,12 +210,12 @@ test('rejects malformed files, hashes, byte counts, pixel dimensions, and world-
 test('rejects malformed or mismatched CRS, item identity, source metadata, paths, and corners',async()=>{
   const {buildCadManifest}=await manifestModule(),mutations=[
     value=>{value.crs={...crs,epsg:'EPSG:4326'};},value=>{value.crs={...crs,name:'WGS 84'};},value=>{value.crs={...crs,units:'ft'};},value=>{value.crs={...crs,zone:16};},
-    value=>{value.items[0].code='F';},value=>{value.items[0].code='H-1960-1';},value=>{value.items[0].year=NaN;},value=>{value.items[0].provider='';},
+    value=>{value.items[0].code='F';},value=>{value.items[0].code='H-1960-1';},value=>{value.items[0].acquisitionYear=NaN;},value=>{value.items[0].provider='';},
     value=>{value.items[0].sourceResolutionMeters=0;},value=>{value.items[0].attribution='\u0000';},value=>{value.items[0].license='';},value=>{delete value.items[0].redistributionEvidence;},
     value=>{value.items[0].imagePath='images/H-1960-1.jpg';},value=>{value.items[0].geographicCorners[0]=[-181,43.7];},
     value=>{value.items[0].geographicCorners=[[-79.4,43.7],[-79.396,43.7],[-79.4,43.696],[-79.397,43.696]];},
     value=>{value.items[0].projectedCorners[0]=[NaN,4831000];},value=>{value.items[0].projectedCorners[2]=value.items[0].projectedCorners[1];},
-    value=>{value.items[0].rotation=5;},value=>{value.items[2].year=1961;},value=>{value.items.push(clone(value.items[0]));},value=>{value.items[0].extra='x';}
+    value=>{value.items[0].rotation=5;},value=>{value.items[2].acquisitionYear=1961;},value=>{value.items.push(clone(value.items[0]));},value=>{value.items[0].extra='x';}
   ];
   for(const mutate of mutations){const value=input();mutate(value);assert.throws(()=>buildCadManifest(value),/CRS|EPSG|zone|unit|item|code|year|provider|resolution|text|licen|evidence|image|corner|finite|affine|rotation|duplicate|exact|path/i);}
 });

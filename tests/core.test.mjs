@@ -59,6 +59,25 @@ test('new project keeps project number blank and restores a profile snapshot',()
   assert.equal(restored.schemaVersion,6);
 });
 
+test('project branding is captured once, required for output, and changes only through explicit apply',()=>{
+  const companyA={...emptyCompanyProfile(),id:'company-a',companyName:'Company A',address:'1 A Street',phone:'416-555-0101',email:'a@example.com',website:'https://a.example.com',
+    logoAssetId:'logo-a',logoMime:'image/png',logoWidth:400,logoHeight:160,updatedAt:'2026-08-26T12:00:00Z'};
+  const companyB={...companyA,id:'company-b',companyName:'Company B',address:'2 B Street',email:'b@example.com',website:'https://b.example.com',
+    logoAssetId:'logo-b',updatedAt:'2026-08-27T12:00:00Z'};
+  const project=createProject({name:'Snapshot project',companyProfileSnapshot:companyA});
+  assert.deepEqual(core.requireProjectCompanyProfile(project),snapshotCompanyProfile(companyA));
+  assert.equal(project.companyProfileSnapshot.companyName,'Company A');
+  assert.equal(companyB.companyName,'Company B','changing the reusable template cannot mutate the project snapshot');
+
+  const applied=core.applyCompanyProfileToProject(project,companyB,{updatedAt:'2026-08-28T12:00:00Z'});
+  assert.equal(project.companyProfileSnapshot.companyName,'Company A','apply is atomic and does not mutate the previous project object');
+  assert.deepEqual(applied.companyProfileSnapshot,snapshotCompanyProfile(companyB));
+  assert.equal(applied.updatedAt,'2026-08-28T12:00:00Z');
+
+  const legacy=createProject({name:'Legacy'});
+  assert.throws(()=>core.requireProjectCompanyProfile(legacy),/project branding|apply.*template/i);
+});
+
 test('restoreProject gives legacy projects no profile snapshot and rejects invalid snapshots',()=>{
   const legacy=createProject();
   assert.equal(core.restoreProject(legacy).companyProfileSnapshot,null);

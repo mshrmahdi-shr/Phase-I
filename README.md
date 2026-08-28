@@ -14,7 +14,7 @@ Static, local-project mapping app. Live site: https://mshrmahdi-shr.github.io/Ph
 - **Export PDF / AutoCAD** selects ready figures independently of the editor. Its PDF action downloads one combined A3 PDF in A–E/H order; progress, cancellation and all-or-nothing source/text checks prevent partial exports.
 - The same checked A–E/H rows can produce one **AutoCAD ZIP** in SITE-selected NAD83 / UTM metres. It includes the combined PDF, editable layered DXF linework/text, normalized referenced rasters, world files, logo, attachment script, hashes, source/licence records and beginner instructions.
 - A3 landscape preview with live map, SITE, boundaries, scale, north arrow, relevant legend, project fields and credits. Missing project/geology data or missing visible tiles blocks printing.
-- A completed company profile and logo are required before report export. The saved profile is snapshotted into the project so a later profile change is visible and never silently changes an existing project.
+- A completed reusable company profile and logo are required before report export. A new project captures that template once. Later reusable-template edits do not change the project; **Apply Current Template to Project** is the only action that explicitly replaces its branding snapshot and exact logo reference. Legacy projects without an unambiguous snapshot remain visibly blocked until that action is confirmed.
 - The recommended versioned `.phasei-project.zip` package backs up project JSON, the profile/logo and permission-confirmed local imagery. Import is inspection-first and requires confirmation. Legacy JSON remains available as a clearly labelled metadata-only format.
 
 ## Run and test
@@ -31,7 +31,7 @@ node ../scripts/cache-mrd126.mjs
 python -m http.server 8000
 ```
 
-Open `http://localhost:8000`. Serve the built `_site`, which includes the packaged PDF library and Unicode font. Both cache builds require network access to OGS: MRD128 is roughly 177 MB; MRD126 produces about 57 MB across 468 data files plus its manifest. Both builders fail on incomplete data. Do not commit `_site`, either generated cache, private reference PDFs or `node_modules`.
+Open `http://localhost:8000`. Serve the built `_site`, which includes the packaged PDF, GeoTIFF and PROJ4 runtimes, their licences, and the Unicode font/licence. Both cache builds require network access to OGS: MRD128 is roughly 177 MB; MRD126 produces about 57 MB across 468 data files plus its manifest. Both builders fail on incomplete data. Do not commit `_site`, either generated cache, private reference PDFs or `node_modules`.
 
 ## Combined PDF workflow
 
@@ -50,7 +50,7 @@ Source images still need an internet connection and CORS access when the dialog 
 2. Press **Export PDF / AutoCAD**, then check the required ready A–E/H rows. The PDF and CAD actions share this one ordered selection; blocked rows remain visible with correction instructions.
 3. Confirm the displayed `NAD83 / UTM zone NN — metres`, then press **Download AutoCAD ZIP (N images)**. Progress covers validation, image composition, CAD/PDF writing and compression. Cancel or Escape aborts the atomic operation; a late result cannot download.
 4. Extract the complete ZIP before opening it. Open `Project.dxf`, run AutoCAD's `SCRIPT` command and choose `Attach-Images.scr`. Keep the relative `images` and `company` folders beside the DXF. `README.txt` explains relinking and common edits.
-5. Use `Manifest.json`/`Manifest.csv` and `Sources-and-Licences.txt` for hashes, CRS, resolution, attribution and licence review. Vector boundaries, labels, notes, title block and image frames are editable. Raster pixels and the logo remain referenced images that can be moved, scaled, clipped or replaced.
+5. Use `Manifest.json`/`Manifest.csv` and `Sources-and-Licences.txt` for hashes, CRS, resolution, acquisition-year verification, attribution and licence review. An unknown A–E acquisition year stays blank/`unknown`; the report date is never substituted. Every basemap and composited geology/user overlay is recorded as a separate source layer. Vector boundaries, labels, notes, title block and image frames are editable. Raster pixels and the logo remain referenced images that can be moved, scaled, clipped or replaced.
 
 The raster-to-UTM placement is a disclosed least-squares contextual fit and is not survey-grade control. Have a qualified reviewer confirm geometry, imagery rights and final CAD/PDF appearance before issue.
 
@@ -66,7 +66,7 @@ Native browser print settings and physical printer output still need operator ac
 
 ## Project package workflow
 
-1. Complete the company profile and logo, then save the project. Before packaging an uploaded historical image, confirm that its redistribution policy permits inclusion. Official remote imagery bytes are not copied into the archive; their validated catalog metadata remains in the project record.
+1. Complete the reusable company profile and logo, explicitly apply it to the current project when needed, then save the project. The package always archives the project's existing branding snapshot and exact referenced logo; changing the reusable template alone cannot rebrand the package. Before packaging an uploaded historical image, confirm that its redistribution policy permits inclusion. Official remote imagery bytes are not copied into the archive; their validated catalog metadata remains in the project record.
 2. Press **Download Project Package**. Export validates every referenced asset, computes SHA-256 hashes and creates a deterministic `.phasei-project.zip`. Cancellation or validation failure produces no partial download.
 3. Press **Import Project Package** and choose a package. Mutation-free inspection requires the fixed project/profile/README roles plus exactly the referenced eligible assets, compares raw ZIP local/central headers including CRC-32, and checks canonical paths, bounded sizes, hashes, complete PNG/JPEG/TIFF decode, ownership, project/profile relationship and redistribution evidence.
 4. Review the text-only summary, then confirm. New assets are staged by atomic add-if-absent writes before state changes. Compensation deletes only assets carrying this import's exact ownership receipt; ambiguous, concurrent, pre-existing and shared assets are preserved. Project/profile rollback also compares the exact imported after-state and transaction token, so edits made after publication are never overwritten.
@@ -84,6 +84,6 @@ Official catalog metadata remains in the project record for later revalidation, 
 
 ## Deployment
 
-The existing GitHub Pages workflow on `main` installs locked dependencies, runs tests, stages an allowlist of public files, builds both complete OGS caches, then uploads/deploys `_site`. Incomplete caches fail before upload. `version.json` identifies the deployed commit and build time. Only the required jsPDF runtime/license and public font/license are packaged; tests, development dependencies, private reference PDFs and source-control metadata are not published.
+The existing GitHub Pages workflow on `main` installs locked dependencies, runs tests, stages an allowlist of public files, builds both complete OGS caches, then uploads/deploys `_site`. Incomplete caches fail before upload. `version.json` identifies the deployed commit and build time. The required jsPDF, GeoTIFF and PROJ4 browser runtimes/licences and the public font/licence are packaged; tests, other development dependencies, private reference PDFs and source-control metadata are not published.
 
 On a failed deployment, inspect the specific Actions error before changing or rerunning anything. A green local test run is not proof of a successful Pages deployment.

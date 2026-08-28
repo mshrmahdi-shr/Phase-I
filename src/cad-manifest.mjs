@@ -1,4 +1,4 @@
-const SCHEMA_VERSION=1;
+const SCHEMA_VERSION=2;
 const FORMAT='phase-i-cad-manifest';
 export const CAD_RASTER_NORMALIZATION='physical-resolution-stripped';
 const FIGURE_CODES=Object.freeze(['A','B','C','D','E']);
@@ -16,8 +16,9 @@ const EXTENSION_MIMES=Object.freeze({
   pgw:'text/plain',jgw:'text/plain',tfw:'text/plain',txt:'text/plain',scr:'text/plain',csv:'text/csv',json:'application/json'
 });
 const FILE_FIELDS=Object.freeze(['path','sha256','mime','bytes','pixelWidth','pixelHeight','worldFilePath']);
-const ITEM_FIELDS=Object.freeze(['code','year','provider','sourceResolutionMeters','geographicCorners','projectedCorners','attribution','license','redistributionEvidence','imagePath','rotation']);
+const ITEM_FIELDS=Object.freeze(['code','acquisitionYear','acquisitionYearVerification','provider','sourceResolutionMeters','sources','geographicCorners','projectedCorners','attribution','license','redistributionEvidence','imagePath','rotation']);
 const FITTED_ITEM_FIELDS=Object.freeze([...ITEM_FIELDS,'projectedControlCorners','projectionFit']);
+const SOURCE_FIELDS=Object.freeze(['role','name','sourceUrl','attribution','license','acquisitionYear','acquisitionYearVerification','redistributionEvidence']);
 const PROJECTION_FIT_FIELDS=Object.freeze(['method','residualMetres','maxToleranceMetres','fitness']);
 const INPUT_FIELDS=Object.freeze(['project','companyProfile','crs','rasterNormalization','files','items','logoAttachment']);
 
@@ -199,6 +200,27 @@ function checkedProjectionFit(row,attachment,code){
   if(difference>comparisonTolerance)fail(`CAD manifest item ${code} projection residual does not match its true controls and fitted CAD frame.`);return {projectedControlCorners:controls,cadFrameCorners:attachment.projectedCorners,projectionFit:{method:fit.method,residualMetres,maxToleranceMetres,fitness:fit.fitness}};
 }
 
+function checkedAcquisition(value,status,label){
+  if(!['verified','unverified','unknown'].includes(status))fail(`${label} verification must be verified, unverified, or unknown.`);
+  if(value===null){if(status!=='unknown')fail(`${label} must use unknown verification when the acquisition year is null.`);return null;}
+  const year=safePositiveInteger(value,`${label} year`,9999);if(year<1850)fail(`${label} year is outside the supported source range.`);if(status==='unknown')fail(`${label} with a known year cannot use unknown verification.`);return year;
+}
+
+function checkedSources(value,code){
+  if(!Array.isArray(value)||value.length<1||value.length>20)fail(`CAD manifest item ${code} sources must contain one to 20 composited layer records.`);const roles=new Set(),sources=[];
+  for(const [index,candidate] of value.entries()){
+    const row=exactRecord(candidate,SOURCE_FIELDS,`CAD manifest item ${code} source ${index+1}`),role=normalizedText(row.role,`CAD manifest item ${code} source role`,{maximum:80});
+    if(!['basemap','geology-overlay','user-supplied-overlay','historical-imagery','user-supplied-imagery'].includes(role))fail(`CAD manifest item ${code} source role is unsupported.`);
+    if(roles.has(role)&&role!=='geology-overlay')fail(`CAD manifest item ${code} duplicates source role ${role}.`);roles.add(role);
+    const sourceUrl=row.sourceUrl===null?null:normalizedText(row.sourceUrl,`CAD manifest item ${code} source URL`,{maximum:8192});
+    const acquisitionYear=checkedAcquisition(row.acquisitionYear,row.acquisitionYearVerification,`CAD manifest item ${code} source ${index+1} acquisition`);
+    sources.push({role,name:normalizedText(row.name,`CAD manifest item ${code} source name`,{maximum:1000}),sourceUrl,
+      attribution:normalizedText(row.attribution,`CAD manifest item ${code} source attribution`,{maximum:4000}),license:normalizedText(row.license,`CAD manifest item ${code} source licence`,{maximum:4000}),
+      acquisitionYear,acquisitionYearVerification:row.acquisitionYearVerification,redistributionEvidence:normalizedText(row.redistributionEvidence,`CAD manifest item ${code} source redistribution evidence`,{maximum:1000})});
+  }
+  return sources;
+}
+
 function itemRank(item){
   if(FIGURE_CODES.includes(item.code))return [0,FIGURE_CODES.indexOf(item.code)];
   const match=HISTORICAL_CODE.exec(item.code);return [1,Number(match[1]),Number(match[2]),item.code];
@@ -214,8 +236,8 @@ function checkedItems(value,fileByPath){
     const row=itemRecord(candidate,`CAD manifest item ${index+1}`),code=normalizedText(row.code,`CAD manifest item ${index+1} code`,{maximum:32});
     const historical=HISTORICAL_CODE.exec(code);
     if(!FIGURE_CODES.includes(code)&&!historical)fail(`CAD manifest item ${index+1} code must be A through E or H-YYYY-N.`);
-    const year=safePositiveInteger(row.year,`CAD manifest item ${code} year`,9999);if(year<1850)fail(`CAD manifest item ${code} year is outside the supported source range.`);
-    if(historical&&year!==Number(historical[1]))fail(`CAD manifest historical item ${code} year does not match its code.`);
+    const acquisitionYear=checkedAcquisition(row.acquisitionYear,row.acquisitionYearVerification,`CAD manifest item ${code} acquisition`);
+    if(historical&&acquisitionYear!==Number(historical[1]))fail(`CAD manifest historical item ${code} acquisition year does not match its code.`);
     if(codes.has(code.toLowerCase()))fail(`CAD manifest items contain duplicate code ${code}.`);codes.add(code.toLowerCase());
     const imagePath=checkedPath(row.imagePath,`CAD manifest item ${code} image path`),image=fileByPath.get(imagePath);
     if(!image||!Object.hasOwn(IMAGE_MIMES,image.mime)||!imagePath.startsWith('images/'))fail(`CAD manifest item ${code} image path does not match a raster file.`);
@@ -224,13 +246,13 @@ function checkedItems(value,fileByPath){
     if(images.has(imagePath))fail(`CAD manifest items duplicate raster image path ${imagePath}.`);images.add(imagePath);
     const geographicCorners=checkedCorners(row.geographicCorners,`CAD manifest item ${code} geographic corners`,{geographic:true}),rotation=normalizedAngle(row.rotation,`CAD manifest item ${code} rotation`);
     const attachment=attachmentGeometry(row.projectedCorners,image.pixelWidth,image.pixelHeight,rotation,`CAD manifest item ${code}`),projectionFit=checkedProjectionFit(row,attachment,code);
+    const sources=checkedSources(row.sources,code),provider=normalizedText(row.provider,`CAD manifest item ${code} provider`,{maximum:1000}),attribution=normalizedText(row.attribution,`CAD manifest item ${code} attribution`,{maximum:4000}),license=normalizedText(row.license,`CAD manifest item ${code} license`,{maximum:4000}),redistributionEvidence=normalizedText(row.redistributionEvidence,`CAD manifest item ${code} redistribution evidence`,{maximum:1000}),join=field=>sources.map(source=>source[field]).join(' | ');
+    if(provider!==sources.map(source=>source.name).join(' + ')||attribution!==join('attribution')||license!==join('license')||redistributionEvidence!==join('redistributionEvidence'))fail(`CAD manifest item ${code} aggregate provenance does not agree with its composited source layers.`);
     items.push({
-      code,year,provider:normalizedText(row.provider,`CAD manifest item ${code} provider`,{maximum:1000}),
+      code,acquisitionYear,acquisitionYearVerification:row.acquisitionYearVerification,provider,
       sourceResolutionMeters:canonicalNumber(finite(row.sourceResolutionMeters,`CAD manifest item ${code} source resolution`),`CAD manifest item ${code} source resolution`),
       geographicCorners,projectedCorners:attachment.projectedCorners,...(projectionFit??{}),
-      attribution:normalizedText(row.attribution,`CAD manifest item ${code} attribution`,{maximum:4000}),
-      license:normalizedText(row.license,`CAD manifest item ${code} license`,{maximum:4000}),
-      redistributionEvidence:normalizedText(row.redistributionEvidence,`CAD manifest item ${code} redistribution evidence`,{maximum:1000}),
+      sources,attribution,license,redistributionEvidence,
       imagePath,worldFilePath:image.worldFilePath,mime:image.mime,bytes:image.bytes,pixelWidth:image.pixelWidth,pixelHeight:image.pixelHeight,sha256:image.sha256,
       insertionPoint:attachment.insertionPoint,pixelSizeMetres:attachment.pixelSizeMetres,attachmentWidthMetres:attachment.attachmentWidthMetres,
       attachmentHeightMetres:attachment.attachmentHeightMetres,rotation:attachment.rotation
@@ -267,10 +289,10 @@ function csvCell(value){
 }
 function coordinateCell(point){return `[${decimal(point[0])} ${decimal(point[1])}]`;}
 function csv(project,company,items,crs){
-  const fitted=items.some(item=>item.projectionFit),headers=['Project name','Project number','Project address','Project date','Company name','Company address','Company phone','Company email','Company website','Prepared by','Reviewed by','Code','Year','Provider','Source resolution (m)','Attribution','License','Redistribution evidence','Image path','World file path','MIME type','Bytes','Pixel width','Pixel height','SHA-256','Rotation (deg)','CRS EPSG','CRS name','CRS units','Geographic upper left','Geographic upper right','Geographic lower right','Geographic lower left',...(fitted?['True projected control upper left','True projected control upper right','True projected control lower right','True projected control lower left','Projection fit method','Projection residual (m)','Maximum projection tolerance (m)','Projection fitness','CAD frame upper left','CAD frame upper right','CAD frame lower right','CAD frame lower left']:['Projected upper left','Projected upper right','Projected lower right','Projected lower left'])];
+  const fitted=items.some(item=>item.projectionFit),headers=['Project name','Project number','Project address','Project date','Company name','Company address','Company phone','Company email','Company website','Prepared by','Reviewed by','Code','Acquisition year','Acquisition year verification','Provider','Source resolution (m)','Composited sources (JSON)','Attribution','License','Redistribution evidence','Image path','World file path','MIME type','Bytes','Pixel width','Pixel height','SHA-256','Rotation (deg)','CRS EPSG','CRS name','CRS units','Geographic upper left','Geographic upper right','Geographic lower right','Geographic lower left',...(fitted?['True projected control upper left','True projected control upper right','True projected control lower right','True projected control lower left','Projection fit method','Projection residual (m)','Maximum projection tolerance (m)','Projection fitness','CAD frame upper left','CAD frame upper right','CAD frame lower right','CAD frame lower left']:['Projected upper left','Projected upper right','Projected lower right','Projected lower left'])];
   const rows=[headers,...items.map(item=>[
     project.name,project.projectNo,project.address,project.date,company.companyName,company.address,company.phone,company.email,company.website,company.preparedBy,company.reviewedBy,
-    item.code,item.year,item.provider,decimal(item.sourceResolutionMeters),item.attribution,item.license,item.redistributionEvidence,item.imagePath,item.worldFilePath,item.mime,item.bytes,item.pixelWidth,item.pixelHeight,item.sha256,decimal(item.rotation),crs.epsg,crs.name,crs.units,
+    item.code,item.acquisitionYear??'',item.acquisitionYearVerification,item.provider,decimal(item.sourceResolutionMeters),JSON.stringify(stableValue(item.sources)),item.attribution,item.license,item.redistributionEvidence,item.imagePath,item.worldFilePath,item.mime,item.bytes,item.pixelWidth,item.pixelHeight,item.sha256,decimal(item.rotation),crs.epsg,crs.name,crs.units,
     ...item.geographicCorners.map(coordinateCell),...(fitted?[...(item.projectedControlCorners??item.projectedCorners).map(coordinateCell),item.projectionFit?.method??'',item.projectionFit?decimal(item.projectionFit.residualMetres):'',item.projectionFit?decimal(item.projectionFit.maxToleranceMetres):'',item.projectionFit?.fitness??'',...(item.cadFrameCorners??item.projectedCorners).map(coordinateCell)]:item.projectedCorners.map(coordinateCell))
   ])];
   return rows.map(row=>row.map(csvCell).join(',')).join('\r\n')+'\r\n';
@@ -281,8 +303,11 @@ function sources(project,company,crs,items){
   const lines=['PHASE I CAD PACKAGE SOURCE RECORD','', 'PROJECT',`Name: ${displayValue(project.name)}`,`Project number: ${displayValue(project.projectNo)}`,`Address: ${displayValue(project.address)}`,`Date: ${displayValue(project.date)}`,'',
     'COMPANY',`Name: ${displayValue(company.companyName)}`,`Address: ${displayValue(company.address)}`,`Phone: ${displayValue(company.phone)}`,`Email: ${displayValue(company.email)}`,`Website: ${displayValue(company.website)}`,`Prepared by: ${displayValue(company.preparedBy)}`,`Reviewed by: ${displayValue(company.reviewedBy)}`,'',
     'COORDINATE REFERENCE SYSTEM',`EPSG: ${crs.epsg}`,`Name: ${crs.name}`,`Units: ${crs.units} (metres)`,`Raster normalization: ${CAD_RASTER_NORMALIZATION}`,'','SOURCES AND LICENCES'];
-  for(const [index,item] of items.entries())lines.push('',`${index+1}. ${item.code}`,`Year: ${item.year}`,`Provider: ${displayValue(item.provider)}`,`Source resolution: ${decimal(item.sourceResolutionMeters)} m`,
-    `Attribution: ${displayValue(item.attribution)}`,`Licence: ${displayValue(item.license)}`,`Redistribution evidence: ${displayValue(item.redistributionEvidence)}`,`Image: ${item.imagePath}`,`World file: ${item.worldFilePath}`,`SHA-256: ${item.sha256}`,...(item.projectionFit?[`Projection fit: ${item.projectionFit.method}`,`True-control residual: ${decimal(item.projectionFit.residualMetres)} m`,`Maximum projection tolerance: ${decimal(item.projectionFit.maxToleranceMetres)} m`,`Fitness: ${item.projectionFit.fitness}`]:[]));
+  for(const [index,item] of items.entries()){
+    lines.push('',`${index+1}. ${item.code}`,`Acquisition year: ${item.acquisitionYear??'unknown'}`,`Acquisition year verification: ${item.acquisitionYearVerification}`,`Provider: ${displayValue(item.provider)}`,`Source resolution: ${decimal(item.sourceResolutionMeters)} m`);
+    for(const [sourceIndex,source] of item.sources.entries())lines.push(`Source layer ${sourceIndex+1} role: ${source.role}`,`Source layer ${sourceIndex+1} name: ${displayValue(source.name)}`,`Source layer ${sourceIndex+1} URL: ${source.sourceUrl??'not provided'}`,`Source layer ${sourceIndex+1} acquisition year: ${source.acquisitionYear??'unknown'}`,`Source layer ${sourceIndex+1} acquisition year verification: ${source.acquisitionYearVerification}`,`Source layer ${sourceIndex+1} attribution: ${displayValue(source.attribution)}`,`Source layer ${sourceIndex+1} licence: ${displayValue(source.license)}`,`Source layer ${sourceIndex+1} redistribution evidence: ${displayValue(source.redistributionEvidence)}`);
+    lines.push(`Attribution: ${displayValue(item.attribution)}`,`Licence: ${displayValue(item.license)}`,`Redistribution evidence: ${displayValue(item.redistributionEvidence)}`,`Image: ${item.imagePath}`,`World file: ${item.worldFilePath}`,`SHA-256: ${item.sha256}`,...(item.projectionFit?[`Projection fit: ${item.projectionFit.method}`,`True-control residual: ${decimal(item.projectionFit.residualMetres)} m`,`Maximum projection tolerance: ${decimal(item.projectionFit.maxToleranceMetres)} m`,`Fitness: ${item.projectionFit.fitness}`]:[]));
+  }
   return lines.join('\n')+'\n';
 }
 
@@ -299,8 +324,9 @@ function readme(project,crs){
     'Raster pixels are not editable CAD vectors. Editing the linework does not change the source image pixels.','',
     'IMAGE SCALE','All packaged raster files have embedded physical-resolution metadata stripped. The attachment script therefore supplies each full projected image width in drawing metres; pixel size remains in the world files and manifests.','',
     'PROJECTION FIT','AutoCAD image attachment supports one uniform scale and rotation. Manifest.json and Manifest.csv therefore preserve both the independently projected true control corners and the fitted CAD frame used by the world file, DXF, and script.','The fit is contextual, not survey grade. Its residual and maximum tolerance are recorded per image; export fails when a fit exceeds the larger of 2 metres or 0.15% of the projected control diagonal.','',
+    'SOURCE AND DATE PROVENANCE','Acquisition year means the independently described source-image year, not the project/report date. Unknown years remain blank/unknown; unverified years are labelled unverified.','Every composited basemap, geology overlay, and user-supplied overlay is recorded separately in Manifest.json, Manifest.csv, and Sources-and-Licences.txt.','',
     'FILES','Manifest.csv is the spreadsheet-friendly source list. Manifest.json is the machine-readable file and geometry record.',
-    'Sources-and-Licences.txt records source, attribution, licence, resolution, hash, and redistribution evidence. World files beside each map image preserve its georeferencing.',''
+    'Sources-and-Licences.txt records every composited source layer, attribution, licence, acquisition-year verification, resolution, hash, and redistribution evidence. World files beside each map image preserve its georeferencing.',''
   ].join('\n');
 }
 

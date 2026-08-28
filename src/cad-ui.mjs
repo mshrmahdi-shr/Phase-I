@@ -24,6 +24,12 @@ function readiness(snapshot){
   const blockers=Array.isArray(snapshot?.blockers)?snapshot.blockers.filter(value=>typeof value==='string'&&value.trim()).map(value=>value.trim()):[];
   const selection=Array.isArray(snapshot?.selection)?snapshot.selection:[];
   if(!selection.length)blockers.push('Select at least one ready map or historical image.');
+  for(const item of selection){
+    const kind=item?.kind==='figure'&&item.code==='D'?'surficial':item?.kind==='figure'&&item.code==='E'?'bedrock':null;
+    if(!kind)continue;
+    const source=snapshot?.datasets?.[kind]?.source,fields=['name','credits','license','redistributionEvidence'];
+    if(!source||fields.some(field=>typeof source[field]!=='string'||!source[field].trim()))blockers.push(`Figure ${item.code} geology source, credits, licence, and permission provenance are required before CAD export.`);
+  }
   try{for(const error of validateCompanyProfile(snapshot?.companyProfile))blockers.push(`${error.message} Open Company Profile and save it before exporting.`);}catch(error){blockers.push(`Company Profile is incomplete: ${error.message} Open Company Profile and save it before exporting.`);}
   let crs=null;try{crs=utmZoneForLocation(snapshot?.project?.location);}catch(error){blockers.push(`CAD coordinate system unavailable: ${error.message}`);}
   if(snapshot?.ready===false&&!blockers.length)blockers.push('The selected export rows are not ready. Correct the highlighted rows and try again.');

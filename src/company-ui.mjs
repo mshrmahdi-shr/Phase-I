@@ -87,10 +87,11 @@ function downloadBlob({blob,filename},document){
   }finally{link.remove();setTimeout(()=>URL.revokeObjectURL(url),0);}
 }
 
-export function createCompanyProfileDialog({document,assetStore,loadProfile,saveProfile,onChanged=()=>{},Zip=globalThis.JSZip}={}){
+export function createCompanyProfileDialog({document,assetStore,loadProfile,saveProfile,onChanged=()=>{},isAssetReferenced=()=>false,Zip=globalThis.JSZip}={}){
   if(!document?.getElementById)throw new Error('A document is required for the Company Profile dialog.');
   if(!assetStore||typeof assetStore.get!=='function'||typeof assetStore.put!=='function'||typeof assetStore.delete!=='function')throw new Error('A readable and writable asset store is required.');
   if(typeof loadProfile!=='function'||typeof saveProfile!=='function')throw new Error('Company profile load and save functions are required.');
+  if(typeof isAssetReferenced!=='function')throw new Error('Company logo reference check must be a function.');
   const byId=id=>document.getElementById(id),dialog=byId('companyProfileDialog'),form=byId('companyProfileForm');
   let current=null,selectedLogo=null,logoSelectionError=null,importCandidate=null,returnFocus=null,background=[],destroyed=false,mutation=null;
   let logoGeneration=0,importGeneration=0,refreshGeneration=0,lifecycleGeneration=0,pendingLogo=null,pendingImport=null;
@@ -207,7 +208,7 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
     if(destroyed)current=snapshotCompanyProfile(profile);else await notify(profile);
     let cleanupWarning='';
     if(oldProfile?.logoAssetId&&oldProfile.logoAssetId!==profile.logoAssetId){
-      try{await assetStore.delete(oldProfile.logoAssetId);}catch{cleanupWarning=' The older logo could not be cleaned up.';}
+      try{if(!await isAssetReferenced(oldProfile.logoAssetId))await assetStore.delete(oldProfile.logoAssetId);}catch{cleanupWarning=' The older logo was retained because its project references could not be verified.';}
     }
     if(!destroyed){
       selectedLogo=null;logoSelectionError=null;importGeneration++;pendingImport=null;importCandidate=null;byId('companyImportPreview').hidden=true;
@@ -288,7 +289,7 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
       }catch(error){try{await assetStore.delete(profile.logoAssetId);}catch{}throw error;}
       retireManualLogoDraft();
       if(destroyed)current=snapshotCompanyProfile(profile);else await notify(profile);
-      let cleanupWarning='';if(old?.logoAssetId&&old.logoAssetId!==profile.logoAssetId){try{await assetStore.delete(old.logoAssetId);}catch{cleanupWarning=' The older logo could not be cleaned up.';}}
+      let cleanupWarning='';if(old?.logoAssetId&&old.logoAssetId!==profile.logoAssetId){try{if(!await isAssetReferenced(old.logoAssetId))await assetStore.delete(old.logoAssetId);}catch{cleanupWarning=' The older logo was retained because its project references could not be verified.';}}
       if(!destroyed){
         const importedLogoUrl=byId('companyImportLogo').src;importCandidate=null;byId('companyImportPreview').hidden=true;fields(profile);
         previewLogo(importedLogoUrl,`${profile.companyName} logo`);
