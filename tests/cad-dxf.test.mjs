@@ -86,6 +86,7 @@ function bounds(points){return {west:Math.min(...points.map(p=>p[0])),south:Math
 function textContent(entity){return [...values(entity,3),...values(entity,1)].join('');}
 function decodeText(value){return value.replace(/\\U\+([0-9A-F]{4})/g,(_,hex)=>String.fromCharCode(Number.parseInt(hex,16)));}
 function selectionKey(item){return item.kind==='figure'?`figure:${item.code}`:`historical:${item.id}`;}
+function twiceArea(points){const [originX,originY]=points[0];return points.reduce((sum,point,index)=>{const next=points[(index+1)%points.length];return sum+(point[0]-originX)*(next[1]-originY)-(next[0]-originX)*(point[1]-originY);},0);}
 
 test('buildCadDxf emits a deterministic complete R2007 drawing with metre units, required layers, handles, and sections',async()=>{
   const {buildCadDxf}=await import('../src/cad-dxf.mjs'),args=input(),first=buildCadDxf(args);
@@ -144,6 +145,35 @@ test('title and logo frames remain editable and wholly outside the map geometry 
   assert.doesNotMatch(dxf,/\n0\nIMAGE(?:DEF)?\n/);assert.doesNotMatch(dxf,/logo-1/);
 });
 
+test('company logo frame applies left, center, and right alignment plus the full saved scale range inside its title cell',async()=>{
+  const {buildCadDxf}=await import('../src/cad-dxf.mjs');
+  const geometry=logoPlacement=>{
+    const all=entities(buildCadDxf(input({companyProfile:company({logoPlacement})})));
+    const logo=all.find(entity=>entity.type==='LWPOLYLINE'&&layer(entity)==='COMPANY_LOGO_FRAME');
+    const title=all.find(entity=>entity.type==='LWPOLYLINE'&&layer(entity)==='TITLE_BLOCK'&&Number(value(entity,70))===1);
+    const companyTextX=Math.min(...all.filter(entity=>entity.type==='MTEXT'&&layer(entity)==='COMPANY_TEXT').map(entity=>Number(value(entity,10))));
+    return {vertices:xy(logo),logo:bounds(xy(logo)),title:bounds(xy(title)),companyTextX};
+  };
+  const aligned=['left','center','right'].map(align=>geometry({align,scale:1}));
+  assert.ok(aligned[0].logo.west<aligned[1].logo.west&&aligned[1].logo.west<aligned[2].logo.west);
+  const alignedWidths=aligned.map(item=>item.logo.east-item.logo.west);assert.ok(Math.max(...alignedWidths)-Math.min(...alignedWidths)<=2e-6,'alignment preserves width within one coordinate quantum');
+  assert.notDeepEqual(aligned[0].vertices,aligned[1].vertices);assert.notDeepEqual(aligned[1].vertices,aligned[2].vertices);
+  const scaled=[.5,1,1.5].map(scale=>geometry({align:'center',scale})),widths=scaled.map(item=>item.logo.east-item.logo.west);
+  assert.ok(widths[0]<widths[1]&&widths[1]<widths[2]);assert.notDeepEqual(scaled[0].vertices,scaled[2].vertices);
+  for(const item of [...aligned,...scaled]){
+    assert.ok(item.logo.west>=item.title.west&&item.logo.east<=item.title.east&&item.logo.south>=item.title.south&&item.logo.north<=item.title.north);
+    assert.ok(item.logo.east<item.companyTextX,'logo cell remains left of company text');assert.notEqual(twiceArea(item.vertices),0);
+  }
+});
+
+test('CAD logo placement boundary rejects missing, extra, accessor, unsupported, and out-of-range fields',async()=>{
+  const {buildCadDxf}=await import('../src/cad-dxf.mjs');let reads=0;
+  const accessor={align:'left'};Object.defineProperty(accessor,'scale',{enumerable:true,get(){reads++;return 1;}});
+  const invalid=[undefined,{align:'left'},{align:'left',scale:1,extra:true},{align:'top',scale:1},{align:'left',scale:.499999},{align:'right',scale:1.500001},accessor];
+  for(const logoPlacement of invalid)assert.throws(()=>buildCadDxf(input({companyProfile:company({logoPlacement})})),/logo|placement|align|scale|field|record|range/i);
+  assert.equal(reads,0,'DXF validation does not invoke placement accessors');
+});
+
 test('all untrusted text is ASCII encoded without group injection, MTEXT formatting injection, or oversized group values',async()=>{
   const {buildCadDxf}=await import('../src/cad-dxf.mjs');
   const attack='Café مهندسی\n0\nSECTION {\\P} %%d ^M ~ 😀';
@@ -191,6 +221,45 @@ test('geometry validation rejects malformed boundaries, nonfinite or implausible
     {...base,projector:{crs:base.projector.crs,forward(){return [Infinity,Infinity];}}}
   ];
   for(const value of cases)assert.throws(()=>buildCadDxf(value),/boundary|ring|coordinate|frame|finite|UTM|range|degenerate|overflow|CRS|zone|project/i);
+});
+
+test('projected boundary polygons are rejected when a finite projector collapses or self-intersects them',async()=>{
+  const {buildCadDxf}=await import('../src/cad-dxf.mjs'),base=input(),actual=base.projector;
+  const constant={crs:actual.crs,forward(){return [630000,4835000];},inverse:point=>actual.inverse(point)};
+  const delta=.0000004,tiny={crs:actual.crs,forward([lng,lat]){return [630000+(lng>-79.38?delta:0),4835000+(lat>43.65?delta:0)];},inverse:point=>actual.inverse(point)};
+  const crossing=new Map([
+    ['-79.385,43.645',[630000,4835000]],['-79.375,43.645',[630010,4835010]],
+    ['-79.375,43.655',[630000,4835010]],['-79.385,43.655',[630010,4835000]]
+  ]),selfIntersecting={crs:actual.crs,forward(point){return crossing.get(point.join(','))||actual.forward(point);},inverse:point=>actual.inverse(point)};
+  for(const projector of [constant,tiny,selfIntersecting])assert.throws(()=>buildCadDxf({...base,projector}),/boundary|polyline|polygon|degenerate|collapse|area|intersect|geometry/i);
+});
+
+test('image and computed logo frames that collapse at DXF numeric precision fail before serialization',async()=>{
+  const {buildCadDxf}=await import('../src/cad-dxf.mjs'),base=input(),delta=.0000004,oneSelection=[figureSelection];
+  const subPrecision=[[630000,4835000],[630000+delta,4835000],[630000+delta,4835000+delta],[630000,4835000+delta]];
+  assert.throws(()=>buildCadDxf({...base,selection:oneSelection,imageFrames:[{selection:figureSelection,corners:subPrecision}]}),/frame|polyline|polygon|degenerate|collapse|area|precision|geometry/i);
+  assert.throws(()=>buildCadDxf(input({companyProfile:company({logoWidth:Number.MAX_SAFE_INTEGER,logoHeight:1})})),/logo|frame|polyline|polygon|degenerate|collapse|area|geometry/i);
+});
+
+test('tiny projected polygons remain valid when all vertices survive canonical DXF precision',async()=>{
+  const {buildCadDxf}=await import('../src/cad-dxf.mjs'),base=input(),delta=.00002,oneSelection=[figureSelection];
+  const tinyFrame=[[630000,4835000],[630000+delta,4835000],[630000+delta,4835000+delta],[630000,4835000+delta]];
+  const dxf=buildCadDxf({...base,selection:oneSelection,imageFrames:[{selection:figureSelection,corners:tinyFrame}]}),all=entities(dxf);
+  const frame=all.find(entity=>entity.type==='LWPOLYLINE'&&layer(entity)==='IMAGE_FRAMES'),vertices=xy(frame);
+  assert.equal(new Set(vertices.map(point=>point.join(','))).size,4);assert.notEqual(twiceArea(vertices),0);
+  for(const polygon of all.filter(entity=>entity.type==='LWPOLYLINE'&&Number(value(entity,70))===1)){
+    const points=xy(polygon);assert.equal(new Set(points.map(point=>point.join(','))).size,points.length,layer(polygon));assert.notEqual(twiceArea(points),0,layer(polygon));
+  }
+});
+
+test('valid rotated affine image frames remain affine after canonical DXF serialization',async()=>{
+  const {buildCadDxf}=await import('../src/cad-dxf.mjs'),base=input(),oneSelection=[figureSelection];
+  const upperLeft=[630000.123456789,4835000.123456789],upperRight=[630123.580245912,4835012.469135701],lowerLeft=[629994.444544444,4834901.358024666];
+  const lowerRight=[upperRight[0]+lowerLeft[0]-upperLeft[0],upperRight[1]+lowerLeft[1]-upperLeft[1]];
+  const dxf=buildCadDxf({...base,selection:oneSelection,imageFrames:[{selection:figureSelection,corners:[upperLeft,upperRight,lowerRight,lowerLeft]}]}),all=entities(dxf);
+  const frame=all.find(entity=>entity.type==='LWPOLYLINE'&&layer(entity)==='IMAGE_FRAMES'),vertices=xy(frame);
+  assert.equal(new Set(vertices.map(point=>point.join(','))).size,4);assert.notEqual(twiceArea(vertices),0);
+  assert.deepEqual(vertices[2],[vertices[1][0]+vertices[3][0]-vertices[0][0],vertices[1][1]+vertices[3][1]-vertices[0][1]].map(number=>Number(number.toPrecision(12))));
 });
 
 test('bounded text fields reject non-string and excessive values before DXF layout',async()=>{
