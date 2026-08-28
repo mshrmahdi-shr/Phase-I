@@ -55,6 +55,7 @@
         <p class="helper">OGS MRD128-REV polygons load from this site's cached KML/KMZ, with the supplied official legend. Reload geology after reopening a project.</p>
         <label>Or import KML/KMZ<input id="uploadGeology" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" /></label>
         <label>Import dataset type<select id="geologyKind"><option value="surficial">Surficial geology</option><option value="bedrock">Bedrock geology</option></select></label>
+        <button id="editGeologyProvenance" type="button" hidden>Edit custom source details</button>
         <p class="helper">Official Bedrock: MRD126-REV1 With Lowlands, compiled at 1:250,000. Custom imports keep their own legend; use the official button to replace them.</p>
         <div id="geologyStatus" class="helper">Locate the property first, then load MRD128.</div>
       </section>
@@ -85,6 +86,22 @@
       <div class="aerial-card"><div class="section-heading"><h3>Historical aerials</h3><span class="badge" id="aerialCount">0</span></div><div id="historicalApprovedList" class="helper">No historical imagery approved.</div></div>
     </aside>
   </main>
+
+  <div id="geologyProvenanceDialog" hidden role="dialog" aria-modal="true" aria-labelledby="geologyProvenanceHeading" aria-describedby="geologyProvenanceHelp">
+    <form id="geologyProvenanceForm" class="geology-provenance-panel" novalidate>
+      <h2 id="geologyProvenanceHeading">Review custom geology provenance</h2>
+      <p id="geologyProvenanceHelp" class="helper">Enter the source and terms you actually have. The app does not guess a licence or publication year. Complete evidence and confirmation are required for CAD; PDF can still use valid loaded geometry.</p>
+      <label>Source or dataset name<input id="geologySourceName" maxlength="200" required /></label>
+      <label>Source / organization credits<textarea id="geologySourceCredits" maxlength="500" required></textarea></label>
+      <label>Public source URL (optional)<input id="geologySourceUrl" type="url" maxlength="2048" placeholder="https://…" /></label>
+      <label>Licence / terms name or URL<textarea id="geologySourceLicense" maxlength="1000" required></textarea></label>
+      <label>Redistribution / use permission evidence<textarea id="geologyPermissionEvidence" maxlength="1000" required placeholder="Example: written client permission dated YYYY-MM-DD is on file"></textarea></label>
+      <div class="two-col"><label>Acquisition / publication year (optional)<input id="geologyAcquisitionYear" type="number" min="1800" max="2100" inputmode="numeric" /></label><label>Year verification<select id="geologyYearVerification"><option value="unknown">Unknown (leave year blank)</option><option value="unverified">Entered, not independently verified</option><option value="verified">Verified from source record</option></select></label></div>
+      <label class="permission-check"><input id="geologyRightsConfirmed" type="checkbox" /> I confirm I have rights or permission to use and redistribute this geology in the selected project outputs.</label>
+      <p id="geologyProvenanceStatus" class="helper" role="status"></p>
+      <div class="company-form-actions"><button id="cancelGeologyProvenance" type="button">Cancel</button><button id="saveGeologyProvenance" type="submit" class="primary">Save source details</button></div>
+    </form>
+  </div>
 
   <div id="projectPackageDialog" hidden role="dialog" aria-modal="true" aria-labelledby="projectPackageHeading" aria-describedby="projectPackageHelp">
     <section class="project-package-panel">
@@ -182,7 +199,7 @@
   <div id="exportDialog" hidden role="dialog" aria-modal="true" aria-labelledby="exportHeading" aria-describedby="exportHelp">
     <section class="export-panel">
       <h2 id="exportHeading">Export PDF or AutoCAD package</h2>
-      <p id="exportHelp">Select ready figures and historical images once. The same checked rows are used for the combined A3 PDF and the complete AutoCAD ZIP; source, company, logo, and layout failures block either complete download.</p>
+      <p id="exportHelp">Select ready figures and historical images once. The same checked rows are used for PDF and AutoCAD. PDF can use valid loaded custom geology; CAD additionally requires the saved source credits, licence/terms, permission evidence and rights confirmation shown below.</p>
       <div class="export-selection-actions"><button id="selectAllReady">Select all ready</button><button id="clearExport">Clear selection</button></div>
       <div id="exportRows"></div>
       <section class="cad-export-summary" aria-labelledby="cadExportHeading">

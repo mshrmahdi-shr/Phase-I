@@ -1,4 +1,5 @@
 import {requireProjectCompanyProfile,restoreProject} from './core.mjs';
+import {normalizeCustomGeologySource} from './geology-provenance.mjs';
 import {normalizeCompanyProfile,snapshotCompanyProfile,validateCompanyProfile} from './company-profile.mjs';
 import {buildCadDxf} from './cad-dxf.mjs';
 import {allocateCadFilenames,buildCadManifest,CAD_RASTER_NORMALIZATION} from './cad-manifest.mjs';
@@ -146,10 +147,11 @@ function sourceRecord({role,name,sourceUrl=null,attribution,license,redistributi
 function figureSources(code,datasets){
   const base=sourceForFigure(code),sources=[sourceRecord({role:'basemap',name:base.label,sourceUrl:base.url,attribution:base.credits,license:FIGURE_LICENCE[base.id],redistributionEvidence:'approved-application-map-source'})];
   const kind=code==='D'?'surficial':code==='E'?'bedrock':null;if(!kind)return sources;
-  const source=datasets?.[kind]?.source;if(!source||typeof source!=='object')fail(`Figure ${code} geology provenance is missing.`);
-  const custom=source.id==='custom',name=source.name,credits=source.credits,license=source.license,redistributionEvidence=source.redistributionEvidence;
+  let source=datasets?.[kind]?.source;if(!source||typeof source!=='object')fail(`Figure ${code} geology provenance is missing.`);
+  const custom=source.id==='custom';if(custom)try{source=normalizeCustomGeologySource(source);}catch(error){throw new Error(`Figure ${code} custom geology provenance is incomplete: ${error.message}`,{cause:error});}
+  const name=source.name,credits=source.credits,license=source.license,redistributionEvidence=source.redistributionEvidence;
   if(typeof name!=='string'||!name.trim()||typeof credits!=='string'||!credits.trim()||typeof license!=='string'||!license.trim()||typeof redistributionEvidence!=='string'||!redistributionEvidence.trim())fail(`Figure ${code} geology source, credits, licence, and permission provenance are required before CAD export.`);
-  sources.push(sourceRecord({role:custom?'user-supplied-overlay':'geology-overlay',name,sourceUrl:source.sourceUrl??null,attribution:credits,license,redistributionEvidence}));return sources;
+  sources.push(sourceRecord({role:custom?'user-supplied-overlay':'geology-overlay',name,sourceUrl:source.sourceUrl??null,attribution:credits,license,redistributionEvidence,acquisitionYear:custom?source.acquisitionYear:null,acquisitionYearVerification:custom?source.acquisitionYearVerification:'unknown'}));return sources;
 }
 function aggregateSources(sources){
   const join=field=>sources.map(source=>source[field]).join(' | ');return {provider:sources.map(source=>source.name).join(' + '),attribution:join('attribution'),license:join('license'),redistributionEvidence:join('redistributionEvidence')};

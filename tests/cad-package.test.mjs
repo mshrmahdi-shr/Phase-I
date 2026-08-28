@@ -122,14 +122,14 @@ test('Figure B/D/E artifacts preserve unknown acquisition year and every composi
   const polygon={polygon:[[location.lng-.5,location.lat-.5],[location.lng+.5,location.lat-.5],[location.lng+.5,location.lat+.5],[location.lng-.5,location.lat+.5],[location.lng-.5,location.lat-.5]],holes:[],name:'Test unit',unitCode:'5D',description:'Test geology',color:'#22aa66',fillOpacity:.6};
   value.options.datasets={
     surficial:{features:[polygon],coverage:{west:-80,south:43,east:-79,north:44},source:{id:'MRD128-REV',name:'MRD128 / MRD128-REV Surficial Geology',credits:'Ontario Geological Survey',sourceUrl:'https://www.geologyontario.mndm.gov.on.ca/mndmaccess/mndm_dir.asp?type=pub&id=MRD128-REV',license:'https://www.ontario.ca/page/open-government-licence-ontario',redistributionEvidence:'official-open-government-licence'}},
-    bedrock:{features:[polygon],coverage:{west:-80,south:43,east:-79,north:44},source:{id:'custom',name:'Engineer supplied bedrock.kml',credits:'Prepared by Example Engineer',sourceUrl:'https://records.example.test/bedrock',license:'Written project-use and redistribution permission on file',redistributionEvidence:'user-supplied-permission-confirmed'}}
+    bedrock:{features:[polygon],coverage:{west:-80,south:43,east:-79,north:44},source:{id:'custom',name:'Engineer supplied bedrock.kml',credits:'Prepared by Example Engineer',sourceUrl:'https://records.example.test/bedrock',license:'Written project-use and redistribution permission on file',redistributionEvidence:'user-supplied-permission-confirmed',acquisitionYear:2011,acquisitionYearVerification:'verified',permissionConfirmed:true}}
   };
   const result=await exportCadPackage(value.options),{zip}=await archiveEntries(result.blob),manifest=JSON.parse(await text(zip,'Manifest.json')),csv=await text(zip,'Manifest.csv'),sources=await text(zip,'Sources-and-Licences.txt'),readme=await text(zip,'README.txt');
   const byCode=Object.fromEntries(manifest.items.map(item=>[item.code,item]));
   for(const code of ['B','D','E']){assert.equal(byCode[code].acquisitionYear,null);assert.equal(byCode[code].acquisitionYearVerification,'unknown');}
   assert.deepEqual(byCode.B.sources.map(source=>source.role),['basemap']);
   assert.deepEqual(byCode.D.sources.map(source=>source.role),['basemap','geology-overlay']);
-  assert.deepEqual(byCode.E.sources.map(source=>source.role),['basemap','user-supplied-overlay']);
+  assert.deepEqual(byCode.E.sources.map(source=>source.role),['basemap','user-supplied-overlay']);assert.equal(byCode.E.sources[1].acquisitionYear,2011);assert.equal(byCode.E.sources[1].acquisitionYearVerification,'verified');
   assert.match(JSON.stringify(byCode.D.sources),/OpenStreetMap.*MRD128|MRD128.*OpenStreetMap/);
   assert.match(JSON.stringify(byCode.E.sources),/Engineer supplied bedrock\.kml/);
   assert.doesNotMatch(JSON.stringify(manifest.items),/"acquisitionYear":2026/,'report year must never be fabricated as acquisition year');

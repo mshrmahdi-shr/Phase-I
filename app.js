@@ -13,6 +13,7 @@ import {normalizeCompanyProfile,validateCompanyProfile} from './src/company-prof
 import {createCompanyProfileDialog} from './src/company-ui.mjs';
 import {createProjectPackageUI} from './src/project-package-ui.mjs';
 import {createDrawingController} from './src/drawing-controller.mjs';
+import {createGeologyProvenanceController} from './src/geology-provenance-ui.mjs';
 import {createHistoricalImageryUI,migrateLegacyHistoricalImagery} from './src/historical-ui.mjs';
 import {ONTARIO_IMAGERY_PROVIDER} from './src/imagery/providers/ontario.mjs';
 import {TORONTO_IMAGERY_PROVIDER} from './src/imagery/providers/toronto.mjs';
@@ -26,7 +27,7 @@ function loadCompanyProfile(){try{const saved=localStorage.getItem(COMPANY_STORA
 function saveCompanyProfile(profile){const normalized=normalizeCompanyProfile(profile);localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized));return normalized;}
 let companyProfile=loadCompanyProfile();
 let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject({companyProfileSnapshot:companyProfile})})();
-let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,packageUI,exportBusy=false,printBranding=null,packagePersistenceToken=null;
+let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,packageUI,geologyProvenance,exportBusy=false,printBranding=null,packagePersistenceToken=null;
 const assetStore=createAssetStore();
 const companyDialog=createCompanyProfileDialog({document,assetStore,loadProfile:loadCompanyProfile,saveProfile:saveCompanyProfile,Zip:JSZip,isAssetReferenced:id=>project.companyProfileSnapshot?.logoAssetId===id,onChanged:profile=>{
   companyProfile=profile;preflight?.refresh();exportDialog?.refresh();if(!printSession?.isOpen)refreshPrint();
@@ -152,7 +153,7 @@ map.on('click',e=>{
 });
 document.addEventListener('keydown',event=>drawingController.handleKey(event),{signal:drawingBindings.signal});
 map.getContainer().addEventListener('contextmenu',event=>drawingController.handleContextMenu(event),{signal:drawingBindings.signal});
-window.addEventListener('pagehide',event=>{if(event.persisted)return;packageUI?.destroy();historicalUI?.destroy();drawingBindings.abort();if(document[DRAWING_BINDINGS]===drawingBindings)delete document[DRAWING_BINDINGS];},{signal:drawingBindings.signal});
+window.addEventListener('pagehide',event=>{if(event.persisted)return;packageUI?.destroy();historicalUI?.destroy();geologyProvenance?.destroy();drawingBindings.abort();if(document[DRAWING_BINDINGS]===drawingBindings)delete document[DRAWING_BINDINGS];},{signal:drawingBindings.signal});
 function redraw(){siteLayer?.remove();buildingLayer?.remove();if(project.siteBoundary?.length)siteLayer=L.polygon(project.siteBoundary.map(([x,y])=>[y,x]),{color:'#ef4444',weight:4,fill:false}).addTo(map);if(project.buildingBoundary?.length)buildingLayer=L.polygon(project.buildingBoundary.map(([x,y])=>[y,x]),{color:'#111827',weight:3,dashArray:'6 4',fillColor:'#fff',fillOpacity:.1}).addTo(map)}
 function renderFigures(){const h=$('figureList');h.innerHTML='';for(const [c,f] of Object.entries(project.figures)){const d=document.createElement('div');d.className='figure-row'+(c===active?' active':'');d.innerHTML=`<div class="figure-top"><div><div class="figure-code">FIGURE ${c}</div><div class="figure-title">${esc(f.title)}</div></div><span class="badge" title="${f.bounds?'Saved A3 map span':'Default A3 map span'}">${fmt(f.extentMeters)}</span></div><div class="figure-actions"><button title="${f.bounds?'Restore the saved A3 map position and zoom':'Show the current A3 map extent'}">${f.bounds?'View saved':'View'}</button><button title="Save the current map position and zoom for A3/PDF">${f.bounds?'Update A3 view':'Use for A3'}</button></div>`;d.children[1].children[0].onclick=()=>selectFig(c,true);d.children[1].children[1].onclick=()=>useForA3(c);h.appendChild(d)}}
 function fmt(m){return m>=1000?`${m/1000} km`:`${m} m`;}
@@ -166,7 +167,7 @@ function selectFig(code,fit){
   if(exportBusy)return;
   active=code;drawingController.cancel();renderFigures();
   setBasemap(assignedBasemap());
-  if(fit)zoom(code);renderGeo();detect();refreshPrint();preflight.refresh();
+  if(fit)zoom(code);renderGeo();detect();refreshPrint();preflight.refresh();refreshGeologyProvenanceAction();
   const kind=geologyKind();
   if(kind&&project.location){
     const custom=geoSource[kind]?.id==='custom'||project.geology[kind]?.source?.id==='custom';
@@ -246,21 +247,19 @@ async function loadOfficialBedrock(user=true){
   }catch(error){if(ticket===geoRequest.bedrock)status('geologyStatus',`MRD126 Bedrock load failed: ${error.message} Check the published cache or import a polygon KML/KMZ.`,'error');}
   finally{if(ticket===officialLoading.bedrock){officialLoading.bedrock=0;loadingButton('loadBedrock',false);preflight.refresh();exportDialog?.refresh();}}
 }
-$('uploadGeology').onchange=async e=>{
-  const file=e.target.files?.[0];if(!file||exportBusy)return;
-  const kind=$('geologyKind').value,ticket=++geoRequest[kind];geoReady[kind]=false;exportDialog?.refresh();
-  try{
-    const text=/\.kmz$/i.test(file.name)?await readKmz(file,JSZip):await file.text();
-    const features=parsePolys(text,kind);
-    if(!features.length)throw Error('This file contains no polygons. Import a self-contained polygon KML/KMZ, not a NetworkLink index.');
-    if(ticket===geoRequest[kind]&&!exportBusy)commitDataset(features,kind,{id:'custom',name:`Custom import: ${file.name}`},1,null);
-  }catch(error){status('geologyStatus',`Import failed: ${error.message}`,'error');}
-  finally{preflight.refresh();exportDialog?.refresh();}
-};
+geologyProvenance=createGeologyProvenanceController({document,parsePolys,readKmz,Zip:JSZip,onCommit:async({mode,kind,source,features,docs,coverage,requestToken})=>{
+  if(exportBusy)throw new Error('Finish the current export before changing geology provenance.');
+  if(mode==='import'){if(requestToken!==geoRequest[kind])throw new Error('A newer geology request replaced this import. Reopen the final file.');commitDataset(features,kind,source,docs,coverage);return;}
+  if(project.geology[kind]?.source?.id!=='custom')throw new Error('The saved custom geology source is no longer current.');const previousProject=project,previousRuntime=geoSource[kind];project={...project,geology:{...project.geology,[kind]:{...project.geology[kind],name:source.name,source}}};if(geoSource[kind]?.id==='custom')geoSource[kind]=source;if(!save()){project=previousProject;geoSource[kind]=previousRuntime;throw new Error('The corrected provenance could not be saved.');}refreshGeologyProvenanceAction();status('geologyStatus',`Updated ${kind} custom source details.`,'ok');
+}});
+$('uploadGeology').onchange=async e=>{const file=e.target.files?.[0];if(!file||exportBusy)return;const kind=$('geologyKind').value,ticket=++geoRequest[kind];try{const committed=await geologyProvenance.importFile(file,kind,{requestToken:ticket});if(!committed)status('geologyStatus','Custom geology import cancelled; the current dataset was not changed.');}catch(error){status('geologyStatus',`Import failed: ${error.message}`,'error');}finally{e.target.value='';preflight.refresh();exportDialog?.refresh();refreshGeologyProvenanceAction();}};
+$('editGeologyProvenance').onclick=async()=>{if(exportBusy)return;const kind=geologyKind()||$('geologyKind').value,source=geoSource[kind]||project.geology[kind]?.source;try{await geologyProvenance.editSource(kind,source);}catch(error){status('geologyStatus',error.message,'error');}};
+$('geologyKind').onchange=refreshGeologyProvenanceAction;
+function refreshGeologyProvenanceAction(){const kind=geologyKind()||$('geologyKind').value,source=geoSource[kind]||project.geology[kind]?.source;$('editGeologyProvenance').hidden=source?.id!=='custom';}
 function commitDataset(features,kind,source,docs,coverage){
   geo[kind]=features;geoSource[kind]=source;geoCoverage[kind]=coverage;geoReady[kind]=true;
   project.geology[kind]={name:source.name,source,count:features.length,docs};renderGeo();detect();save();refreshPrint();
-  status('geologyStatus',`Loaded ${features.length.toLocaleString()} ${kind} polygon(s) from ${source.name}`,'ok');
+  refreshGeologyProvenanceAction();status('geologyStatus',`Loaded ${features.length.toLocaleString()} ${kind} polygon(s) from ${source.name}`,'ok');
 }
 function geologyKind(){return active==='D'?'surficial':active==='E'?'bedrock':null;}
 function renderGeo(){

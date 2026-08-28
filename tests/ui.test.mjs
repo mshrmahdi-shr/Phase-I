@@ -28,7 +28,7 @@ test('index exposes the core Phase I workflow controls', () => {
     'searchHistorical','manualHistoricalFile','manualWorldFile','manualCitation','manualPermission','historicalCropFrame','historicalApprovedList','historicalViewControls','cancelHistoricalView','uploadGeology','printA3','exportDxf',
     'exportProjectPackage','importProjectPackage','importProjectPackageFile','projectPackageDialog','projectPackageStatus','confirmProjectPackageImport','cancelProjectPackage',
     'editCompanyProfile','applyCompanyTemplate','exportCompanyTemplate','importCompanyTemplate','companyProfileDialog','printCompanyLogo','printCompanyName','printCompanyContact',
-    'downloadCad','cadSelectionCount','cadCrs','cadReadiness']) {
+    'downloadCad','cadSelectionCount','cadCrs','cadReadiness','editGeologyProvenance','geologyProvenanceDialog','geologySourceName','geologySourceCredits','geologySourceLicense','geologyPermissionEvidence','geologyAcquisitionYear','geologyYearVerification','geologyRightsConfirmed','saveGeologyProvenance','cancelGeologyProvenance']) {
     assert.match(html,new RegExp(`id=["']${id}["']`),`missing #${id}`);
   }
   const document=new JSDOM(html).window.document;assert.match(document.getElementById('exportPdf').textContent,/PDF.*AutoCAD/i);
@@ -219,10 +219,13 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
     const planningWindow=globalThis.window;delete globalThis.window;
     try{await $('exportPdf').onclick();assert.equal($('exportFigureE').disabled,false);}finally{globalThis.window=planningWindow;}$('cancelExport').click();
     const text='<kml><Document><Placemark><name>55b Custom meaning</name><description>Customer geology</description><Polygon><outerBoundaryIs><LinearRing><coordinates>-80,43 -79,43 -79,44 -80,44 -80,43</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark></Document></kml>';
-    $('geologyKind').value='bedrock';await $('uploadGeology').onchange({target:{files:[{name:'customer.kml',text:async()=>text}]}});
+    async function finishCustomProvenance(importing,{year='',verification='unknown',name=null}={}){for(let index=0;index<50&&$('geologyProvenanceDialog').hidden;index++)await new Promise(resolve=>setTimeout(resolve,0));assert.equal($('geologyProvenanceDialog').hidden,false,'custom provenance dialog must open');if(name)$('geologySourceName').value=name;$('geologySourceCredits').value='Prepared by Example Engineer';$('geologySourceLicense').value='Written project-use licence on file';$('geologyPermissionEvidence').value='Client confirmed use and redistribution for this project';$('geologyAcquisitionYear').value=year;$('geologyYearVerification').value=verification;$('geologyRightsConfirmed').checked=true;$('saveGeologyProvenance').click();await importing;}
+    $('geologyKind').value='bedrock';const customerImport=$('uploadGeology').onchange({target:{files:[{name:'customer.kml',text:async()=>text}],value:'customer.kml'}});await finishCustomProvenance(customerImport);
     const count=requests.length;choose('A');choose('E');
     assert.equal(requests.length,count);assert.match($('geoLegend').textContent,/Custom meaning/);
-    assert.equal(JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology.bedrock.source.id,'custom');
+    const customSaved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology.bedrock.source;assert.equal(customSaved.id,'custom');assert.equal(customSaved.permissionConfirmed,true);assert.equal(customSaved.acquisitionYear,null);
+    let customPlanningWindow=globalThis.window;delete globalThis.window;try{await $('exportPdf').onclick();await $('clearExport').onclick();const customE=$('exportFigureE');customE.checked=true;await customE.onchange();assert.equal($('downloadPdf').disabled,false,'PDF remains supported');assert.equal($('downloadCad').disabled,false,'confirmed custom provenance reaches CAD-ready');assert.match($('cadReadiness').textContent,/Ready/i);}finally{globalThis.window=customPlanningWindow;}$('cancelExport').click();
+    $('editGeologyProvenance').click();await new Promise(resolve=>setTimeout(resolve,0));$('geologySourceCredits').value='Corrected Example Engineer credit';$('saveGeologyProvenance').click();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology.bedrock.source.credits,'Corrected Example Engineer credit');
     // Exercise the real exporter through its cancellation path. Only browser
     // canvas and external I/O boundaries are substituted; jsPDF stays real.
     let releaseLoad,startImagery;
@@ -269,7 +272,7 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
         officialGate.resolve();await loading;
         try{
           assert.equal($(buttonId).disabled,false,'the completed official request must release its own button even after import supersedes its data');
-        }finally{importGate.resolve(text);await importing;}
+        }finally{importGate.resolve(text);await finishCustomProvenance(importing);}
         const saved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology[kind];
         assert.equal(saved.source.id,'custom');assert.match(saved.name,new RegExp(`replacement-${kind}`));
       });
@@ -277,7 +280,7 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
         const olderGate=deferred(),newerGate=deferred();gateOfficialRequests([olderGate,newerGate]);
         const older=$(buttonId).onclick();
         $('geologyKind').value=kind;
-        await $('uploadGeology').onchange({target:{files:[{name:`latest-${kind}.kml`,text:async()=>text}]}});
+        const latestImport=$('uploadGeology').onchange({target:{files:[{name:`latest-${kind}.kml`,text:async()=>text}],value:`latest-${kind}.kml`}});await finishCustomProvenance(latestImport);
         const newer=$(buttonId).onclick();olderGate.resolve();await older;
         try{assert.equal($(buttonId).disabled,true,'the newer official request still owns the loading button');}
         finally{newerGate.resolve();await newer;}

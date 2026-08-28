@@ -85,6 +85,15 @@ test('restoreProject gives legacy projects no profile snapshot and rejects inval
   assert.throws(()=>core.restoreProject(legacy),/company profile snapshot/i);
 });
 
+test('restoreProject persists canonical custom geology provenance and migrates legacy custom sources fail-closed without inventions',()=>{
+  const source={id:'custom',name:'Bedrock supplied.kml',credits:'Example Engineer',sourceUrl:null,license:'Written project licence',redistributionEvidence:'Permission email on file',acquisitionYear:2011,acquisitionYearVerification:'verified',permissionConfirmed:true};
+  const project=createProject();project.geology.bedrock={name:source.name,source,count:2,docs:1};
+  assert.deepEqual(core.restoreProject(project).geology.bedrock.source,source);
+  project.geology.bedrock={name:'legacy.kml',source:{id:'custom',name:'Custom import: legacy.kml'},count:2,docs:1};
+  assert.deepEqual(core.restoreProject(project).geology.bedrock.source,{id:'custom',name:'Custom import: legacy.kml',credits:'',sourceUrl:null,license:'',redistributionEvidence:'',acquisitionYear:null,acquisitionYearVerification:'unknown',permissionConfirmed:false});
+  project.geology.bedrock.source={id:'custom',name:'bad.kml',sourceUrl:'file:///private.kml'};assert.throws(()=>core.restoreProject(project),/custom geology|source URL/i);
+});
+
 test('restoreProject validates approved historical items and preserves duplicate-year stable sequences',()=>{
   const project=createProject();
   const stamp='2026-08-27T12:00:00.000Z';

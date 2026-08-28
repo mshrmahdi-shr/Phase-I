@@ -1,5 +1,6 @@
 import {utmZoneForLocation} from './projection.mjs';
 import {validateCompanyProfile} from './company-profile.mjs';
+import {normalizeCustomGeologySource} from './geology-provenance.mjs';
 
 const PHASE_LABELS=Object.freeze({
   preflight:'Validating project, company, sources, and package limits…',
@@ -28,7 +29,8 @@ function readiness(snapshot){
     const kind=item?.kind==='figure'&&item.code==='D'?'surficial':item?.kind==='figure'&&item.code==='E'?'bedrock':null;
     if(!kind)continue;
     const source=snapshot?.datasets?.[kind]?.source,fields=['name','credits','license','redistributionEvidence'];
-    if(!source||fields.some(field=>typeof source[field]!=='string'||!source[field].trim()))blockers.push(`Figure ${item.code} geology source, credits, licence, and permission provenance are required before CAD export.`);
+    try{if(source?.id==='custom')normalizeCustomGeologySource(source);else if(!source||fields.some(field=>typeof source[field]!=='string'||!source[field].trim()))throw new Error('missing official provenance');}
+    catch{blockers.push(`Figure ${item.code} geology source, credits, licence, permission evidence, and rights confirmation are required before CAD export. Edit custom source details to correct them.`);}
   }
   try{for(const error of validateCompanyProfile(snapshot?.companyProfile))blockers.push(`${error.message} Open Company Profile and save it before exporting.`);}catch(error){blockers.push(`Company Profile is incomplete: ${error.message} Open Company Profile and save it before exporting.`);}
   let crs=null;try{crs=utmZoneForLocation(snapshot?.project?.location);}catch(error){blockers.push(`CAD coordinate system unavailable: ${error.message}`);}

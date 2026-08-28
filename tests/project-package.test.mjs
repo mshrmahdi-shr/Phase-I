@@ -74,6 +74,8 @@ function projectFixture(){
   ];
   project.historicalSequenceCounters={'1960':2,'1972':1};
   project.companyProfileSnapshot=structuredClone(companyProfile());
+  const geologySource={id:'custom',name:'Bed rock-126Rev1.kml',credits:'Prepared by Example Engineer',sourceUrl:null,license:'Written project-use licence on file',redistributionEvidence:'Client permission email on file',acquisitionYear:null,acquisitionYearVerification:'unknown',permissionConfirmed:true};
+  project.geology.bedrock={name:geologySource.name,source:geologySource,count:8,docs:1};
   return project;
 }
 
@@ -154,6 +156,7 @@ test('exports a deterministic versioned package and round-trips two manual image
   assert.equal(value.store.operations.includes('get:orphan-company-logo'),false);
   const candidate=await inspectPackage(first.blob,{Zip:JSZip});
   assert.equal(candidate.schemaVersion,1);assert.equal(candidate.project.historical.length,3);assert.equal(candidate.companyProfile.companyName,'Acme Environmental');
+  assert.deepEqual(candidate.project.geology.bedrock.source,value.project.geology.bedrock.source,'custom geology provenance round-trips without guessed fields');
   assert.deepEqual(candidate.project.companyProfileSnapshot,candidate.companyProfile);assert.deepEqual(candidate.assets.map(value=>value.metadata.id),['company-logo-acme',IDS.firstAsset,IDS.secondAsset]);
   const archive=await JSZip.loadAsync(await first.blob.arrayBuffer()),manifest=JSON.parse(await archive.file('manifest.json').async('text'));
   assert.deepEqual(Object.keys(archive.files),['manifest.json','project.json','company-profile.json',`assets/company-logo-acme.png`,`assets/${IDS.firstAsset}.png`,`assets/${IDS.secondAsset}.png`,'README.txt']);

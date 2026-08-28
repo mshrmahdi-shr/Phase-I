@@ -1,6 +1,7 @@
 import {normalizeCompanyProfile,snapshotCompanyProfile,validateCompanyProfile} from './company-profile.mjs';
 import {projectWebMercator,validatePlacement} from './imagery/placement.mjs';
 import {validateProviderUrl} from './imagery/provider-registry.mjs';
+import {customGeologySourceDraft,normalizeCustomGeologySource} from './geology-provenance.mjs';
 
 const HISTORICAL_FIELDS=['id','year','sequence','title','mode','providerId','sourceUrl','licenseUrl','attribution','policy','resolutionMeters','bounds','placement','assetId','officialExport','createdAt','updatedAt'];
 const LEGACY_HISTORICAL_FIELDS=['id','year','name','size','dataUrl'];
@@ -244,10 +245,11 @@ export function restoreProject(value){
   }));
   p.geology={surficial:null,bedrock:null,...(p.geology&&typeof p.geology==='object'?p.geology:{})};
   for(const kind of ['surficial','bedrock']){
-    const metadata=p.geology[kind];
+    let metadata=p.geology[kind];
     if(!metadata?.source&&typeof metadata?.name==='string'&&/\.km[zl]$/i.test(metadata.name)){
-      p.geology[kind]={...metadata,source:{id:'custom',name:`Custom import: ${metadata.name}`}};
+      metadata=p.geology[kind]={...metadata,source:{id:'custom',name:`Custom import: ${metadata.name}`}};
     }
+    if(metadata?.source?.id==='custom'){const draft=customGeologySourceDraft(metadata.source);p.geology[kind]={...metadata,source:draft.permissionConfirmed?normalizeCustomGeologySource(draft):draft};}
   }
   const figureCodes=Object.keys(figureDefaults()),savedCodes=Array.isArray(value.exportPreferences?.codes)?value.exportPreferences.codes:[];
   const codes=figureCodes.filter(code=>savedCodes.includes(code));
