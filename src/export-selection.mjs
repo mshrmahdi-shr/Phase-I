@@ -11,6 +11,7 @@ import {TORONTO_IMAGERY_PROVIDER} from './imagery/providers/toronto.mjs';
 import {OTTAWA_IMAGERY_PROVIDER} from './imagery/providers/ottawa.mjs';
 
 const DEFAULT_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
+const PDF_PLAN_CONCURRENCY=2;
 
 function selectionKey(selection){return selection?.kind==='figure'?`figure:${selection.code}`:selection?.kind==='historical'?`historical:${selection.id}`:'';}
 function cropSpan(bounds){return `${bounds.west.toFixed(5)}, ${bounds.south.toFixed(5)} to ${bounds.east.toFixed(5)}, ${bounds.north.toFixed(5)}`;}
@@ -48,6 +49,11 @@ function historicalRows({project,providers,historicalAssetStates}){
         if(!siteCovered||!covers(provider.coverage,item.bounds))reasons.push('The current provider coverage no longer includes SITE and the approved crop.');if(item.licenseUrl!==provider.licenseUrl)reasons.push('The saved licence no longer matches the current provider policy.');
         for(const [url,label] of [[item.sourceUrl,'source'],[item.licenseUrl,'licence'],[item.officialExport?.url,'export']])try{validateProviderUrl(url,provider,{label:`Historical ${label} URL`});}catch(error){reasons.push(error.message);}
         if(item.officialExport?.kind!=='arcgis-export'||item.officialExport.maxWidth<256||item.officialExport.maxHeight<256)reasons.push('The approved official export descriptor is unavailable or too small.');
+        if(typeof item.officialExport?.resultId!=='string'||!item.officialExport.coverage||!item.officialExport.preview)reasons.push('This approval predates strict official-source identity checks. Remove it, search again, and approve the source again.');
+        else{
+          if(!covers(item.officialExport.coverage,item.bounds))reasons.push('The approved crop is outside its saved official source footprint. Reopen and approve the source again.');
+          for(const [url,label,template] of [[item.officialExport.preview.url,'preview',false],[item.officialExport.preview.tileTemplate,'preview tile',true]])if(url!==null)try{validateProviderUrl(url,provider,{label:`Historical ${label} URL`,template});}catch(error){reasons.push(error.message);}
+        }
       }
     }else if(item.mode==='manual'){
       if(!item.assetId||!item.placement)reasons.push('The approved manual image or affine placement is missing.');const state=historicalAssetStates?.get?.(item.id);if(state&&state.ready===false)reasons.push(state.reason||'The historical image asset is not ready.');
@@ -82,11 +88,26 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,pla
   }
   function refresh(){
     if(dialog.hidden||controller)return planning||Promise.resolve();planGeneration++;planningController?.abort();planningController=null;planning=null;planStates=new Map();if(!planPdf){render();return Promise.resolve();}const state=getState(),rows=exportRows(state).filter(row=>row.ready);if(!rows.length){render();return Promise.resolve();}
-    const generation=planGeneration,pending=new AbortController();planningController=pending;for(const row of rows)planStates.set(row.key,{status:'pending'});render();const tasks=rows.map(row=>{
-      const plain=structuredClone({project:state.project,datasets:state.datasets||{},companyProfile:state.companyProfile,selection:[row.selection],codes:row.kind==='figure'?[row.code]:[]});let request;try{request=planPdf({...plain,providers:state.providers,assetStore:state.assetStore,dpi:plain.project.dpi||300,signal:pending.signal});}catch(error){request=Promise.reject(error);}
-      return Promise.resolve(request).then(summary=>{if(generation!==planGeneration||pending.signal.aborted)return;let continuations=0;if(row.kind==='figure'){continuations=summary?.continuationCounts?.[row.code];if(!Number.isInteger(continuations)||continuations<0)throw new Error(`Figure ${row.code}: PDF planning returned an invalid continuation count.`);}else if(!Number.isInteger(summary?.pageCount)||summary.pageCount<1)throw new Error(`${row.code}: PDF planning returned an invalid page count.`);planStates.set(row.key,{status:'ready',continuations});render();}).catch(error=>{if(generation!==planGeneration||pending.signal.aborted)return;planStates.set(row.key,{status:'error',error});render();});
-    });
-    planning=Promise.allSettled(tasks).then(()=>{if(generation!==planGeneration||pending.signal.aborted)return;const blocked=[...planStates.values()].some(value=>value.status==='error');byId('exportProgress').textContent=blocked?'Some sheets are blocked. Correct their PDF layout or source errors to continue.':'PDF layout checked. Select the sheets to include.';}).finally(()=>{if(generation===planGeneration){planning=null;planningController=null;}});return planning;
+    const generation=planGeneration,pending=new AbortController();planningController=pending;for(const row of rows)planStates.set(row.key,{status:'pending'});render();let cursor=0,failure=null;
+    async function worker(){
+      while(generation===planGeneration&&!pending.signal.aborted&&cursor<rows.length){
+        const row=rows[cursor++],plain=structuredClone({project:state.project,datasets:state.datasets||{},companyProfile:state.companyProfile,selection:[row.selection],codes:row.kind==='figure'?[row.code]:[]});
+        try{
+          const summary=await planPdf({...plain,providers:state.providers,assetStore:state.assetStore,dpi:plain.project.dpi||300,signal:pending.signal});if(generation!==planGeneration||pending.signal.aborted)return;
+          let continuations=0;if(row.kind==='figure'){continuations=summary?.continuationCounts?.[row.code];if(!Number.isInteger(continuations)||continuations<0)throw new Error(`Figure ${row.code}: PDF planning returned an invalid continuation count.`);}else if(!Number.isInteger(summary?.pageCount)||summary.pageCount<1)throw new Error(`${row.code}: PDF planning returned an invalid page count.`);
+          planStates.set(row.key,{status:'ready',continuations});render();
+        }catch(error){
+          if(generation!==planGeneration||pending.signal.aborted&&!failure)return;
+          if(!failure){failure={row,error};planStates.set(row.key,{status:'error',error});pending.abort(error);render();}return;
+        }
+      }
+    }
+    const workers=Array.from({length:Math.min(PDF_PLAN_CONCURRENCY,rows.length)},worker);
+    planning=Promise.allSettled(workers).then(()=>{
+      if(generation!==planGeneration)return;
+      if(failure){for(const row of rows)if(planStates.get(row.key)?.status==='pending')planStates.set(row.key,{status:'error',error:new Error(`PDF planning stopped after ${failure.row.code} failed. Correct that blocker and retry.`)});render();byId('exportProgress').textContent='Some sheets are blocked. Correct their PDF layout or source errors to continue.';return;}
+      if(pending.signal.aborted)return;byId('exportProgress').textContent='PDF layout checked. Select the sheets to include.';
+    }).finally(()=>{if(generation===planGeneration){planning=null;planningController=null;}});return planning;
   }
   function open(){if(!dialog.hidden||controller)return;returnFocus=document.activeElement;dialog.hidden=false;document.body.classList.add('export-open');background=[...document.querySelectorAll('body > header, body > main, #printPreview')].map(node=>[node,node.inert]);background.forEach(([node])=>node.inert=true);byId('exportProgress').textContent='Select the sheets to include. Source images are checked during export.';byId('cancelExport').textContent='Cancel';byId('exportMeter').hidden=true;byId('selectAllReady').focus();return refresh();}
   function close(){if(controller){controller.abort();byId('exportProgress').textContent='Cancelling export…';return;}if(dialog.hidden)return;planGeneration++;planningController?.abort();planning=null;planningController=null;planStates=new Map();dialog.hidden=true;document.body.classList.remove('export-open');background.forEach(([node,inert])=>node.inert=inert);background=[];returnFocus?.focus();}

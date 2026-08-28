@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {deflateSync,crc32} from 'node:zlib';
+import {createHash} from 'node:crypto';
 import {createProject} from '../src/core.mjs';
 import {JSDOM} from 'jsdom';
 import {TORONTO_IMAGERY_PROVIDER} from '../src/imagery/providers/toronto.mjs';
+import {projectPoint,unprojectPoint} from '../src/sheet-layout.mjs';
 
 const project=()=>({...createProject({name:'Café geological study',projectNo:'26-123',address:'Toronto',date:'2026-08-26'}),location:{lat:43.7,lng:-79.3}});
 const feature={name:'Custom bedrock',description:'User supplied unit',unitCode:'54a',color:'#aaaaaa',fillOpacity:.6,polygon:[[-80,43],[-78,43],[-78,45],[-80,45],[-80,43]],holes:[]};
@@ -41,7 +43,7 @@ function decodePdfText(raw){
   const cmap=new Map([...raw.matchAll(/<([0-9a-f]{4})><([0-9a-f]{4})>/gi)].map(m=>[m[1].toLowerCase(),String.fromCodePoint(parseInt(m[2],16))]));
   return [...raw.matchAll(/<([0-9a-f]+)>\s*Tj/gi)].map(m=>m[1].match(/.{4}/g).map(g=>cmap.get(g.toLowerCase())||'?').join('')).join('\n');
 }
-async function engine(){const {exportCombinedPdf}=await import('../src/pdf-export.mjs');return options=>exportCombinedPdf({...branding(),...options});}
+async function engine(){const {exportCombinedPdf}=await import('../src/pdf-export.mjs');return options=>exportCombinedPdf({...branding(),revalidateOfficial:async({item})=>currentOfficialResult(item),...options});}
 test('long Figure D and E legends preserve exact code tokens and global order across physical pages',async()=>{
   const exportPdf=await engine(),log=[],disposed=[],surficial=longSurficialDataset(),bedrock=longBedrockDataset();
   const result=await exportPdf({project:project(),codes:['E','D'],datasets:{surficial,bedrock},compose:compositor(log,disposed)});
@@ -153,11 +155,22 @@ test('geology prerequisites check final sheet coverage, SITE holes and closed no
   await assert.rejects(exportPdf({project:p,codes:['E'],datasets:{bedrock:{...datasets.bedrock,features:[{...feature,holes:[[[-79.4,43.6],[-79.2,43.6],[-79.2,43.8],[-79.4,43.8],[-79.4,43.6]]]}]}},compose}),/Figure E.*SITE/);
 });
 
+const HISTORICAL_SOURCE='https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer',HISTORICAL_COVERAGE={west:-79.5,south:43.5,east:-79.1,north:43.9};
+function historicalA3Bounds(){const [x,y]=projectPoint([-79.3,43.7]),halfWidth=12000,halfHeight=halfWidth/(420/297),sw=unprojectPoint([x-halfWidth,y-halfHeight]),ne=unprojectPoint([x+halfWidth,y+halfHeight]);return {west:sw[0],south:sw[1],east:ne[0],north:ne[1]};}
 function approvedOfficial(id,sequence,title){return {id,year:1972,sequence,title,mode:'official',providerId:'toronto',
-  sourceUrl:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer',licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto <archive>',policy:'exportable',resolutionMeters:.2,
-  bounds:{west:-79.405,south:43.682,east:-79.195,north:43.718},placement:null,assetId:null,
-  officialExport:{kind:'arcgis-export',url:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096},
+  sourceUrl:HISTORICAL_SOURCE,licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto <archive>',policy:'exportable',resolutionMeters:.2,
+  bounds:historicalA3Bounds(),placement:null,assetId:null,
+  officialExport:{kind:'arcgis-export',url:`${HISTORICAL_SOURCE}/export`,layer:null,maxWidth:4096,maxHeight:4096,resultId:`toronto:flight-${sequence}`,coverage:{...HISTORICAL_COVERAGE},preview:{kind:'arcgis-map-service',url:HISTORICAL_SOURCE,layer:null,tileTemplate:`${HISTORICAL_SOURCE}/tile/{z}/{y}/{x}`}},
   createdAt:'2026-08-27T12:00:00.000Z',updatedAt:'2026-08-27T12:00:00.000Z'};}
+function currentOfficialResult(item){return {id:item.officialExport.resultId,providerId:item.providerId,title:item.title,year:item.year,resolutionMeters:item.resolutionMeters,coverage:{...item.officialExport.coverage},
+  preview:{kind:item.officialExport.preview.kind,url:item.officialExport.preview.url,tileTemplate:item.officialExport.preview.tileTemplate},export:{kind:item.officialExport.kind,url:item.officialExport.url,maxWidth:item.officialExport.maxWidth,maxHeight:item.officialExport.maxHeight},
+  policy:item.policy,sourceUrl:item.sourceUrl,licenseUrl:item.licenseUrl,attribution:item.attribution};}
+
+test('PDF preflight revalidates the exact saved official result once and passes that immutable result to composition',async()=>{
+  const exportPdf=await engine(),p=project(),item=approvedOfficial('74f14168-4de6-4c5f-88f4-87db8ec731c2',1,'Current flight'),calls=[],current=currentOfficialResult(item);p.historical=[item];p.historicalSequenceCounters={'1972':1};
+  const result=await exportPdf({project:p,providers:[TORONTO_IMAGERY_PROVIDER],selection:[{kind:'historical',id:item.id}],revalidateOfficial:async args=>{calls.push(args.item.id);return current;},composeHistorical:async args=>{assert.deepEqual(args.currentOfficialResult,current);assert.notEqual(args.currentOfficialResult,current);assert.ok(Object.isFrozen(args.currentOfficialResult));return {dataUrl:png('H'),width:1,height:1,bounds:args.geometry.bounds,dispose(){}};}});
+  assert.deepEqual(calls,[item.id]);assert.equal(result.pageCount,1);
+});
 
 test('real combined PDF orders A-B-D, geology continuation, then same-year historical sheets with branding and source text',async()=>{
   const exportPdf=await engine(),p=project(),first=approvedOfficial('74f14168-4de6-4c5f-88f4-87db8ec731c2',1,'First 1972 flight'),second=approvedOfficial('9833e469-c7e8-4ef1-84f1-b89c608c2126',2,'Second 1972 flight');
@@ -191,9 +204,17 @@ test('cancellation during a historical sheet disposes its image and returns no P
 
 test('missing manual historical asset blocks before any map composition',async()=>{
   const exportPdf=await engine(),p=project(),log=[];
-  const placement={center:[-8835500,5412500],groundWidth:40000,groundHeight:30000,sourceWidth:2,sourceHeight:2,rotationDegrees:0};
+  const placement={center:projectPoint([-79.3,43.7]),groundWidth:30000,groundHeight:22000,sourceWidth:2,sourceHeight:2,rotationDegrees:0};
   const item={...approvedOfficial('74f14168-4de6-4c5f-88f4-87db8ec731c2',1,'Manual archive'),mode:'manual',providerId:null,sourceUrl:null,licenseUrl:null,attribution:'Private archive',resolutionMeters:null,placement,assetId:'237589d9-3d5d-4817-9d0a-a5fb2d151286',officialExport:null};
   p.historical=[item];p.historicalSequenceCounters={'1972':1};
   await assert.rejects(exportPdf({project:p,selection:[{kind:'figure',code:'A'},{kind:'historical',id:item.id}],assetStore:{get:async()=>null},compose:compositor(log,[]),composeHistorical:async()=>{throw Error('must not compose');}}),/H-1972-1.*missing.*asset/i);
   assert.deepEqual(log,[],'all required assets are snapshotted before remote composition starts');
+});
+
+test('manual historical preflight caps the aggregate resident asset snapshot before any composition',async()=>{
+  const exportPdf=await engine(),p=project(),bytes=new Uint8Array(11_000_000),digest=createHash('sha256').update(bytes).digest('hex'),center=projectPoint([-79.3,43.7]),assets=new Map(),log=[];
+  p.historical=Array.from({length:3},(_,index)=>{const id=`00000000-0000-4000-8000-${String(index+1).padStart(12,'0')}`,assetId=`10000000-0000-4000-8000-${String(index+1).padStart(12,'0')}`,item={...approvedOfficial(id,index+1,`Manual ${index+1}`),mode:'manual',providerId:null,sourceUrl:null,licenseUrl:null,attribution:'Archive permission',resolutionMeters:null,placement:{center:[...center],groundWidth:30000,groundHeight:22000,sourceWidth:1,sourceHeight:1,rotationDegrees:0},assetId,officialExport:null};
+    const blob=new Blob([bytes],{type:'image/png'});assets.set(assetId,{metadata:{id:assetId,kind:'historical-image',mime:'image/png',size:blob.size,width:1,height:1,sha256:digest,createdAt:'2026-08-27T12:00:00.000Z'},blob});return item;});p.historicalSequenceCounters={'1972':3};
+  await assert.rejects(exportPdf({project:p,selection:p.historical.map(item=>({kind:'historical',id:item.id})),assetStore:{get:async id=>assets.get(id)},compose:compositor(log,[]),composeHistorical:async()=>{throw Error('must not compose');}}),/aggregate|resident|32 MB|memory limit/i);
+  assert.deepEqual(log,[]);
 });

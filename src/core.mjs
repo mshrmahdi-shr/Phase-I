@@ -1,15 +1,21 @@
 import {normalizeCompanyProfile,snapshotCompanyProfile,validateCompanyProfile} from './company-profile.mjs';
-import {validatePlacement} from './imagery/placement.mjs';
+import {projectWebMercator,validatePlacement} from './imagery/placement.mjs';
 import {validateProviderUrl} from './imagery/provider-registry.mjs';
 
 const HISTORICAL_FIELDS=['id','year','sequence','title','mode','providerId','sourceUrl','licenseUrl','attribution','policy','resolutionMeters','bounds','placement','assetId','officialExport','createdAt','updatedAt'];
 const LEGACY_HISTORICAL_FIELDS=['id','year','name','size','dataUrl'];
 const HISTORICAL_BOUNDS_FIELDS=['north','south','east','west'];
-const OFFICIAL_EXPORT_FIELDS=['kind','url','layer','maxWidth','maxHeight'];
+const LEGACY_OFFICIAL_EXPORT_FIELDS=['kind','url','layer','maxWidth','maxHeight'];
+const OFFICIAL_EXPORT_FIELDS=[...LEGACY_OFFICIAL_EXPORT_FIELDS,'resultId','coverage','preview'];
+const OFFICIAL_PREVIEW_FIELDS=['kind','url','layer','tileTemplate'];
 const PLACEMENT_FIELDS=['center','groundWidth','groundHeight','sourceWidth','sourceHeight','rotationDegrees'];
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PROVIDER_ID=/^[a-z][a-z0-9-]{0,63}$/;
 const KIND=/^[a-z][a-z0-9-]{0,63}$/;
+const RESULT_ID=/^[a-z][a-z0-9-]{0,63}:[A-Za-z0-9][A-Za-z0-9._~-]{0,199}$/;
+export const HISTORICAL_A3_RATIO=420/297;
+// 100 ppm is wider than JSON/double round-trip error while rejecting any visible crop distortion.
+export const HISTORICAL_A3_ASPECT_TOLERANCE=1e-4;
 
 function exactRecord(value,fields,label){
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(`${label} must be a plain record.`);
@@ -47,6 +53,7 @@ function historicalBounds(value,location){
   const fields=exactRecord(value,HISTORICAL_BOUNDS_FIELDS,'Historical imagery bounds');
   const bounds={north:fields.north,south:fields.south,east:fields.east,west:fields.west};
   if(!validFigureBounds(bounds,location))throw new Error('Historical imagery bounds are invalid or do not contain SITE.');
+  if(!validHistoricalA3Bounds(bounds))throw new Error('Historical imagery bounds must retain the approved projected A3 landscape crop aspect. Reopen the crop editor and approve the image again.');
   return bounds;
 }
 
@@ -65,12 +72,23 @@ function historicalTimestamp(value,label){
 }
 
 function officialExport(value){
-  const fields=exactRecord(value,OFFICIAL_EXPORT_FIELDS,'Historical imagery official export');
+  let keyCount;try{keyCount=Reflect.ownKeys(value).length;}catch{throw new Error('Historical imagery official export must be inspectable.');}
+  const legacy=keyCount===LEGACY_OFFICIAL_EXPORT_FIELDS.length,fields=exactRecord(value,legacy?LEGACY_OFFICIAL_EXPORT_FIELDS:OFFICIAL_EXPORT_FIELDS,'Historical imagery official export');
   if(typeof fields.kind!=='string'||!KIND.test(fields.kind))throw new Error('Historical imagery official export kind is invalid.');
   const layer=fields.layer;
   if(layer!==null&&!(typeof layer==='string'&&layer.trim())&&!(Number.isInteger(layer)&&layer>=0))throw new Error('Historical imagery official export layer is invalid.');
   for(const key of ['maxWidth','maxHeight'])if(!Number.isSafeInteger(fields[key])||fields[key]<=0||fields[key]>32767)throw new Error(`Historical imagery official export ${key} is invalid.`);
-  return {kind:fields.kind,url:safeHistoricalUrl(fields.url,'Historical imagery official export URL'),layer,maxWidth:fields.maxWidth,maxHeight:fields.maxHeight};
+  const base={kind:fields.kind,url:safeHistoricalUrl(fields.url,'Historical imagery official export URL'),layer,maxWidth:fields.maxWidth,maxHeight:fields.maxHeight};
+  if(legacy)return {...base,resultId:null,coverage:null,preview:null};
+  if(fields.resultId===null&&fields.coverage===null&&fields.preview===null)return {...base,resultId:null,coverage:null,preview:null};
+  if(typeof fields.resultId!=='string'||!RESULT_ID.test(fields.resultId))throw new Error('Historical imagery official result ID is invalid.');
+  const coverageFields=exactRecord(fields.coverage,HISTORICAL_BOUNDS_FIELDS,'Historical imagery official source coverage'),coverage={north:coverageFields.north,south:coverageFields.south,east:coverageFields.east,west:coverageFields.west};
+  if(!validFigureBounds(coverage))throw new Error('Historical imagery official source coverage is invalid.');
+  const previewFields=exactRecord(fields.preview,OFFICIAL_PREVIEW_FIELDS,'Historical imagery official preview');
+  if(typeof previewFields.kind!=='string'||!KIND.test(previewFields.kind))throw new Error('Historical imagery official preview kind is invalid.');
+  const previewLayer=previewFields.layer;if(previewLayer!==null&&!(typeof previewLayer==='string'&&previewLayer.trim())&&!(Number.isInteger(previewLayer)&&previewLayer>=0))throw new Error('Historical imagery official preview layer is invalid.');
+  let tileTemplate=null;if(previewFields.tileTemplate!==null){validateProviderUrl(previewFields.tileTemplate,null,{label:'Historical imagery official preview tile URL',template:true});tileTemplate=previewFields.tileTemplate;}
+  return {...base,resultId:fields.resultId,coverage,preview:{kind:previewFields.kind,url:safeHistoricalUrl(previewFields.url,'Historical imagery official preview URL'),layer:previewLayer,tileTemplate}};
 }
 
 function approvedHistoricalItem(value,location){
@@ -88,8 +106,11 @@ function approvedHistoricalItem(value,location){
   if(mode==='official'){
     if(typeof fields.providerId!=='string'||!PROVIDER_ID.test(fields.providerId))throw new Error('Official historical imagery provider ID is invalid.');
     if(fields.placement!==null||fields.assetId!==null)throw new Error('Official historical imagery cannot contain manual placement or asset fields.');
+    const snapshot=officialExport(fields.officialExport);
+    if(snapshot.resultId!==null&&!snapshot.resultId.startsWith(`${fields.providerId}:`))throw new Error('Historical imagery official result ID does not match its provider.');
+    if(snapshot.coverage&&(common.bounds.west<snapshot.coverage.west||common.bounds.east>snapshot.coverage.east||common.bounds.south<snapshot.coverage.south||common.bounds.north>snapshot.coverage.north))throw new Error('Historical imagery approved crop is outside its official source coverage.');
     return {...common,providerId:fields.providerId,sourceUrl:safeHistoricalUrl(fields.sourceUrl,'Historical imagery source URL'),
-      licenseUrl:safeHistoricalUrl(fields.licenseUrl,'Historical imagery license URL'),placement:null,assetId:null,officialExport:officialExport(fields.officialExport)};
+      licenseUrl:safeHistoricalUrl(fields.licenseUrl,'Historical imagery license URL'),placement:null,assetId:null,officialExport:snapshot};
   }
   if(fields.providerId!==null||fields.officialExport!==null)throw new Error('Manual historical imagery cannot contain official provider or export fields.');
   if(typeof fields.assetId!=='string'||!UUID.test(fields.assetId))throw new Error('Manual historical imagery asset ID must be a UUID.');
@@ -255,8 +276,17 @@ export function restoreProject(value){
       throw new Error(`The project contains an invalid company profile snapshot: ${error.message}`);
     }
   }
-  p.schemaVersion=5;
+  p.schemaVersion=6;
   return p;
+}
+
+export function validHistoricalA3Bounds(bounds){
+  if(!validFigureBounds(bounds))return false;
+  try{
+    const southwest=projectWebMercator([bounds.west,bounds.south]),northeast=projectWebMercator([bounds.east,bounds.north]);
+    const width=northeast[0]-southwest[0],height=northeast[1]-southwest[1],ratio=width/height;
+    return Number.isFinite(ratio)&&Math.abs(ratio/HISTORICAL_A3_RATIO-1)<=HISTORICAL_A3_ASPECT_TOLERANCE;
+  }catch{return false;}
 }
 
 export function validBoundary(ring){

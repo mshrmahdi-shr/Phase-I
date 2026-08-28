@@ -1,7 +1,8 @@
 import {sourceForFigure} from './map-sources.mjs';
 import {mapPoint,MAX_RASTER_PIXELS,unprojectPoint} from './sheet-layout.mjs';
 import {arcGisExportUrl} from './imagery/arcgis-client.mjs';
-import {validateImageryProvider,validateProviderUrl} from './imagery/provider-registry.mjs';
+import {validateImageryProvider,validateImageryResult,validateProviderUrl} from './imagery/provider-registry.mjs';
+import {searchOfficialImagery} from './imagery/search.mjs';
 import {placementCanvasTransform,placementCorners,projectWebMercator,validatePlacement} from './imagery/placement.mjs';
 import {historicalCode,historicalSheetGeometry} from './historical-layout.mjs';
 import {ONTARIO_IMAGERY_PROVIDER} from './imagery/providers/ontario.mjs';
@@ -10,7 +11,7 @@ import {OTTAWA_IMAGERY_PROVIDER} from './imagery/providers/ottawa.mjs';
 
 const WORLD=2*Math.PI*6378137,MAX_TILES=36;
 const DEFAULT_HISTORICAL_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
-const MAX_HISTORICAL_TILES=64,MAX_IMAGE_BYTES=16_000_000,MAX_TOTAL_IMAGE_BYTES=64_000_000;
+const MAX_HISTORICAL_TILES=64,MAX_IMAGE_BYTES=16_000_000,MAX_TOTAL_IMAGE_BYTES=64_000_000,MAX_IMAGE_SEGMENTS=4096;
 const HISTORICAL_ASSET_FIELDS=['createdAt','height','id','kind','mime','sha256','size','width'];
 const HISTORICAL_ASSET_MIMES=new Set(['image/png','image/jpeg','image/tiff']);
 export function throwIfAborted(signal){if(signal?.aborted)throw new DOMException('Export cancelled.','AbortError');}
@@ -128,6 +129,7 @@ export async function composeMap({project,code,features=[],geometry,signal,onPro
 }
 
 function containsBounds(coverage,bounds){return bounds.west>=coverage.west&&bounds.east<=coverage.east&&bounds.south>=coverage.south&&bounds.north<=coverage.north;}
+function sameCoverage(left,right){return Boolean(left&&right&&['west','south','east','north'].every(key=>left[key]===right[key]));}
 function exactKeys(value,keys){return value&&typeof value==='object'&&!Array.isArray(value)&&Object.getPrototypeOf(value)===Object.prototype&&Reflect.ownKeys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key)&&Object.getOwnPropertyDescriptor(value,key)?.enumerable&&Object.hasOwn(Object.getOwnPropertyDescriptor(value,key),'value'));}
 function same(left,right){return JSON.stringify(left)===JSON.stringify(right);}
 function providerMap(providers=DEFAULT_HISTORICAL_PROVIDERS){
@@ -151,11 +153,35 @@ function officialProvider(project,item,providers){
   const exportUrl=new URL(item.officialExport.url);
   if(exportUrl.search||exportUrl.hash||!/\/MapServer\/export\/?$/.test(exportUrl.pathname)||item.officialExport.kind!=='arcgis-export')throw new Error(`${code}: the approved ArcGIS export descriptor is unsupported.`);
   for(const key of ['maxWidth','maxHeight'])if(!Number.isSafeInteger(item.officialExport[key])||item.officialExport[key]<256)throw new Error(`${code}: the current official export dimensions are unsafe.`);
+  if(typeof item.officialExport.resultId!=='string'||!item.officialExport.coverage||!item.officialExport.preview)throw new Error(`${code}: the approved source predates strict identity validation. Reopen and approve the official image again.`);
   return provider;
 }
 
-export function historicalImageryPlan({project,item,geometry,providers}={}){
-  checkedHistorical({project,item,geometry});const provider=officialProvider(project,item,providers),descriptor=item.officialExport,{width,height}=geometry.raster;
+function previewSnapshot(value){return {kind:value.kind,url:value.url,layer:Object.hasOwn(value,'layer')?value.layer:null,tileTemplate:Object.hasOwn(value,'tileTemplate')?value.tileTemplate:null};}
+function exportSnapshot(value){return {kind:value.kind,url:value.url,layer:Object.hasOwn(value,'layer')?value.layer:null,maxWidth:value.maxWidth,maxHeight:value.maxHeight};}
+function validateCurrentOfficialResult(project,item,provider,currentResult){
+  const code=historicalCode(item);try{validateImageryResult(currentResult,provider);}catch(error){throw new Error(`${code}: the current official result is invalid: ${error.message}`,{cause:error});}
+  const expected=item.officialExport,currentExport=currentResult.export;
+  if(currentResult.id!==expected.resultId)throw new Error(`${code}: the current official source identity no longer matches the approval.`);
+  if(currentResult.year!==item.year||currentResult.title!==item.title||currentResult.resolutionMeters!==item.resolutionMeters)throw new Error(`${code}: the current official year, title, or resolution changed. Reopen and approve the source again.`);
+  if(currentResult.policy!=='exportable'||currentResult.sourceUrl!==item.sourceUrl||currentResult.licenseUrl!==item.licenseUrl||currentResult.attribution!==item.attribution)throw new Error(`${code}: the current official source policy, licence, attribution, or URL changed. Reopen and approve the source again.`);
+  if(!sameCoverage(currentResult.coverage,expected.coverage)||!containsBounds(currentResult.coverage,item.bounds))throw new Error(`${code}: the current official source footprint changed or no longer covers the approved crop.`);
+  if(!same(previewSnapshot(currentResult.preview),expected.preview))throw new Error(`${code}: the current official preview service changed. Reopen and approve the source again.`);
+  if(!currentExport||!same(exportSnapshot(currentExport),{kind:expected.kind,url:expected.url,layer:expected.layer,maxWidth:expected.maxWidth,maxHeight:expected.maxHeight}))throw new Error(`${code}: the current official export service, layer, or dimensions changed. Reopen and approve the source again.`);
+  for(const [url,label,template] of [[currentResult.sourceUrl,'current source URL',false],[currentResult.licenseUrl,'current licence URL',false],[currentResult.preview.url,'current preview URL',false],[currentResult.preview.tileTemplate,'current preview tile URL',true],[currentExport.url,'current export URL',false]])if(url!==undefined&&url!==null)validateProviderUrl(url,provider,{label:`${code} ${label}`,template});
+  let siteCovered=false;try{siteCovered=provider.covers(project.location)===true;}catch{}if(!siteCovered)throw new Error(`${code}: the current official provider no longer covers SITE.`);
+  return currentResult;
+}
+
+export async function revalidateHistoricalOfficialSource({project,item,providers,signal,fetchImpl=globalThis.fetch}={}){
+  throwIfAborted(signal);const provider=officialProvider(project,item,providers),code=historicalCode(item),grouped=await searchOfficialImagery({providers:[provider],location:project.location,year:item.year,signal,fetchImpl});throwIfAborted(signal);
+  const current=[...grouped.exact,...grouped.nearby,...grouped.remaining].find(result=>result.id===item.officialExport.resultId);
+  if(!current){const detail=grouped.errors?.[0]?.message?` ${grouped.errors[0].message}`:'';throw new Error(`${code}: the approved official source is no longer returned by its current provider.${detail} Reopen and approve a source again.`);}
+  return validateCurrentOfficialResult(project,item,provider,current);
+}
+
+export function historicalImageryPlan({project,item,geometry,providers,currentResult}={}){
+  checkedHistorical({project,item,geometry});const provider=officialProvider(project,item,providers);validateCurrentOfficialResult(project,item,provider,currentResult);const descriptor=item.officialExport,{width,height}=geometry.raster;
   const columns=Math.ceil(width/descriptor.maxWidth),rows=Math.ceil(height/descriptor.maxHeight);
   if(columns*rows>MAX_HISTORICAL_TILES)throw new Error(`${historicalCode(item)}: the official source would require too many bounded export pieces.`);
   const requests=[],serviceUrl=descriptor.url.replace(/\/export\/?$/,'');
@@ -178,6 +204,31 @@ export function historicalImageryPlan({project,item,geometry,providers}={}){
 async function abortable(promise,signal){
   throwIfAborted(signal);if(!signal)return promise;
   return new Promise((resolve,reject)=>{const abort=()=>{signal.removeEventListener('abort',abort);reject(new DOMException('Export cancelled.','AbortError'));};signal.addEventListener('abort',abort,{once:true});Promise.resolve(promise).then(value=>{signal.removeEventListener('abort',abort);resolve(value);},error=>{signal.removeEventListener('abort',abort);reject(error);});if(signal.aborted)abort();});
+}
+function declaredByteLength(headers,code){
+  const value=headers?.get?.('content-length');if(value===null||value===undefined||value==='')return null;
+  if(!/^(?:0|[1-9]\d*)$/.test(value))throw new Error(`${code}: the official service returned an invalid Content-Length.`);
+  const length=Number(value);if(!Number.isSafeInteger(length))throw new Error(`${code}: the official response byte length is unsafe.`);return length;
+}
+async function readBoundedImageResponse(response,{signal,budget,code}){
+  const declared=declaredByteLength(response.headers,code);
+  if(declared!==null&&(declared>MAX_IMAGE_BYTES||declared>MAX_TOTAL_IMAGE_BYTES-budget.bytes))throw new Error(`${code}: official image responses exceed the safe 16 MB per-image or 64 MB total byte limit.`);
+  const reader=response.body?.getReader?.();if(!reader)throw new Error(`${code}: the official image response is not a readable byte stream.`);
+  const chunks=[];let bytes=0,segments=0,complete=false,cancelled=false;
+  const cancelReader=async reason=>{if(cancelled)return;cancelled=true;try{await reader.cancel(reason);}catch{}};
+  try{
+    while(true){
+      const part=await abortable(reader.read(),signal);throwIfAborted(signal);if(!part||typeof part.done!=='boolean')throw new Error(`${code}: the official image stream returned an invalid segment.`);if(part.done){complete=true;break;}
+      if(!(part.value instanceof Uint8Array))throw new Error(`${code}: the official image stream returned non-byte data.`);
+      if(++segments>MAX_IMAGE_SEGMENTS)throw new Error(`${code}: the official image response has too many stream segments.`);
+      bytes+=part.value.byteLength;budget.bytes+=part.value.byteLength;
+      if(bytes>MAX_IMAGE_BYTES||budget.bytes>MAX_TOTAL_IMAGE_BYTES)throw new Error(`${code}: official image responses exceed the safe 16 MB per-image or 64 MB total byte limit.`);
+      chunks.push(part.value);
+    }
+    if(declared!==null&&bytes!==declared)throw new Error(`${code}: the official image response did not match its declared byte length.`);
+    return new Blob(chunks,{type:response.headers.get('content-type')});
+  }catch(error){await cancelReader(error);throw error;}
+  finally{if(!complete&&signal?.aborted)await cancelReader(signal.reason);try{reader.releaseLock?.();}catch{}}
 }
 async function sha256(blob,signal){
   if(!globalThis.crypto?.subtle)throw new Error('Historical imagery integrity verification requires Web Crypto.');
@@ -210,9 +261,9 @@ export async function loadHistoricalAssetSnapshot({project,item,assetStore,signa
 }
 
 /** Independently composes the exact approved historical crop and shared project overlays. */
-export async function composeHistoricalImage({project,item,geometry,assetStore,providers,signal,onProgress=()=>{},fetchImpl=globalThis.fetch,requestTimeoutMs=30000}={}){
+export async function composeHistoricalImage({project,item,geometry,assetStore,providers,currentOfficialResult,signal,onProgress=()=>{},fetchImpl=globalThis.fetch,requestTimeoutMs=30000}={}){
   throwIfAborted(signal);checkedHistorical({project,item,geometry});let requests=null,asset=null;
-  if(item.mode==='official')requests=historicalImageryPlan({project,item,geometry,providers});else asset=await loadHistoricalAssetSnapshot({project,item,assetStore,signal});
+  if(item.mode==='official'){const current=currentOfficialResult??await revalidateHistoricalOfficialSource({project,item,providers,signal,fetchImpl});requests=historicalImageryPlan({project,item,geometry,providers,currentResult:current});}else asset=await loadHistoricalAssetSnapshot({project,item,assetStore,signal});
   throwIfAborted(signal);if(typeof document==='undefined')throw new Error('Historical image composition requires a browser canvas.');
   const {width,height}=geometry.raster;if(!(width>0&&height>0)||width*height>MAX_RASTER_PIXELS)throw new Error('Unsafe historical canvas size; choose 300 DPI.');
   const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;const preview=document.createElement('div'),caption=document.createElement('div'),code=historicalCode(item);
@@ -222,11 +273,11 @@ export async function composeHistoricalImage({project,item,geometry,assetStore,p
   try{
     const ctx=canvas.getContext('2d');if(!ctx)throw new Error('The browser could not allocate a historical image canvas.');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,width,height);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
     if(requests){
-      let cursor=0,complete=0,totalBytes=0,firstError;
+      let cursor=0,complete=0,firstError;const byteBudget={bytes:0};
       async function worker(){while(cursor<requests.length&&!controller.signal.aborted){const request=requests[cursor++];let image;const timeout=setTimeout(()=>{firstError??=new Error(`${code}: official image request timed out. Check your connection and retry.`);controller.abort();},Math.max(1,Math.min(45000,requestTimeoutMs||30000)));try{
         throwIfAborted(controller.signal);const response=await fetchImpl(request.url,{mode:'cors',credentials:'omit',redirect:'error',signal:controller.signal});if(!response.ok)throw new Error(`${code}: official image request failed (HTTP ${response.status}).`);
         if(!/^image\/(png|jpeg|webp)/i.test(response.headers.get('content-type')||''))throw new Error(`${code}: the official service returned an error instead of an image.`);
-        const blob=await response.blob();if(blob.size>MAX_IMAGE_BYTES||(totalBytes+=blob.size)>MAX_TOTAL_IMAGE_BYTES)throw new Error(`${code}: official image responses exceed the safe memory limit.`);
+        const blob=await readBoundedImageResponse(response,{signal:controller.signal,budget:byteBudget,code});
         image=await decodeImage(blob,controller.signal);throwIfAborted(controller.signal);if(image.width!==request.expectedWidth||image.height!==request.expectedHeight)throw new Error(`${code}: the official service returned unexpected image dimensions.`);
         ctx.drawImage(image,request.x,request.y,request.width,request.height);onProgress({phase:'imagery',code,completed:++complete,total:requests.length});
       }catch(error){firstError??=error;controller.abort();}finally{clearTimeout(timeout);image?.close?.();}}}

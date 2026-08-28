@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createProject} from '../src/core.mjs';
-import {mapPoint} from '../src/sheet-layout.mjs';
+import {mapPoint,projectPoint,unprojectPoint} from '../src/sheet-layout.mjs';
 
 const SITE={lng:-79.38,lat:43.65};
-const BOUNDS={west:-79.405,south:43.632,east:-79.355,north:43.668};
+function a3Bounds({lng,lat},halfWidth=2000){
+  const [x,y]=projectPoint([lng,lat]),halfHeight=halfWidth/(420/297),sw=unprojectPoint([x-halfWidth,y-halfHeight]),ne=unprojectPoint([x+halfWidth,y+halfHeight]);
+  return {west:sw[0],south:sw[1],east:ne[0],north:ne[1]};
+}
+const BOUNDS=a3Bounds(SITE);
 const ITEM_ID='6f9719eb-3083-4bdb-a35b-d638a6efac19';
 
 function officialItem(overrides={}){
@@ -19,8 +23,8 @@ function officialItem(overrides={}){
 function project(item=officialItem()){
   const value=createProject({name:'Historical layout',projectNo:'AB-12345',address:'Toronto',date:'2026-08-27'});
   return {...value,location:{...SITE},historical:[item],historicalSequenceCounters:{'1972':2},
-    siteBoundary:[[-79.39,43.64],[-79.37,43.64],[-79.37,43.66],[-79.39,43.66],[-79.39,43.64]],
-    buildingBoundary:[[-79.385,43.645],[-79.375,43.645],[-79.375,43.655],[-79.385,43.655],[-79.385,43.645]]};
+    siteBoundary:[[-79.385,43.645],[-79.375,43.645],[-79.375,43.655],[-79.385,43.655],[-79.385,43.645]],
+    buildingBoundary:[[-79.382,43.648],[-79.378,43.648],[-79.378,43.652],[-79.382,43.652],[-79.382,43.648]]};
 }
 
 test('historical A3 geometry preserves the exact approved crop and shared boundary transform',async()=>{
@@ -46,4 +50,12 @@ test('historical geometry rejects stale items, changed crops, invalid boundaries
   assert.throws(()=>historicalSheetGeometry(p,{...item,bounds:{...item.bounds,east:-79.34}}),/approved historical item|crop/i);
   assert.throws(()=>historicalSheetGeometry({...p,siteBoundary:[[0,0],[1,1]]},item),/boundary/i);
   assert.throws(()=>historicalSheetGeometry(p,item,600),/300 DPI|150 DPI/i);
+});
+
+test('historical geometry requires the stored projected crop to retain the fixed A3 landscape aspect',async()=>{
+  const {historicalSheetGeometry}=await import('../src/historical-layout.mjs');
+  const serialized=JSON.parse(JSON.stringify(officialItem())),p=project(serialized);
+  assert.doesNotThrow(()=>historicalSheetGeometry(p,serialized,300),'serialized editor crop remains within the numerical tolerance');
+  const malformed=officialItem({bounds:{west:-79.405,south:43.632,east:-79.355,north:43.668}}),bad=project(malformed);
+  assert.throws(()=>historicalSheetGeometry(bad,malformed,300),/projected.*A3 landscape|crop.*aspect/i);
 });

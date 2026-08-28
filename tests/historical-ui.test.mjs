@@ -6,12 +6,13 @@ import {IDBFactory} from 'fake-indexeddb';
 import {createAssetStore} from '../src/asset-store.mjs';
 import {createProject} from '../src/core.mjs';
 import {defineImageryProvider} from '../src/imagery/provider-registry.mjs';
-import {projectWebMercator} from '../src/imagery/placement.mjs';
+import {projectWebMercator,unprojectWebMercator} from '../src/imagery/placement.mjs';
 import {createHistoricalImageryUI,historicalFigureCode,migrateLegacyHistoricalImagery} from '../src/historical-ui.mjs';
 
 const HTML=fs.readFileSync(new URL('../index.html',import.meta.url),'utf8');
 const SITE={lat:43.65,lng:-79.38};
-const BOUNDS={north:43.66,south:43.64,east:-79.37,west:-79.39};
+function a3Bounds(location,halfWidth=1000){const [x,y]=projectWebMercator([location.lng,location.lat]),halfHeight=halfWidth/(420/297),sw=unprojectWebMercator([x-halfWidth,y-halfHeight]),ne=unprojectWebMercator([x+halfWidth,y+halfHeight]);return {west:sw[0],south:sw[1],east:ne[0],north:ne[1]};}
+const BOUNDS=a3Bounds(SITE);
 const ASSET_BYTES=new Uint8Array([1,2,3]);
 const ASSET_SHA256='039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81';
 
@@ -33,12 +34,12 @@ const STAMP='2026-08-27T12:00:00.000Z';
 function officialItem({id='74f14168-4de6-4c5f-88f4-87db8ec731c2',sequence=1,attribution='Official archive',kind='arcgis-export'}={}){
   return {id,year:1972,sequence,title:'Saved flight',mode:'official',providerId:'official',sourceUrl:'https://official.test/maps/flight-1972/MapServer',
     licenseUrl:'https://official.test/license/',attribution,policy:'exportable',resolutionMeters:.25,bounds:{...BOUNDS},placement:null,assetId:null,
-    officialExport:{kind,url:'https://official.test/maps/flight-1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096},createdAt:STAMP,updatedAt:STAMP};
+    officialExport:{kind,url:'https://official.test/maps/flight-1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096,resultId:'official:flight-1972',coverage:{west:-80,south:43,east:-79,north:44},preview:{kind:'arcgis-map-service',url:'https://official.test/maps/flight-1972/MapServer',layer:null,tileTemplate:'https://official.test/maps/flight-1972/MapServer/tile/{z}/{y}/{x}'}},createdAt:STAMP,updatedAt:STAMP};
 }
 function manualItem({id='74f14168-4de6-4c5f-88f4-87db8ec731c2',assetId='3caa1022-b2e7-4c63-8ca8-12f4845e1be1',sequence=1}={}){
   const center=projectWebMercator([SITE.lng,SITE.lat]);
   return {id,year:1960,sequence,title:'scan.png',mode:'manual',providerId:null,sourceUrl:null,licenseUrl:null,attribution:'Archive scan',policy:'exportable',resolutionMeters:null,
-    bounds:{north:43.6502,south:43.6498,east:-79.3797,west:-79.3803},placement:{center,groundWidth:100,groundHeight:80,sourceWidth:2,sourceHeight:1,rotationDegrees:0},assetId,
+    bounds:a3Bounds(SITE,40),placement:{center,groundWidth:100,groundHeight:80,sourceWidth:2,sourceHeight:1,rotationDegrees:0},assetId,
     officialExport:null,createdAt:STAMP,updatedAt:STAMP};
 }
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
@@ -49,12 +50,13 @@ async function eventually(predicate,message='condition did not become true'){
 
 function boundsObject(value=BOUNDS){return {getNorth:()=>value.north,getSouth:()=>value.south,getEast:()=>value.east,getWest:()=>value.west};}
 function fakeMap(document){
-  let bounds={...BOUNDS},center={lat:SITE.lat,lng:SITE.lng},zoom=16;const listeners=new Map(),layers=new Set();
+  function displayedBounds(value){const sw=projectWebMercator([value.west,value.south]),ne=projectWebMercator([value.east,value.north]),center=[(sw[0]+ne[0])/2,(sw[1]+ne[1])/2],scale=Math.max((ne[0]-sw[0])/900,(ne[1]-sw[1])/636),displaySw=unprojectWebMercator([center[0]-scale*450,center[1]-scale*318]),displayNe=unprojectWebMercator([center[0]+scale*450,center[1]+scale*318]);return {west:displaySw[0],south:displaySw[1],east:displayNe[0],north:displayNe[1]};}
+  let bounds=displayedBounds(BOUNDS),center={lat:SITE.lat,lng:SITE.lng},zoom=16;const listeners=new Map(),layers=new Set();
   const container=document.getElementById('map');Object.defineProperties(container,{clientWidth:{value:900,configurable:true},clientHeight:{value:636,configurable:true}});
   return {
     layers,listeners,getContainer:()=>container,getBounds:()=>boundsObject(bounds),getCenter:()=>({...center}),getZoom:()=>zoom,getSize:()=>({x:900,y:636}),
-    containerPointToLatLng:([x,y])=>({lat:bounds.north-(bounds.north-bounds.south)*y/636,lng:bounds.west+(bounds.east-bounds.west)*x/900}),
-    fitBounds(value){const pair=Array.isArray(value)?value:[[value.south,value.west],[value.north,value.east]];bounds={south:pair[0][0],west:pair[0][1],north:pair[1][0],east:pair[1][1]};center={lat:(bounds.north+bounds.south)/2,lng:(bounds.east+bounds.west)/2};return this;},
+    containerPointToLatLng:([x,y])=>{const sw=projectWebMercator([bounds.west,bounds.south]),ne=projectWebMercator([bounds.east,bounds.north]);const point=unprojectWebMercator([sw[0]+(ne[0]-sw[0])*x/900,ne[1]-(ne[1]-sw[1])*y/636]);return {lat:point[1],lng:point[0]};},
+    fitBounds(value){const pair=Array.isArray(value)?value:[[value.south,value.west],[value.north,value.east]];bounds=displayedBounds({south:pair[0][0],west:pair[0][1],north:pair[1][0],east:pair[1][1]});center={lat:(bounds.north+bounds.south)/2,lng:(bounds.east+bounds.west)/2};return this;},
     setView(value,nextZoom){center={lat:value.lat??value[0],lng:value.lng??value[1]};zoom=nextZoom;return this;},
     on(name,fn){for(const event of name.split(' ')){if(!listeners.has(event))listeners.set(event,new Set());listeners.get(event).add(fn);}return this;},
     off(name,fn){for(const event of name.split(' '))listeners.get(event)?.delete(fn);return this;},
@@ -139,11 +141,12 @@ test('official preview/cancel restores the map and approval snapshots a provider
   assert.ok(Math.abs(Number.parseFloat(frame.style.width)-809.45)<.02,'visible frame uses 90% of the map while preserving the A3 ratio');
   const mapBounds=h.map.getBounds(),visibleSpan=mapBounds.getEast()-mapBounds.getWest();
   h.document.getElementById('useHistoricalCrop').click();h.document.getElementById('commitHistorical').click();await h.controller.whenIdle();
-  assert.equal(h.project.historical.length,1);const item=h.project.historical[0];
+  assert.equal(h.project.historical.length,1,h.document.getElementById('historicalStatus').textContent);const item=h.project.historical[0];
   const expectedFraction=Number.parseFloat(frame.style.width)/h.map.getSize().x;
   assert.ok(Math.abs((item.bounds.east-item.bounds.west)/visibleSpan-expectedFraction)<1e-8,'saved crop matches the visible frame width');
   assert.equal(item.mode,'official');assert.equal(item.sequence,1);assert.equal(item.policy,'exportable');assert.equal(item.assetId,null);
-  assert.deepEqual(item.officialExport,{kind:'arcgis-export',url:'https://official.test/maps/flight-1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096});
+  assert.deepEqual(item.officialExport,{kind:'arcgis-export',url:'https://official.test/maps/flight-1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096,
+    resultId:'official:flight-1972',coverage:{west:-80,south:43,east:-79,north:44},preview:{kind:'arcgis-map-service',url:'https://official.test/maps/flight-1972/MapServer',layer:null,tileTemplate:'https://official.test/maps/flight-1972/MapServer/tile/{z}/{y}/{x}'}});
   assert.equal(historicalFigureCode(h.project.historical,item.id),'H-1972-1');assert.equal(Object.keys(item).length,17);
   await h.controller.refresh();h.document.querySelector(`[data-historical-id="${item.id}"] [data-action="view"]`).click();await h.controller.whenIdle();
   assert.equal(h.map.layers.size,1);assert.match([...h.map.layers][0].url,/\/export\?.*f=image.*bbox=/);

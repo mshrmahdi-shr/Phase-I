@@ -6,6 +6,11 @@ import { createProject, closeRing, pointInPolygon, figureDefaults, buildDxf, ext
 import {emptyCompanyProfile,snapshotCompanyProfile} from '../src/company-profile.mjs';
 
 const mrd128 = fs.readFileSync(new URL('../data/mrd128.kml', import.meta.url), 'utf8');
+const HISTORICAL_BOUNDS={west:-79.39796630568237,south:43.640806527158304,east:-79.3620336943176,north:43.65919206583274};
+const HISTORICAL_SOURCE='https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer';
+const CURRENT_OFFICIAL_EXPORT={kind:'arcgis-export',url:`${HISTORICAL_SOURCE}/export`,layer:null,maxWidth:4096,maxHeight:4096,
+  resultId:'toronto:cot-historic-aerial-1972',coverage:{west:-79.5,south:43.5,east:-79.2,north:43.8},
+  preview:{kind:'arcgis-map-service',url:HISTORICAL_SOURCE,layer:null,tileTemplate:`${HISTORICAL_SOURCE}/tile/{z}/{y}/{x}`}};
 
 function dxfPairs(dxf){
   const lines=dxf.trimEnd().split('\n');assert.equal(lines.length%2,0);
@@ -51,7 +56,7 @@ test('new project keeps project number blank and restores a profile snapshot',()
   p.companyProfileSnapshot=snapshotCompanyProfile(validProfile);
   const restored=core.restoreProject(p);
   assert.equal(restored.companyProfileSnapshot.companyName,'ABC Engineering');
-  assert.equal(restored.schemaVersion,5);
+  assert.equal(restored.schemaVersion,6);
 });
 
 test('restoreProject gives legacy projects no profile snapshot and rejects invalid snapshots',()=>{
@@ -68,8 +73,8 @@ test('restoreProject validates approved historical items and preserves duplicate
     id,year:1972,sequence,title:`Flight ${sequence}`,mode:'official',providerId:'toronto',
     sourceUrl:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer',
     licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto',policy:'exportable',
-    resolutionMeters:null,bounds:{north:43.66,south:43.64,east:-79.37,west:-79.39},placement:null,assetId:null,
-    officialExport:{kind:'arcgis-export',url:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096},
+    resolutionMeters:null,bounds:{...HISTORICAL_BOUNDS},placement:null,assetId:null,
+    officialExport:structuredClone(CURRENT_OFFICIAL_EXPORT),
     createdAt:stamp,updatedAt:stamp
   });
   project.location={lat:43.65,lng:-79.38};
@@ -80,7 +85,7 @@ test('restoreProject validates approved historical items and preserves duplicate
   assert.deepEqual(restored.historical.map(value=>[value.id,value.sequence]),[
     ['74f14168-4de6-4c5f-88f4-87db8ec731c2',2],['9833e469-c7e8-4ef1-84f1-b89c608c2126',1]
   ]);
-  assert.equal(restored.schemaVersion,5);
+  assert.equal(restored.schemaVersion,6);
   assert.equal(restored.historicalSequenceCounters['1972'],2);
 
   project.historical.push(item('3caa1022-b2e7-4c63-8ca8-12f4845e1be1',2));
@@ -101,12 +106,13 @@ test('restoreProject rejects malformed historical IDs, URLs, bounds, policy, pla
   const stamp='2026-08-27T12:00:00.000Z';
   const base={id:'74f14168-4de6-4c5f-88f4-87db8ec731c2',year:1972,sequence:1,title:'Flight',mode:'official',providerId:'toronto',
     sourceUrl:'https://gis.toronto.ca/source',licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto',policy:'exportable',resolutionMeters:null,
-    bounds:{north:43.66,south:43.64,east:-79.37,west:-79.39},placement:null,assetId:null,
-    officialExport:{kind:'arcgis-export',url:'https://gis.toronto.ca/export',layer:null,maxWidth:4096,maxHeight:4096},createdAt:stamp,updatedAt:stamp};
+    bounds:{...HISTORICAL_BOUNDS},placement:null,assetId:null,
+    officialExport:structuredClone(CURRENT_OFFICIAL_EXPORT),createdAt:stamp,updatedAt:stamp};
   for(const mutate of [
     value=>({...value,id:'not-a-uuid'}),value=>({...value,sourceUrl:'javascript:alert(1)'}),
     value=>({...value,sourceUrl:'https://gis.toronto.ca/%252e%252e/private'}),
-    value=>({...value,policy:'unknown'}),value=>({...value,bounds:{...value.bounds,north:43.64}}),
+    value=>({...value,policy:'unknown'}),value=>({...value,bounds:{...value.bounds,north:43.64}}),value=>({...value,bounds:{north:43.66,south:43.64,east:-79.37,west:-79.39}}),
+    value=>({...value,officialExport:{...value.officialExport,resultId:'toronto:../../wrong'}}),value=>({...value,officialExport:{...value.officialExport,coverage:{...value.officialExport.coverage,east:-79.6}}}),
     value=>({...value,placement:{center:[0,0]}}),value=>({...value,unexpected:true})
   ]){
     project.historical=[mutate(base)];
@@ -114,6 +120,15 @@ test('restoreProject rejects malformed historical IDs, URLs, bounds, policy, pla
   }
   let reads=0;const counters={};Object.defineProperty(counters,'1972',{enumerable:true,get(){reads++;return 1;}});project.historical=[base];project.historicalSequenceCounters=counters;
   assert.throws(()=>core.restoreProject(project),/counter|data field|accessor/i);assert.equal(reads,0);
+});
+
+test('restoreProject keeps legacy official approvals but marks their missing identity snapshot explicitly',()=>{
+  const project=createProject();project.location={lat:43.65,lng:-79.38};const stamp='2026-08-27T12:00:00.000Z';
+  project.historical=[{id:'74f14168-4de6-4c5f-88f4-87db8ec731c2',year:1972,sequence:1,title:'Legacy flight',mode:'official',providerId:'toronto',sourceUrl:HISTORICAL_SOURCE,
+    licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto',policy:'exportable',resolutionMeters:null,bounds:{...HISTORICAL_BOUNDS},placement:null,assetId:null,
+    officialExport:{kind:'arcgis-export',url:`${HISTORICAL_SOURCE}/export`,layer:null,maxWidth:4096,maxHeight:4096},createdAt:stamp,updatedAt:stamp}];
+  const restored=core.restoreProject(project),descriptor={kind:'arcgis-export',url:`${HISTORICAL_SOURCE}/export`,layer:null,maxWidth:4096,maxHeight:4096,resultId:null,coverage:null,preview:null};assert.equal(restored.schemaVersion,6);assert.deepEqual(restored.historical[0].officialExport,descriptor);
+  assert.deepEqual(core.restoreProject(structuredClone(restored)).historical[0].officialExport,descriptor,'the explicit legacy marker survives save and reload without becoming trusted');
 });
 
 test('closeRing appends the first point only when needed', () => {
@@ -272,8 +287,8 @@ test('typed PDF selection restores valid historical IDs while retaining the lega
   const first='74f14168-4de6-4c5f-88f4-87db8ec731c2',second='9833e469-c7e8-4ef1-84f1-b89c608c2126',stamp='2026-08-27T12:00:00.000Z';
   const item=(id,sequence)=>({id,year:1972,sequence,title:`Flight ${sequence}`,mode:'official',providerId:'toronto',
     sourceUrl:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer',licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto',policy:'exportable',resolutionMeters:null,
-    bounds:{north:43.66,south:43.64,east:-79.37,west:-79.39},placement:null,assetId:null,
-    officialExport:{kind:'arcgis-export',url:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096},createdAt:stamp,updatedAt:stamp});
+    bounds:{...HISTORICAL_BOUNDS},placement:null,assetId:null,
+    officialExport:structuredClone(CURRENT_OFFICIAL_EXPORT),createdAt:stamp,updatedAt:stamp});
   const p=createProject();p.location={lat:43.65,lng:-79.38};p.historical=[item(first,1),item(second,2)];p.historicalSequenceCounters={'1972':2};
   p.exportPreferences={...p.exportPreferences,codes:['C','A'],selection:[{kind:'historical',id:second},{kind:'figure',code:'C'},{kind:'historical',id:first},{kind:'figure',code:'C'},{kind:'historical',id:'3caa1022-b2e7-4c63-8ca8-12f4845e1be1'}]};
   const restored=core.restoreProject(JSON.parse(JSON.stringify(p)));

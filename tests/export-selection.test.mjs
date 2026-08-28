@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import {JSDOM} from 'jsdom';
 import {createProject} from '../src/core.mjs';
 import {TORONTO_IMAGERY_PROVIDER} from '../src/imagery/providers/toronto.mjs';
+import {projectPoint,unprojectPoint} from '../src/sheet-layout.mjs';
 
 const project=()=>({...createProject({name:'Public QA',projectNo:'FE 26-15876',address:'Toronto, Ontario',date:'2026-08-26'}),location:{lng:-79.38,lat:43.65}});
 const polygon={name:'Custom unit',description:'Custom description',unitCode:'55b',color:'#123456',fillOpacity:.6,
@@ -108,14 +109,15 @@ function deferredPlanner(){
     let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});calls.push({args,resolve,reject});return promise;
   }};
 }
+async function waitFor(predicate,message){for(let attempt=0;attempt<100;attempt++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,2));}assert.fail(message);}
 
 test('an older planning success cannot overwrite a newer failure',async()=>{
   const {createExportDialog}=await import('../src/export-selection.mjs');
   const {document,dom,$}=fixture(),p=project(),surficial=surficialDataset(),planner=deferredPlanner();p.exportPreferences={codes:['D']};
   const state={project:p,datasets:{surficial},companyProfile:companyProfile()};
   const dialog=createExportDialog({document,getState:()=>state,save(){},setBusy(){},planPdf:planner.planPdf,exportPdf:async()=>{throw Error('unused');},download(){}});
-  const older=dialog.open();assert.equal(planner.calls.length,1);
-  surficial.features[0].description='new invalid snapshot';const newer=dialog.refresh();assert.equal(planner.calls.length,2);
+  const older=dialog.open();await waitFor(()=>planner.calls.length===1,'older D plan did not start');
+  surficial.features[0].description='new invalid snapshot';const newer=dialog.refresh();await waitFor(()=>planner.calls.length===2,'newer D plan did not start');
   planner.calls[1].reject(Error('Figure D: Unsupported font character U+20000.'));await newer;
   planner.calls[0].resolve({pageCount:2,continuationCounts:{D:1}});await older;await new Promise(resolve=>setImmediate(resolve));
   assert.equal($('exportFigureD').disabled,true);assert.equal($('exportFigureD').checked,false);assert.equal($('downloadPdf').disabled,true);
@@ -127,7 +129,7 @@ test('an older planning failure cannot overwrite a newer success',async()=>{
   const {document,dom,$}=fixture(),p=project(),surficial=surficialDataset(),planner=deferredPlanner();p.exportPreferences={codes:['D']};
   const state={project:p,datasets:{surficial},companyProfile:companyProfile()};
   const dialog=createExportDialog({document,getState:()=>state,save(){},setBusy(){},planPdf:planner.planPdf,exportPdf:async()=>{throw Error('unused');},download(){}});
-  const older=dialog.open();surficial.features[0].description='new valid snapshot';const newer=dialog.refresh();
+  const older=dialog.open();await waitFor(()=>planner.calls.length===1,'older D plan did not start');surficial.features[0].description='new valid snapshot';const newer=dialog.refresh();await waitFor(()=>planner.calls.length===2,'newer D plan did not start');
   planner.calls[1].resolve({pageCount:3,continuationCounts:{D:2}});await newer;
   planner.calls[0].reject(Error('Figure D: stale failure'));await older;await new Promise(resolve=>setImmediate(resolve));
   assert.equal($('exportFigureD').disabled,false);assert.equal($('exportFigureD').checked,true);
@@ -183,10 +185,11 @@ test('browser download rechecks cancellation after URL creation and always revok
   cleanup();assert.deepEqual(revoked,['blob:cancelled']);
 });
 
-function historicalItem({id='74f14168-4de6-4c5f-88f4-87db8ec731c2',year=1972,sequence=1,policy='exportable'}={}){return {id,year,sequence,title:`Archive flight ${sequence}`,mode:'official',providerId:'toronto',
-  sourceUrl:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer',licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto',policy,resolutionMeters:.2,
-  bounds:{west:-79.405,south:43.632,east:-79.355,north:43.668},placement:null,assetId:null,
-  officialExport:{kind:'arcgis-export',url:'https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer/export',layer:null,maxWidth:4096,maxHeight:4096},createdAt:'2026-08-27T12:00:00.000Z',updatedAt:'2026-08-27T12:00:00.000Z'};}
+function historicalA3Bounds(){const [x,y]=projectPoint([-79.38,43.65]),halfWidth=2000,halfHeight=halfWidth/(420/297),sw=unprojectPoint([x-halfWidth,y-halfHeight]),ne=unprojectPoint([x+halfWidth,y+halfHeight]);return {west:sw[0],south:sw[1],east:ne[0],north:ne[1]};}
+function historicalItem({id='74f14168-4de6-4c5f-88f4-87db8ec731c2',year=1972,sequence=1,policy='exportable'}={}){const source='https://gis.toronto.ca/arcgis/rest/services/basemap/cot_historic_aerial_1972/MapServer';return {id,year,sequence,title:`Archive flight ${sequence}`,mode:'official',providerId:'toronto',
+  sourceUrl:source,licenseUrl:'https://open.toronto.ca/open-data-licence/',attribution:'City of Toronto',policy,resolutionMeters:.2,
+  bounds:historicalA3Bounds(),placement:null,assetId:null,
+  officialExport:{kind:'arcgis-export',url:`${source}/export`,layer:null,maxWidth:4096,maxHeight:4096,resultId:'toronto:cot-historic-aerial-1972',coverage:{west:-79.5,south:43.5,east:-79.2,north:43.8},preview:{kind:'arcgis-map-service',url:source,layer:null,tileTemplate:`${source}/tile/{z}/{y}/{x}`}},createdAt:'2026-08-27T12:00:00.000Z',updatedAt:'2026-08-27T12:00:00.000Z'};}
 
 test('selection rows place A-E before stable historical year/sequence order and expose actionable blockers',async()=>{
   const {exportRows,selectedReadySelection}=await import('../src/export-selection.mjs'),p=project();
@@ -198,6 +201,8 @@ test('selection rows place A-E before stable historical year/sequence order and 
   assert.deepEqual(selectedReadySelection(rows,[{kind:'historical',id:later.id},{kind:'figure',code:'C'},{kind:'historical',id:first.id},{kind:'historical',id:blocked.id}]),[{kind:'figure',code:'C'},{kind:'historical',id:first.id},{kind:'historical',id:later.id}]);
   const downgraded={...TORONTO_IMAGERY_PROVIDER,policy:'link-only'};
   const stale=exportRows({project:{...p,historical:[first]},datasets:{},companyProfile:companyProfile(),providers:[downgraded]}).at(-1);assert.equal(stale.ready,false);assert.match(stale.reasons.join(' '),/current provider policy/i);
+  const {resultId,coverage,preview,...legacyExport}=first.officialExport,legacy={...first,officialExport:legacyExport};void resultId;void coverage;void preview;
+  const legacyRow=exportRows({project:{...p,historical:[legacy]},datasets:{},companyProfile:companyProfile(),providers:[TORONTO_IMAGERY_PROVIDER]}).at(-1);assert.equal(legacyRow.ready,false);assert.match(legacyRow.reasons.join(' '),/strict.*identity|approve.*again|re-add/i);
 });
 
 test('dialog persists typed historical selection, keeps legacy codes, and snapshots selected item before export',async()=>{
@@ -216,4 +221,20 @@ test('historical planning failure keeps its visible row but clears persisted sel
   const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:companyProfile(),providers:[TORONTO_IMAGERY_PROVIDER]}),save(){},setBusy(){},
     planPdf:async({selection})=>{if(selection[0].kind==='historical')throw Error('H-1972-1: Missing historical image asset. Restore the project package.');return {pageCount:1,continuationCounts:{[selection[0].code]:0}};},exportPdf:async()=>{throw Error('must not export');},download(){}});
   await dialog.open();const row=document.querySelector('[data-export-kind="historical"]'),checkbox=row.querySelector('input');assert.equal(checkbox.disabled,true);assert.equal(checkbox.checked,false);assert.match(row.textContent,/Missing historical image asset.*Restore/i);assert.deepEqual(p.exportPreferences.selection,[]);assert.equal($('downloadPdf').disabled,true);dom.window.close();
+});
+
+test('dialog planning uses a fixed worker cap and never starts queued rows after failure or close',async()=>{
+  const {createExportDialog}=await import('../src/export-selection.mjs');
+  async function scenario(mode){
+    const {document,dom}=fixture(),p=project();p.historical=Array.from({length:12},(_,index)=>historicalItem({id:`00000000-0000-4000-8000-${String(index+1).padStart(12,'0')}`,year:1972+index,sequence:1}));
+    p.historicalSequenceCounters=Object.fromEntries(p.historical.map(item=>[item.year,1]));let active=0,peak=0,started=0,firstStart;const began=new Promise(resolve=>firstStart=resolve);
+    const planPdf=({signal})=>{const index=started++;active++;peak=Math.max(peak,active);if(index===0)firstStart();return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>mode==='failure'&&index===0?reject(new Error('first planning failure')):resolve({pageCount:1,continuationCounts:{}}),mode==='failure'&&index===0?0:25);
+      signal.addEventListener('abort',()=>{clearTimeout(timer);reject(new DOMException('Cancelled','AbortError'));},{once:true});
+    }).finally(()=>active--);};
+    const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:companyProfile(),providers:[TORONTO_IMAGERY_PROVIDER]}),save(){},setBusy(){},planPdf,exportPdf:async()=>{throw Error('unused');},download(){}});
+    const opening=dialog.open();await began;if(mode==='close')dialog.close();await opening;
+    assert.ok(peak<=2,`peak planner concurrency was ${peak}`);assert.ok(started<=2,`${started} rows started after ${mode}`);dom.window.close();
+  }
+  await scenario('failure');await scenario('close');
 });

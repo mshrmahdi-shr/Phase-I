@@ -1,4 +1,4 @@
-import {validBoundary,validFigureBounds} from './core.mjs';
+import {validBoundary,validFigureBounds,validHistoricalA3Bounds} from './core.mjs';
 import {MAX_RASTER_PIXELS,metricScale,projectPoint} from './sheet-layout.mjs';
 
 const DPI_VALUES=new Set([150,300]);
@@ -20,6 +20,7 @@ export function historicalSheetGeometry(project,item,dpi=300){
   const approved=project.historical.find(candidate=>candidate?.id===item.id);
   if(!approved||!same(approved,item))fail('The selected approved historical item or crop has changed. Reopen the export dialog.');
   if(!validFigureBounds(item.bounds,project.location))fail('The approved historical crop must be valid and keep SITE inside.');
+  if(!validHistoricalA3Bounds(item.bounds))fail('The approved crop does not retain the projected A3 landscape aspect. Reopen the crop editor and approve it again.');
   for(const key of ['siteBoundary','buildingBoundary'])if(project[key]?.length&&!validBoundary(project[key]))fail('The project contains an invalid boundary.');
   const sw=projectPoint([item.bounds.west,item.bounds.south]),ne=projectPoint([item.bounds.east,item.bounds.north]);
   if(!sw.every(Number.isFinite)||!ne.every(Number.isFinite)||ne[0]<=sw[0]||ne[1]<=sw[1])fail('The approved historical crop is outside supported Web Mercator bounds.');

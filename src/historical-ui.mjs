@@ -1,4 +1,4 @@
-import {figureBounds,restoreProject} from './core.mjs';
+import {figureBounds,restoreProject,validHistoricalA3Bounds} from './core.mjs';
 import {decodeManualImage,parseWorldFile} from './imagery/manual-image.mjs';
 import {createCanvasImageOverlay} from './imagery/canvas-overlay.mjs';
 import {geographicPlacementCorners,placementCorners,placementFromExtent,placementFromGeoReference,projectWebMercator,unprojectWebMercator,validatePlacement} from './imagery/placement.mjs';
@@ -241,16 +241,18 @@ export function createHistoricalImageryUI({
   function storedOfficialResult(item){
     const provider=providerById.get(item.providerId);if(!provider)fail('The saved official provider is no longer registered.');
     if(provider.policy!=='exportable')fail('The registered provider no longer permits image export.');
+    if(typeof item.officialExport?.resultId!=='string'||!item.officialExport.coverage||!item.officialExport.preview)fail('This approval predates strict official-source identity checks. Remove it, search again, and approve the source again.');
     if(!SUPPORTED_OFFICIAL_EXPORT_KINDS.has(item.officialExport.kind))fail('The saved official export kind is no longer supported.');
     if(item.officialExport.maxWidth<MIN_OFFICIAL_EXPORT_DIMENSION||item.officialExport.maxHeight<MIN_OFFICIAL_EXPORT_DIMENSION)fail('The saved provider export dimensions are too small.');
-    for(const [url,label] of [[item.sourceUrl,'Saved source URL'],[item.licenseUrl,'Saved license URL'],[item.officialExport.url,'Saved export URL']])validateProviderUrl(url,provider,{label});
+    for(const [url,label,template] of [[item.sourceUrl,'Saved source URL',false],[item.licenseUrl,'Saved license URL',false],[item.officialExport.url,'Saved export URL',false],[item.officialExport.preview.url,'Saved preview URL',false],[item.officialExport.preview.tileTemplate,'Saved preview tile URL',true]])if(url!==null)validateProviderUrl(url,provider,{label,template});
     if(item.licenseUrl!==provider.licenseUrl)fail('The saved imagery license no longer matches its provider.');
     const project=getProject();if(!project.location||provider.covers(project.location)!==true)fail('The registered provider no longer covers SITE.');
-    if(!containsBounds(provider.coverage,item.bounds))fail('The approved crop is outside the registered provider coverage.');
-    const reconstructed={id:`${item.providerId}:saved-${item.id}`,providerId:item.providerId,title:item.title,year:item.year,resolutionMeters:item.resolutionMeters,
-      coverage:{...provider.coverage},preview:{kind:'official-link',url:item.sourceUrl},export:{kind:item.officialExport.kind,url:item.officialExport.url,
+    if(!validHistoricalA3Bounds(item.bounds))fail('The approved crop is not the fixed projected A3 landscape aspect. Reopen the image and approve the crop again.');
+    if(!containsBounds(item.officialExport.coverage,item.bounds))fail('The approved crop is outside its saved official source footprint.');
+    const preview=item.officialExport.preview,reconstructed={id:item.officialExport.resultId,providerId:item.providerId,title:item.title,year:item.year,resolutionMeters:item.resolutionMeters,
+      coverage:{...item.officialExport.coverage},preview:{kind:preview.kind,url:preview.url,...(preview.layer===null?{}:{layer:preview.layer}),...(preview.tileTemplate===null?{}:{tileTemplate:preview.tileTemplate})},export:{kind:item.officialExport.kind,url:item.officialExport.url,
         ...(item.officialExport.layer===null?{}:{layer:item.officialExport.layer}),maxWidth:item.officialExport.maxWidth,maxHeight:item.officialExport.maxHeight},
-      policy:'exportable',sourceUrl:item.sourceUrl,licenseUrl:item.licenseUrl,attribution:provider.attribution};
+      policy:'exportable',sourceUrl:item.sourceUrl,licenseUrl:item.licenseUrl,attribution:item.attribution};
     validateImageryResult(reconstructed,provider);return reconstructed;
   }
 
@@ -260,7 +262,7 @@ export function createHistoricalImageryUI({
     try{
       const grouped=await searchOfficialImagery({providers:[provider],location:project.location,year:item.year,signal:controller.signal,fetchImpl});
       if(!alive||token!==previewGeneration)return;
-      const current=[...grouped.exact,...grouped.nearby,...grouped.remaining].find(value=>value.sourceUrl===stored.sourceUrl&&value.export?.url===stored.export.url);
+      const current=[...grouped.exact,...grouped.nearby,...grouped.remaining].find(value=>value.id===stored.id);
       if(!current)fail('The approved official source could not be revalidated for editing. Its saved crop remains unchanged.');
       removeActive({restore:false});await beginOfficial(current,item);
     }catch(error){if(active?.token===token)removeActive({restore:true});throw error;}
@@ -360,7 +362,7 @@ export function createHistoricalImageryUI({
       else if(world){const worldText=await world.text();if(!ownsActive(session)){disposeLateImage(image);return;}placement=placementFromGeoReference({geo:{crs:$('manualWorldCrs').value,transform:parseWorldFile(worldText)},width:image.width,height:image.height});}
       else placement=sitePlacement(project,image);
       if(!ownsActive(session)){disposeLateImage(image);return;}validatePlacement(placement,{location:project.location});session.image=image;session.placement=placement;
-      map.fitBounds(boundsPair(extentForPlacement(placement)),{animate:false,padding:[0,0]});showCrop(null);$('manualPlacementControls').hidden=false;
+      map.fitBounds(boundsPair(a3CropForPlacement(placement,project.location)),{animate:false,padding:[0,0]});showCrop(null);$('manualPlacementControls').hidden=false;
       if(await replaceManualOverlay(placement,session)&&ownsActive(session))showStatus('Image placement is ready. Adjust it if needed, then choose Use current crop.','ok');
     }catch(error){if(active===session)removeActive({restore:true});throw error;}
   }
@@ -398,6 +400,7 @@ export function createHistoricalImageryUI({
 
   function useCrop(){
     requireInteractive();if(!active)fail('Open an image before saving a crop.');const bounds=currentCropBounds(map);if(!containsSite(bounds,getProject().location))fail('The A3 crop must contain SITE.');
+    if(!validHistoricalA3Bounds(bounds))fail('The crop must retain the fixed projected A3 landscape aspect. Resize the map or reset the crop, then try again.');
     if(active.kind==='official'){
       validateImageryResult(active.result,active.provider);if(!containsBounds(active.result.coverage,bounds))fail('The requested crop is outside this official source coverage.');
       if(active.result.export.maxWidth<MIN_OFFICIAL_EXPORT_DIMENSION||active.result.export.maxHeight<MIN_OFFICIAL_EXPORT_DIMENSION)fail('The official provider maximum export dimensions are too small for an A3 crop.');
@@ -481,7 +484,8 @@ export function createHistoricalImageryUI({
           if(!project.location||provider.covers(project.location)!==true||!containsSite(snapshot.crop,project.location)||!containsBounds(snapshot.result.coverage,snapshot.crop))fail('The current SITE or crop is no longer covered by this official source.');
           item={id,year,sequence,title:snapshot.result.title,mode:'official',providerId:snapshot.result.providerId,sourceUrl:snapshot.result.sourceUrl,
             licenseUrl:snapshot.result.licenseUrl,attribution:snapshot.result.attribution,policy:'exportable',resolutionMeters:snapshot.result.resolutionMeters,
-            bounds:{...snapshot.crop},placement:null,assetId:null,officialExport:{kind:descriptor.kind,url:descriptor.url,layer:Object.hasOwn(descriptor,'layer')?descriptor.layer:null,maxWidth:descriptor.maxWidth,maxHeight:descriptor.maxHeight},createdAt,updatedAt:stamp};
+            bounds:{...snapshot.crop},placement:null,assetId:null,officialExport:{kind:descriptor.kind,url:descriptor.url,layer:Object.hasOwn(descriptor,'layer')?descriptor.layer:null,maxWidth:descriptor.maxWidth,maxHeight:descriptor.maxHeight,
+              resultId:snapshot.result.id,coverage:{...snapshot.result.coverage},preview:{kind:snapshot.result.preview.kind,url:snapshot.result.preview.url,layer:Object.hasOwn(snapshot.result.preview,'layer')?snapshot.result.preview.layer:null,tileTemplate:Object.hasOwn(snapshot.result.preview,'tileTemplate')?snapshot.result.preview.tileTemplate:null}},createdAt,updatedAt:stamp};
         }else{
           validateManualCrop(snapshot.crop,snapshot.placement,project);item=manualItem({id,assetId:snapshot.assetId,year,sequence,title:currentItem?.title??snapshot.fileName,citation:snapshot.citation,sourceUrl:snapshot.sourceUrl,bounds:{...snapshot.crop},placement:snapshot.placement,createdAt});item.updatedAt=stamp;
         }
@@ -549,7 +553,7 @@ export function createHistoricalImageryUI({
   }
 
   function officialState(item){
-    try{storedOfficialResult(item);return {ready:true,status:'Registered export available · SITE and crop covered'};}catch{return {ready:false,status:'Current provider export unavailable · Not ready'};}
+    try{storedOfficialResult(item);return {ready:true,status:'Registered export available · SITE and crop covered'};}catch(error){return {ready:false,status:`${error.message} · Not ready`};}
   }
   async function manualState(item){
     let asset;try{asset=await loadHistoricalAsset(item);}catch{return {ready:false,status:'Historical asset ownership or integrity invalid · Not ready'};}if(!asset)return {ready:false,status:'Missing asset · Not ready'};
