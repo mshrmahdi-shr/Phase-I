@@ -101,7 +101,9 @@ async function persistPackageState(next,context={}){
     if(failures.length)throw new AggregateError([error,...failures],'Project/profile metadata persistence and local rollback failed.',{cause:error});throw error;
   }
 }
-function status(id,t,k=''){$(id).textContent=t;$(id).dataset.kind=k}
+const workflowErrors=new Map(),workflowLabels={searchStatus:'Address search',saveMessage:'Project save',imageryStatus:'Imagery',geologyStatus:'Geology',geologyProvenanceStatus:'Geology source',historicalStatus:'Historical imagery',companyProfileStatus:'Company profile',projectPackageStatus:'Project package',mapSourceStatus:'Map source',exportProgress:'Export'};
+function renderWorkflowIssues(){const panel=$('workflowIssues');if(!panel)return;panel.replaceChildren();if(!workflowErrors.size){panel.hidden=true;return;}const title=document.createElement('strong');title.textContent='Problems requiring attention';const list=document.createElement('ul');for(const [id,message] of workflowErrors){const item=document.createElement('li');item.textContent=`${workflowLabels[id]||id}: ${message}`;list.append(item);}panel.append(title,list);panel.hidden=false;}
+function status(id,t,k=''){const node=$(id);if(!node)return;node.textContent=t;node.dataset.kind=k;if(k==='error'&&t)workflowErrors.set(id,t);else if(k!=='error')workflowErrors.delete(id);renderWorkflowIssues();}
 function loadingButton(id,value){const button=$(id);button.dataset.loading=String(value);button.disabled=value||exportBusy;}
 function sync(){for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).value=project[k]||'';$('dpi').value=project.dpi||300;$('dpiBadge').textContent=`${project.dpi||300} DPI`;if(project.location){map.setView([project.location.lat,project.location.lng],16);setMarker(project.location)};redraw();renderFigures();historicalUI?.refresh();refreshPrint();updateLegend();updateScale();updateMapSourceStatus()}
 for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).oninput=e=>{project[k]=e.target.value;save();refreshPrint()};$('dpi').onchange=e=>{project.dpi=+e.target.value;$('dpiBadge').textContent=`${project.dpi} DPI`;save()};
@@ -380,3 +382,4 @@ packageUI=createProjectPackageUI({document,assetStore,Zip:JSZip,getState:readPac
 const openHistorical=()=>{if(exportBusy)return;drawingController.cancel();historicalUI.open();};
 $('manageHistorical').onclick=openHistorical;$('manageHistoricalHeader').onclick=openHistorical;
 sync();await companyDialog.refresh();if(!companyProfile)await companyDialog.open();else if(!project.companyProfileSnapshot)status('saveMessage','This legacy project has no assigned branding. Review the reusable Company Profile, then choose Apply Current Template to Project before creating outputs.','error');
+
