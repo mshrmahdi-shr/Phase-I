@@ -22,7 +22,7 @@ const DRAWING_BINDINGS=Symbol.for('phase-i-esa.drawing-bindings');
 document[DRAWING_BINDINGS]?.abort();
 const drawingBindings=new window.AbortController();document[DRAWING_BINDINGS]=drawingBindings;
 let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject()})();
-let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,packageUI,exportBusy=false,companyProfile=null,printBranding=null;
+let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,packageUI,exportBusy=false,companyProfile=null,printBranding=null,packagePersistenceToken=null;
 const assetStore=createAssetStore();
 function loadCompanyProfile(){try{const saved=localStorage.getItem(COMPANY_STORAGE);return saved?normalizeCompanyProfile(JSON.parse(saved)):null;}catch{return null;}}
 function saveCompanyProfile(profile){const normalized=normalizeCompanyProfile(profile);localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized));return normalized;}
@@ -80,12 +80,21 @@ function normalizedPackageState(next,{requireProfile=true}={}){
   return {project:nextProject,companyProfile:nextProfile};
 }
 function restoreStorageValue(key,value){if(value===null)localStorage.removeItem(key);else localStorage.setItem(key,value);}
+function samePackageState(left,right){return JSON.stringify(left)===JSON.stringify(right);}
+function storageMatchesPackageState(expected){
+  return localStorage.getItem(STORAGE)===JSON.stringify(expected.project)&&localStorage.getItem(COMPANY_STORAGE)===(expected.companyProfile?JSON.stringify(expected.companyProfile):null);
+}
 async function persistPackageState(next,context={}){
-  const normalized=normalizedPackageState(next,{requireProfile:context.phase!=='rollback'}),previousMemory=readPackageState(),previousProject=localStorage.getItem(STORAGE),previousCompany=localStorage.getItem(COMPANY_STORAGE);
+  if(!['commit','rollback'].includes(context.phase)||typeof context.transactionToken!=='string'||context.transactionToken.length<16||context.transactionToken.length>256)throw new Error('Project package persistence context is invalid.');
+  if(context.phase==='rollback'){
+    const expected=normalizedPackageState(context.expected);
+    if(packagePersistenceToken!==context.transactionToken||!samePackageState(readPackageState(),expected)||!storageMatchesPackageState(expected))throw new Error('Project package rollback conflict: later project or company edits were preserved.');
+  }
+  const normalized=normalizedPackageState(next,{requireProfile:context.phase!=='rollback'}),previousMemory=readPackageState(),previousProject=localStorage.getItem(STORAGE),previousCompany=localStorage.getItem(COMPANY_STORAGE),previousToken=packagePersistenceToken;
   try{
-    localStorage.setItem(STORAGE,JSON.stringify(normalized.project));if(normalized.companyProfile)localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized.companyProfile));else localStorage.removeItem(COMPANY_STORAGE);project=normalized.project;companyProfile=normalized.companyProfile;return true;
+    localStorage.setItem(STORAGE,JSON.stringify(normalized.project));if(normalized.companyProfile)localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized.companyProfile));else localStorage.removeItem(COMPANY_STORAGE);project=normalized.project;companyProfile=normalized.companyProfile;packagePersistenceToken=context.phase==='commit'?context.transactionToken:null;return true;
   }catch(error){
-    project=previousMemory.project;companyProfile=previousMemory.companyProfile;const failures=[];
+    project=previousMemory.project;companyProfile=previousMemory.companyProfile;packagePersistenceToken=previousToken;const failures=[];
     for(const [key,value] of [[STORAGE,previousProject],[COMPANY_STORAGE,previousCompany]])try{restoreStorageValue(key,value);}catch(restoreError){failures.push(restoreError);}
     if(failures.length)throw new AggregateError([error,...failures],'Project/profile metadata persistence and local rollback failed.',{cause:error});throw error;
   }

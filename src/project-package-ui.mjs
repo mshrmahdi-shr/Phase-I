@@ -13,19 +13,19 @@ export function createProjectPackageUI({document,assetStore,Zip=globalThis.JSZip
   exportPackage=exportProjectPackage,inspectPackage=inspectProjectPackage,commitPackage=commitProjectPackage,download=(output,_document,signal)=>defaultDownload(output,document,signal)}={}){
   if(!document||typeof getState!=='function'||typeof readState!=='function'||typeof persistState!=='function'||typeof initialize!=='function')throw new Error('Project package UI requires document and state lifecycle callbacks.');
   const dialog=required(document,'projectPackageDialog'),status=required(document,'projectPackageStatus'),meter=required(document,'projectPackageMeter'),preview=required(document,'projectPackagePreview'),summary=required(document,'projectPackageSummary'),companySummary=required(document,'projectPackageCompanySummary'),assetSummary=required(document,'projectPackageAssetSummary'),confirmButton=required(document,'confirmProjectPackageImport'),cancelButton=required(document,'cancelProjectPackage'),exportButton=required(document,'exportProjectPackage'),importButton=required(document,'importProjectPackage'),input=required(document,'importProjectPackageFile');
-  let candidate=null,operation=null,generation=0,launcher=null,restoreFocus=null,destroyed=false,pending=Promise.resolve();
+  let candidate=null,operation=null,generation=0,launcher=null,closing=false,destroyed=false,pending=Promise.resolve();
   function text(message,kind=''){status.textContent=message;status.dataset.kind=kind;}
   function setOperationBusy(value){
     exportButton.disabled=value;importButton.disabled=value;confirmButton.disabled=value||!candidate;cancelButton.textContent=value?'Cancel':'Close';meter.hidden=!value;setBusy(value);
-    if(!value&&dialog.hidden&&restoreFocus){const target=restoreFocus;restoreFocus=null;target.focus?.();}
   }
   function open(source=document.activeElement){
     if(destroyed)return false;if(dialog.hidden){launcher=source&&typeof source.focus==='function'?source:exportButton;dialog.hidden=false;document.body.classList.add('project-package-open');}
     cancelButton.focus();return true;
   }
   function close({abort=true}={}){
-    if(destroyed||dialog.hidden)return false;if(abort)operation?.controller.abort(abortError());generation++;candidate=null;preview.hidden=true;confirmButton.disabled=true;
-    restoreFocus=launcher;dialog.hidden=true;document.body.classList.remove('project-package-open');launcher=null;meter.hidden=true;if(!operation){const target=restoreFocus;restoreFocus=null;target?.focus?.();}return true;
+    if(destroyed||dialog.hidden)return false;
+    if(operation){if(abort)operation.controller.abort(abortError());generation++;candidate=null;preview.hidden=true;confirmButton.disabled=true;closing=true;text('Cancelling the project package operation…');cancelButton.focus();return true;}
+    generation++;candidate=null;preview.hidden=true;confirmButton.disabled=true;const target=launcher&&!launcher.disabled&&!launcher.hidden?launcher:exportButton;target.focus?.();dialog.hidden=true;document.body.classList.remove('project-package-open');launcher=null;meter.hidden=true;return true;
   }
   function progress(update={}){
     if(update.phase==='reading-assets'&&Number.isSafeInteger(update.completed)&&Number.isSafeInteger(update.total)){
@@ -36,7 +36,7 @@ export function createProjectPackageUI({document,assetStore,Zip=globalThis.JSZip
   }
   function run(kind,work){
     if(destroyed||operation)return Promise.resolve(false);const controller=new AbortController(),token=++generation;operation={kind,controller,token};setOperationBusy(true);
-    const task=(async()=>{try{return await work({controller,token});}finally{if(operation?.token===token){operation=null;setOperationBusy(false);}}})();pending=task.catch(()=>false);return task;
+    const task=(async()=>{try{return await work({controller,token});}finally{if(operation?.token===token){operation=null;setOperationBusy(false);if(closing){closing=false;close({abort:false});}}}})();pending=task.catch(()=>false);return task;
   }
   async function exportWork(){
     if(operation||destroyed)return false;candidate=null;preview.hidden=true;open(exportButton);text('Validating the project, company profile, and referenced files…');meter.removeAttribute('value');
@@ -63,7 +63,7 @@ export function createProjectPackageUI({document,assetStore,Zip=globalThis.JSZip
       if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();candidate=null;preview.hidden=true;confirmButton.disabled=true;text(`Project package imported. ${result.addedAssetIds.length} local files restored; ${result.reusedAssetIds.length} existing verified files reused.`,'ok');return true;
     });}catch(error){if(!aborted(error)&&!destroyed)text(`Project package was not imported; the previous project and company profile were preserved: ${error.message}`,'error');return false;}
   }
-  function cancel(){if(operation)operation.controller.abort(abortError());return close({abort:false});}
+  function cancel(){return close();}
   function keydown(event){
     if(dialog.hidden)return;if(event.key==='Escape'){event.preventDefault();cancel();return;}if(event.key!=='Tab')return;
     const controls=[...dialog.querySelectorAll('button,input')].filter(node=>!node.disabled&&!node.hidden&&node.type!=='hidden'),first=controls[0],last=controls.at(-1);if(!first)return;

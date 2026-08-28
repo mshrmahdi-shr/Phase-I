@@ -17,6 +17,16 @@ function assetId(value,label='Asset ID'){
   return value;
 }
 
+function ownershipToken(value){
+  if(typeof value!=='string'||value.length<16||value.length>256||!/^[A-Za-z0-9._:-]+$/.test(value)) throw new Error('Asset ownership token must be bounded opaque text.');
+  return value;
+}
+
+function ownershipReceipt(value){
+  if(!isPlainObject(value)||Reflect.ownKeys(value).length!==2||!Object.hasOwn(value,'assetId')||!Object.hasOwn(value,'ownerToken')) throw new Error('Asset ownership receipt is invalid.');
+  return {assetId:assetId(value.assetId),ownerToken:ownershipToken(value.ownerToken)};
+}
+
 function positiveInteger(value,label){
   if(!Number.isSafeInteger(value)||value<=0) throw new Error(`${label} must be a positive whole number.`);
   return value;
@@ -209,6 +219,15 @@ export function createAssetStore({indexedDB=globalThis.indexedDB,databaseName='p
       });
     },
 
+    async addIfAbsent(value,{ownerToken}={}){
+      const asset=validateAsset(value),token=ownershipToken(ownerToken),receipt=Object.freeze({assetId:asset.metadata.id,ownerToken:token});
+      return mutate(asset.metadata.id,(transaction,watch,setResult)=>{
+        watch(transaction.objectStore(ASSET_STORE).add({id:asset.metadata.id,blob:asset.blob,ownerToken:token}));
+        watch(transaction.objectStore(METADATA_STORE).add(asset.metadata));
+        setResult(receipt);
+      });
+    },
+
     async get(id){
       assetId(id);
       const database=await openDatabase();
@@ -242,6 +261,18 @@ export function createAssetStore({indexedDB=globalThis.indexedDB,databaseName='p
             watch(assets.delete(id));
           }
           setResult(exists);
+        };
+      });
+    },
+
+    async deleteOwned(value){
+      const receipt=ownershipReceipt(value);
+      return mutate(receipt.assetId,(transaction,watch,setResult)=>{
+        const metadata=transaction.objectStore(METADATA_STORE),assets=transaction.objectStore(ASSET_STORE),request=watch(assets.get(receipt.assetId));
+        request.onsuccess=()=>{
+          const owned=request.result?.ownerToken===receipt.ownerToken;
+          if(owned){watch(metadata.delete(receipt.assetId));watch(assets.delete(receipt.assetId));}
+          setResult(owned);
         };
       });
     },

@@ -1,5 +1,6 @@
 import {restoreProject} from './core.mjs';
 import {normalizeCompanyProfile,validateCompanyProfile} from './company-profile.mjs';
+import {decodeManualImage} from './imagery/manual-image.mjs';
 
 const PACKAGE_SCHEMA_VERSION=1;
 const PACKAGE_FORMAT='phasei-project';
@@ -122,13 +123,21 @@ function checkedMetadata(value,expectedKind){
   if(!Number.isSafeInteger(metadata.width)||metadata.width<=0||!Number.isSafeInteger(metadata.height)||metadata.height<=0||metadata.width>Math.floor(MAX_PIXELS/metadata.height))fail('Asset dimensions exceed the 16 million pixel limit.');
   if(typeof metadata.sha256!=='string'||!SHA256.test(metadata.sha256))fail('Asset SHA-256 must contain 64 lowercase hexadecimal characters.');isoTimestamp(metadata.createdAt,'Asset createdAt');return {...metadata};
 }
-async function checkedAsset(value,{kind,id,width,height,signal}={}){
+async function checkedAsset(value,{kind,id,width,height,signal,decodeImage=null,decodeOptions={}}={}){
   throwIfAborted(signal);const fields=exactObject(value,ASSET_FIELDS,'Asset'),metadata=checkedMetadata(fields.metadata,kind);
   if(metadata.id!==id)fail('Asset metadata ID does not match its owning reference.');if(!(fields.blob instanceof Blob)||fields.blob.type!==metadata.mime||fields.blob.size!==metadata.size)fail('Asset Blob does not match its metadata.');
   const bytes=new Uint8Array(await fields.blob.arrayBuffer());throwIfAborted(signal);const dimensions=imageDimensions(bytes,metadata.mime);
   if(dimensions.width!==metadata.width||dimensions.height!==metadata.height)fail('Asset decoded header dimensions do not match its metadata.');
   if(width!==undefined&&(metadata.width!==width||metadata.height!==height))fail('Asset dimensions do not match the owning project reference.');
-  if(await sha256(bytes)!==metadata.sha256)fail('Asset SHA-256 hash does not match its bytes.');throwIfAborted(signal);return {metadata,blob:new Blob([bytes],{type:metadata.mime}),bytes};
+  if(await sha256(bytes)!==metadata.sha256)fail('Asset SHA-256 hash does not match its bytes.');throwIfAborted(signal);
+  const blob=new Blob([bytes],{type:metadata.mime});
+  if(decodeImage!==null){
+    if(typeof decodeImage!=='function')fail('Project package image decoder is unavailable.');
+    const decoded=await decodeImage(blob,{...decodeOptions,signal,maxBytes:MAX_ENTRY_BYTES,maxPixels:MAX_PIXELS});throwIfAborted(signal);
+    if(!decoded||!(decoded.blob instanceof Blob)||!Number.isSafeInteger(decoded.width)||!Number.isSafeInteger(decoded.height)||decoded.width!==metadata.width||decoded.height!==metadata.height)fail('Asset complete decode dimensions do not match its metadata.');
+    const decodedMime=metadata.mime==='image/tiff'?'image/png':metadata.mime;if(decoded.mime!==decodedMime||decoded.blob.type!==decodedMime)fail('Asset complete decode media type does not match its metadata.');
+  }
+  return {metadata,blob,bytes};
 }
 
 function projectReferences(project,profile){
@@ -210,18 +219,18 @@ function rawArchive(bytes){
   if(centralOffset+centralSize!==end)fail('Project package ZIP has an invalid central directory boundary.');
   const records=[],names=new Set();let offset=centralOffset,total=0;
   for(let index=0;index<count;index++){
-    if(offset+46>end||view.getUint32(offset,true)!==0x02014b50)fail('Project package ZIP has an invalid central directory record.');const madeBy=view.getUint16(offset+4,true),flags=view.getUint16(offset+8,true),method=view.getUint16(offset+10,true),compressedSize=view.getUint32(offset+20,true),declaredSize=view.getUint32(offset+24,true),nameLength=view.getUint16(offset+28,true),extraLength=view.getUint16(offset+30,true),entryComment=view.getUint16(offset+32,true),external=view.getUint32(offset+38,true),localOffset=view.getUint32(offset+42,true),next=offset+46+nameLength+extraLength+entryComment;
+    if(offset+46>end||view.getUint32(offset,true)!==0x02014b50)fail('Project package ZIP has an invalid central directory record.');const madeBy=view.getUint16(offset+4,true),versionNeeded=view.getUint16(offset+6,true),flags=view.getUint16(offset+8,true),method=view.getUint16(offset+10,true),modifiedTime=view.getUint16(offset+12,true),modifiedDate=view.getUint16(offset+14,true),crc32=view.getUint32(offset+16,true),compressedSize=view.getUint32(offset+20,true),declaredSize=view.getUint32(offset+24,true),nameLength=view.getUint16(offset+28,true),extraLength=view.getUint16(offset+30,true),entryComment=view.getUint16(offset+32,true),diskStart=view.getUint16(offset+34,true),internal=view.getUint16(offset+36,true),external=view.getUint32(offset+38,true),localOffset=view.getUint32(offset+42,true),next=offset+46+nameLength+extraLength+entryComment;
     if(next>end)fail('Project package ZIP has a truncated central directory record.');
     const nameBytes=bytes.subarray(offset+46,offset+46+nameLength),normalized=normalizedPath(decodeName(nameBytes,flags));if(names.has(normalized.key))fail(`Project package ZIP contains duplicate normalized path "${normalized.key}".`);names.add(normalized.key);
     if((flags&1)!==0)fail('Encrypted project package entries are not supported.');if((flags&~0x800)!==0)fail('Project package ZIP entry flags are unsupported.');if(method!==0&&method!==8)fail('Project package ZIP compression method is unsupported.');
-    if(extraLength||entryComment)fail('Project package ZIP entry extra fields and comments are unsupported.');
+    if(extraLength||entryComment)fail('Project package ZIP entry extra fields and comments are unsupported.');if(diskStart!==0||internal!==0)fail('Project package ZIP entry disk or internal attributes are unsupported.');
     const creator=madeBy>>>8,ordinaryDosArchive=creator===0&&external===0x20;
     if(external!==0&&!ordinaryDosArchive){const type=external>>>28;if(type===0xa)fail('Project package ZIP symlink entries are not supported.');fail(`Project package ZIP external attributes are unsupported (creator ${creator}, type ${type}).`);}
     if(compressedSize===0xffffffff||declaredSize===0xffffffff||localOffset===0xffffffff)fail('ZIP64 project package entries are not supported.');if(declaredSize>MAX_ENTRY_BYTES)fail('Project package ZIP entry size exceeds the 16 MiB limit.');
     if(compressedSize===0&&declaredSize!==0||compressedSize>0&&declaredSize/compressedSize>MAX_COMPRESSION_RATIO)fail('Project package ZIP compression ratio indicates a possible ZIP bomb.');
     if(total>MAX_TOTAL_BYTES-declaredSize)fail('Project package decompressed content exceeds the 64 MiB limit.');total+=declaredSize;
-    if(localOffset+30>centralOffset||view.getUint32(localOffset,true)!==0x04034b50)fail('Project package ZIP has an invalid local file header.');const localFlags=view.getUint16(localOffset+6,true),localMethod=view.getUint16(localOffset+8,true),localCompressed=view.getUint32(localOffset+18,true),localDeclared=view.getUint32(localOffset+22,true),localNameLength=view.getUint16(localOffset+26,true),localExtraLength=view.getUint16(localOffset+28,true);
-    if(localFlags!==flags||localMethod!==method||localCompressed!==compressedSize||localDeclared!==declaredSize||localExtraLength!==0||localNameLength!==nameLength)fail('Project package ZIP local and central records do not match.');
+    if(localOffset+30>centralOffset||view.getUint32(localOffset,true)!==0x04034b50)fail('Project package ZIP has an invalid local file header.');const localVersionNeeded=view.getUint16(localOffset+4,true),localFlags=view.getUint16(localOffset+6,true),localMethod=view.getUint16(localOffset+8,true),localModifiedTime=view.getUint16(localOffset+10,true),localModifiedDate=view.getUint16(localOffset+12,true),localCrc32=view.getUint32(localOffset+14,true),localCompressed=view.getUint32(localOffset+18,true),localDeclared=view.getUint32(localOffset+22,true),localNameLength=view.getUint16(localOffset+26,true),localExtraLength=view.getUint16(localOffset+28,true);
+    if(localVersionNeeded!==versionNeeded||localFlags!==flags||localMethod!==method||localModifiedTime!==modifiedTime||localModifiedDate!==modifiedDate||localCrc32!==crc32||localCompressed!==compressedSize||localDeclared!==declaredSize||localExtraLength!==0||localNameLength!==nameLength)fail('Project package ZIP local and central security-relevant header records do not match.');
     const localName=bytes.subarray(localOffset+30,localOffset+30+localNameLength);if(localName.length!==nameBytes.length||localName.some((byte,position)=>byte!==nameBytes[position]))fail('Project package ZIP local and central paths do not match.');
     const dataStart=localOffset+30+localNameLength,dataEnd=dataStart+compressedSize;if(dataEnd>centralOffset)fail('Project package ZIP entry data escapes its declared boundary.');
     records.push({...normalized,flags,method,compressedSize,declaredSize,localOffset,dataStart,dataEnd,index});offset=next;
@@ -259,7 +268,10 @@ function checkedEntry(value){
 }
 function checkedManifest(value,records){
   const fields=exactObject(value,MANIFEST_FIELDS,'Project package manifest');if(fields.schemaVersion!==PACKAGE_SCHEMA_VERSION||fields.format!==PACKAGE_FORMAT)fail('Unsupported project package schema version or format.');if(!SAFE_ID.test(fields.projectId)||!SAFE_ID.test(fields.companyProfileId))fail('Project package manifest owner IDs are invalid.');
-  if(!Array.isArray(fields.entries)||fields.entries.length<3||fields.entries.length>MAX_ENTRIES-1)fail('Project package manifest entries are invalid.');const entries=fields.entries.map(checkedEntry),paths=new Set();for(const entry of entries){if(paths.has(entry.path.toLocaleLowerCase('en-US')))fail('Project package manifest paths are duplicated.');paths.add(entry.path.toLocaleLowerCase('en-US'));}
+  if(!Array.isArray(fields.entries)||fields.entries.length<4||fields.entries.length>MAX_ENTRIES-1)fail('Project package manifest entries are invalid.');const entries=fields.entries.map(checkedEntry),paths=new Set();for(const entry of entries){if(paths.has(entry.path.toLocaleLowerCase('en-US')))fail('Project package manifest paths are duplicated.');paths.add(entry.path.toLocaleLowerCase('en-US'));}
+  const [projectEntry,profileEntry]=entries,readmeEntry=entries.at(-1),assetEntries=entries.slice(2,-1);
+  if(projectEntry.path!=='project.json'||projectEntry.kind!=='project-json'||projectEntry.assetId!==null||profileEntry.path!=='company-profile.json'||profileEntry.kind!=='company-profile-json'||profileEntry.assetId!==null||readmeEntry.path!=='README.txt'||readmeEntry.kind!=='readme'||readmeEntry.assetId!==null)fail('Project package manifest must contain exactly one project, company profile, and README in their required paths and roles.');
+  if(assetEntries.some(entry=>entry.assetId===null||!entry.path.startsWith('assets/')||!['company-logo','historical-image'].includes(entry.kind)))fail('Project package manifest contains an unexpected extra, nested archive, metadata role, or asset path.');
   const centralPaths=records.map(record=>record.path);if(centralPaths[0]!=='manifest.json'||!equalValue(centralPaths.slice(1),entries.map(entry=>entry.path)))fail('Project package manifest has missing, extra, or out-of-order archive entries.');return {schemaVersion:fields.schemaVersion,format:fields.format,projectId:fields.projectId,companyProfileId:fields.companyProfileId,entries};
 }
 function expectedMetadataEntry(entry,{kind,path,mediaType,owner,referenceIds,policy,evidence}){
@@ -267,7 +279,7 @@ function expectedMetadataEntry(entry,{kind,path,mediaType,owner,referenceIds,pol
 }
 function entryMetadata(entry){return {id:entry.assetId,kind:entry.kind,mime:entry.mediaType,size:entry.size,width:entry.width,height:entry.height,sha256:entry.sha256,createdAt:entry.createdAt};}
 
-export async function inspectProjectPackage(file,{Zip=globalThis.JSZip,signal}={}){
+export async function inspectProjectPackage(file,{Zip=globalThis.JSZip,signal,decodeImage=decodeManualImage,decodeOptions={}}={}){
   const Constructor=zipConstructor(Zip),source=await readArchiveSource(file,signal),records=rawArchive(source);throwIfAborted(signal);let archive;
   try{archive=await Constructor.loadAsync(source,{createFolders:false,checkCRC32:true});}catch(error){throw new Error('Project package is not a valid ZIP archive or has a CRC mismatch.',{cause:error});}
   const items=attachEntries(archive,records),byPath=new Map(items.map(item=>[item.path,item])),budget={value:0};
@@ -280,12 +292,12 @@ export async function inspectProjectPackage(file,{Zip=globalThis.JSZip,signal}={
   expectedMetadataEntry(projectEntry,{kind:'project-json',path:'project.json',mediaType:'application/json',owner:{type:'project',id:project.id},referenceIds:[project.id],policy:'metadata',evidence:'required-project-data'});
   expectedMetadataEntry(profileEntry,{kind:'company-profile-json',path:'company-profile.json',mediaType:'application/json',owner:{type:'company-profile',id:profile.id},referenceIds:[profile.id],policy:'metadata',evidence:'required-company-profile'});
   expectedMetadataEntry(readmeEntry,{kind:'readme',path:'README.txt',mediaType:'text/plain; charset=utf-8',owner:{type:'project',id:project.id},referenceIds:[project.id],policy:'metadata',evidence:'import-instructions'});
-  new TextDecoder('utf-8',{fatal:true}).decode(payload.get(readmeEntry.path));const references=projectReferences(project,profile),assetEntries=manifest.entries.filter(entry=>entry.assetId!==null);
-  if(assetEntries.length!==references.size)fail('Project package manifest has missing or extra asset entries.');const assets=[];
+  new TextDecoder('utf-8',{fatal:true}).decode(payload.get(readmeEntry.path));const references=projectReferences(project,profile),assetEntries=manifest.entries.filter(entry=>entry.assetId!==null),assetIds=assetEntries.map(entry=>entry.assetId);
+  if(assetEntries.length!==references.size||new Set(assetIds).size!==assetIds.length||[...references.keys()].some(id=>!assetIds.includes(id)))fail('Project package manifest has missing, extra, or duplicate asset entries.');const assets=[];
   for(const entry of assetEntries){
     const reference=references.get(entry.assetId);if(!reference)fail(`Manifest asset "${entry.assetId}" is not owned by the project or company profile.`);const extension=IMAGE_EXTENSIONS.get(entry.mediaType),expectedPath=`assets/${entry.assetId}.${extension}`;
     if(entry.kind!==reference.kind||entry.path!==expectedPath||!equalValue(entry.owner,reference.owner)||!equalValue(entry.referenceIds,reference.referenceIds)||entry.redistribution.policy!=='exportable'||entry.redistribution.evidence!==reference.evidence)fail(`Manifest asset "${entry.assetId}" has the wrong kind, media, ownership, reference, or redistribution evidence.`);
-    const metadata=entryMetadata(entry),blob=new Blob([payload.get(entry.path)],{type:entry.mediaType}),asset=await checkedAsset({metadata,blob},{...reference,id:entry.assetId,signal});assets.push({metadata:asset.metadata,blob:asset.blob});
+    const metadata=entryMetadata(entry),blob=new Blob([payload.get(entry.path)],{type:entry.mediaType}),asset=await checkedAsset({metadata,blob},{...reference,id:entry.assetId,signal,decodeImage,decodeOptions});assets.push({metadata:asset.metadata,blob:asset.blob});
   }
   assets.sort((left,right)=>{if(left.metadata.id===profile.logoAssetId)return -1;if(right.metadata.id===profile.logoAssetId)return 1;return left.metadata.id.localeCompare(right.metadata.id,'en');});
   const candidate=deepFreeze({schemaVersion:PACKAGE_SCHEMA_VERSION,project,companyProfile:profile,assets,manifest,warnings:[]});INSPECTED_CANDIDATES.add(candidate);return candidate;
@@ -297,35 +309,51 @@ function referencedAssetIds(state){
 async function sameStoredAsset(existing,expected,signal){
   try{const checked=await checkedAsset(existing,{kind:expected.metadata.kind,id:expected.metadata.id,width:expected.metadata.width,height:expected.metadata.height,signal});return equalValue(checked.metadata,expected.metadata)&&await sha256(await checked.blob.arrayBuffer())===expected.metadata.sha256;}catch(error){if(error?.name==='AbortError')throw error;return false;}
 }
+function matchingOwnershipReceipt(value,pending){
+  try{
+    const receipt=exactObject(value,['assetId','ownerToken'],'Asset ownership receipt');
+    if(receipt.assetId!==pending.asset.metadata.id||receipt.ownerToken!==pending.ownerToken)return null;
+    return Object.freeze({assetId:receipt.assetId,ownerToken:receipt.ownerToken});
+  }catch{return null;}
+}
 async function cleanupAdded(added,{assetStore,readState,isAssetReferenced,signal}){
-  const errors=[];let state=null;try{state=await readState?.();}catch(error){errors.push(error);}const referenced=referencedAssetIds(state);
-  for(const asset of [...added].reverse()){
+  const errors=[];let state=null;try{state=await readState?.();}catch(error){errors.push(error);return errors;}const referenced=referencedAssetIds(state);
+  for(const owned of [...added].reverse()){
     try{
-      if(referenced.has(asset.metadata.id)||await isAssetReferenced?.(asset.metadata.id,state))continue;const current=await assetStore.get(asset.metadata.id);if(!current||!await sameStoredAsset(current,asset,signal))continue;await assetStore.delete(asset.metadata.id);
+      const id=owned.asset.metadata.id;if(referenced.has(id)||await isAssetReferenced?.(id,state))continue;await assetStore.deleteOwned(owned.receipt);
     }catch(error){errors.push(error);}
   }
   return errors;
 }
 
 export async function commitProjectPackage(candidate,{assetStore,signal,readState=async()=>null,persistState=null,initialize=null,isAssetReferenced=async()=>false}={}){
-  if(!candidate||!INSPECTED_CANDIDATES.has(candidate))fail('Project package candidate must come directly from mutation-free inspection.');if(!assetStore||typeof assetStore.get!=='function'||typeof assetStore.put!=='function'||typeof assetStore.delete!=='function')fail('An asset store with get, put, and delete support is required.');
-  throwIfAborted(signal);const added=[],reused=[],next={project:structuredClone(candidate.project),companyProfile:structuredClone(candidate.companyProfile)},errors=[];let pending=null,previousAtPublish=null,persistAttempted=false,initializeAttempted=false;
+  if(!candidate||!INSPECTED_CANDIDATES.has(candidate))fail('Project package candidate must come directly from mutation-free inspection.');if(!assetStore||typeof assetStore.get!=='function'||typeof assetStore.addIfAbsent!=='function'||typeof assetStore.deleteOwned!=='function')fail('An asset store with get, atomic add-if-absent, and receipt-scoped delete support is required.');
+  throwIfAborted(signal);const added=[],reused=[],next={project:structuredClone(candidate.project),companyProfile:structuredClone(candidate.companyProfile)},errors=[],transactionToken=globalThis.crypto.randomUUID();let pending=null,previousAtPublish=null,persistAttempted=false,initializeAttempted=false;
   try{
     for(const asset of candidate.assets){
       throwIfAborted(signal);const existing=await assetStore.get(asset.metadata.id);throwIfAborted(signal);
       if(existing){if(!await sameStoredAsset(existing,asset,signal))fail(`Asset ID collision: "${asset.metadata.id}" already exists with different bytes or ownership.`);reused.push(asset.metadata.id);continue;}
-      pending=asset;await assetStore.put({metadata:{...asset.metadata},blob:asset.blob});added.push(asset);pending=null;throwIfAborted(signal);
+      pending={asset,ownerToken:`${transactionToken}:${asset.metadata.id}`};
+      try{
+        const value=await assetStore.addIfAbsent({metadata:{...asset.metadata},blob:asset.blob},{ownerToken:pending.ownerToken}),receipt=matchingOwnershipReceipt(value,pending);
+        if(!receipt)fail('Asset store returned an invalid ownership receipt.');added.push({asset,receipt});pending=null;
+      }catch(error){const receipt=matchingOwnershipReceipt(error?.ownershipReceipt,pending);if(receipt)added.push({asset,receipt});pending=null;throw error;}
+      throwIfAborted(signal);
     }
     previousAtPublish=await readState();throwIfAborted(signal);
-    if(persistState){persistAttempted=true;const saved=await persistState(structuredClone(next),{phase:'commit',previous:structuredClone(previousAtPublish)});if(saved===false)fail('Project/profile metadata persistence failed.');}
-    throwIfAborted(signal);if(initialize){initializeAttempted=true;const initialized=await initialize(structuredClone(next),{phase:'commit'});if(initialized===false)fail('Imported project UI initialization failed.');}throwIfAborted(signal);
-    return {project:next.project,companyProfile:next.companyProfile,addedAssetIds:added.map(asset=>asset.metadata.id),reusedAssetIds:reused};
+    if(persistState){persistAttempted=true;const saved=await persistState(structuredClone(next),{phase:'commit',previous:structuredClone(previousAtPublish),transactionToken});if(saved===false)fail('Project/profile metadata persistence failed.');}
+    throwIfAborted(signal);if(initialize){initializeAttempted=true;const initialized=await initialize(structuredClone(next),{phase:'commit',transactionToken});if(initialized===false)fail('Imported project UI initialization failed.');}throwIfAborted(signal);
+    return {project:next.project,companyProfile:next.companyProfile,addedAssetIds:added.map(value=>value.asset.metadata.id),reusedAssetIds:reused};
   }catch(error){
-    if(pending){try{const current=await assetStore.get(pending.metadata.id);if(current&&await sameStoredAsset(current,pending,null))added.push(pending);}catch(cleanupError){errors.push(cleanupError);}pending=null;}
+    let rollbackOwned=!persistAttempted;
     if(persistAttempted&&persistState){
-      try{const current=await readState();const restored=await persistState(structuredClone(previousAtPublish),{phase:'rollback',expected:structuredClone(next),current:structuredClone(current)});if(restored===false)fail('Project/profile metadata rollback failed.');}catch(rollbackError){errors.push(rollbackError);}
+      try{
+        const current=await readState();
+        if(!equalValue(current,next))errors.push(new Error('Project package rollback conflict: project or company state changed after publication and was preserved.'));
+        else{const restored=await persistState(structuredClone(previousAtPublish),{phase:'rollback',expected:structuredClone(next),current:structuredClone(current),transactionToken});if(restored===false)fail('Project/profile metadata rollback failed.');rollbackOwned=true;}
+      }catch(rollbackError){errors.push(rollbackError);}
     }
-    if(initializeAttempted&&initialize&&previousAtPublish){try{const restored=await initialize(structuredClone(previousAtPublish),{phase:'rollback'});if(restored===false)fail('Restored project UI initialization failed.');}catch(initializeError){errors.push(initializeError);}}
+    if(initializeAttempted&&initialize&&previousAtPublish&&rollbackOwned){try{const restored=await initialize(structuredClone(previousAtPublish),{phase:'rollback',expected:structuredClone(next),transactionToken});if(restored===false)fail('Restored project UI initialization failed.');}catch(initializeError){errors.push(initializeError);}}
     errors.push(...await cleanupAdded(added,{assetStore,readState,isAssetReferenced,signal:null}));if(errors.length)throw new AggregateError([error,...errors],error.message,{cause:error});throw error;
   }
 }

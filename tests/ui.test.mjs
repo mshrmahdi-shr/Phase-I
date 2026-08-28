@@ -46,6 +46,8 @@ test('app wires compensated project-package persistence and keeps JSON import/ex
   assert.match(source,/packageUI=createProjectPackageUI\(\{document,assetStore,Zip:JSZip/);
   assert.match(source,/readState:readPackageState,persistState:persistPackageState,initialize:initializePackageState/);
   assert.match(source,/function persistPackageState\(/);assert.match(source,/function initializePackageState\(/);
+  assert.match(source,/packagePersistenceToken/);assert.match(source,/context\.transactionToken/);
+  assert.match(source,/rollback conflict/i);assert.match(source,/samePackageState/);
   assert.match(source,/Legacy JSON/);assert.match(source,/\.legacy\.json/);
 });
 

@@ -52,6 +52,24 @@ test('put rejects duplicate IDs without replacing the current asset',async()=>{
   assert.equal(await (await repository.get('logo-1')).blob.text(),'old');
 });
 
+test('addIfAbsent returns an ownership receipt and deleteOwned only removes that exact write',async()=>{
+  const repository=store(),logo=asset('logo-owned'),ownerToken='operation-11111111-1111-4111-8111-111111111111';
+  const receipt=await repository.addIfAbsent(logo,{ownerToken});
+  assert.deepEqual(receipt,{assetId:'logo-owned',ownerToken});
+  assert.equal(await repository.deleteOwned({assetId:'logo-owned',ownerToken:'operation-22222222-2222-4222-8222-222222222222'}),false);
+  assert.equal((await repository.get('logo-owned')).metadata.id,'logo-owned');
+  assert.equal(await repository.deleteOwned(receipt),true);
+  assert.equal(await repository.get('logo-owned'),null);
+});
+
+test('addIfAbsent collision returns no ownership receipt and preserves the concurrent asset',async()=>{
+  const repository=store(),existing=asset('logo-race',{contents:'concurrent'});
+  await repository.put(existing);
+  let error;try{await repository.addIfAbsent(asset('logo-race',{contents:'import'}),{ownerToken:'operation-33333333-3333-4333-8333-333333333333'});}catch(value){error=value;}
+  assert.match(error?.message??'',/already exists/i);assert.equal(Object.hasOwn(error??{},'ownershipReceipt'),false);
+  assert.equal(await (await repository.get('logo-race')).blob.text(),'concurrent');
+});
+
 test('invalid metadata and Blobs are rejected before IndexedDB is opened',async()=>{
   let opens=0;
   const factory=new IDBFactory();

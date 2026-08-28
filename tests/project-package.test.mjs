@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import JSZip from 'jszip';
 import {createProject} from '../src/core.mjs';
 import {projectWebMercator,unprojectWebMercator} from '../src/imagery/placement.mjs';
+import {decodeManualImage} from '../src/imagery/manual-image.mjs';
 import {
   commitProjectPackage,
   exportProjectPackage,
@@ -29,6 +30,10 @@ function a3Bounds(location,halfWidth=40){
 async function sha256(bytes){
   return Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');
 }
+function canonical(value){if(Array.isArray(value))return value.map(canonical);if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])]));return value;}
+function canonicalJson(value){return JSON.stringify(canonical(value));}
+async function decodePackageImage(file,options){return decodeManualImage(file,{...options,decodeBitmap:async()=>({width:3,height:2,close(){}})});}
+function inspectPackage(file,options={}){return inspectProjectPackage(file,{Zip:JSZip,decodeImage:decodePackageImage,...options});}
 
 function companyProfile(){
   return {schemaVersion:1,id:'company-acme',companyName:'Acme Environmental',address:'22 King Street',phone:'416-555-0110',
@@ -66,11 +71,13 @@ function projectFixture(){
 }
 
 function memoryStore(initial=[]){
-  const values=new Map(initial.map(value=>[value.metadata.id,value])),operations=[];
-  return {values,operations,
+  const values=new Map(initial.map(value=>[value.metadata.id,value])),owners=new Map(),operations=[];
+  return {values,owners,operations,
     async get(id){operations.push(`get:${id}`);return values.get(id)||null;},
     async put(value){operations.push(`put:${value.metadata.id}`);if(values.has(value.metadata.id))throw Error(`duplicate ${value.metadata.id}`);values.set(value.metadata.id,value);},
+    async addIfAbsent(value,{ownerToken}){operations.push(`add:${value.metadata.id}`);if(values.has(value.metadata.id))throw Error(`duplicate ${value.metadata.id}`);values.set(value.metadata.id,value);owners.set(value.metadata.id,ownerToken);return Object.freeze({assetId:value.metadata.id,ownerToken});},
     async delete(id){operations.push(`delete:${id}`);return values.delete(id);},
+    async deleteOwned(receipt){operations.push(`delete-owned:${receipt.assetId}`);if(owners.get(receipt.assetId)!==receipt.ownerToken)return false;owners.delete(receipt.assetId);return values.delete(receipt.assetId);},
     async list(){operations.push('list');return [...values.values()];}
   };
 }
@@ -123,13 +130,22 @@ async function patchRecord(blob,path,patch){
   const bytes=new Uint8Array(await blob.arrayBuffer()),directory=centralDirectory(bytes),record=directory.records.find(value=>value.name===path);assert.ok(record);patch(directory,record);return new Blob([bytes],{type:'application/zip'});
 }
 
+async function addManifestDeclaredMetadata(blob,{path,kind,mediaType,bytes,evidence}){
+  return regenerate(blob,async zip=>{
+    const manifest=JSON.parse(await zip.file('manifest.json').async('text')),project=JSON.parse(await zip.file('project.json').async('text'));
+    zip.file(path,bytes);manifest.entries.push({assetId:null,createdAt:null,height:null,kind,mediaType,owner:{id:project.id,type:'project'},path,
+      redistribution:{evidence,policy:'metadata'},referenceIds:[project.id],sha256:await sha256(bytes),size:bytes.byteLength,width:null});
+    zip.file('manifest.json',canonicalJson(manifest));
+  });
+}
+
 test('exports a deterministic versioned package and round-trips two manual images, branding, and metadata-only official imagery',async()=>{
   const value=await fixture(),first=await exportProjectPackage({project:value.project,companyProfile:value.profile,assetStore:value.store,Zip:JSZip});
   const second=await exportProjectPackage({project:value.project,companyProfile:value.profile,assetStore:value.store,Zip:JSZip});
   assert.equal(first.filename,'ab-12345.phasei-project.zip');assert.deepEqual(new Uint8Array(await first.blob.arrayBuffer()),new Uint8Array(await second.blob.arrayBuffer()));
   assert.deepEqual(value.store.operations.filter(entry=>entry==='list'),[],'export reads referenced assets directly instead of enumerating unrelated assets');
   assert.equal(value.store.operations.includes('get:orphan-company-logo'),false);
-  const candidate=await inspectProjectPackage(first.blob,{Zip:JSZip});
+  const candidate=await inspectPackage(first.blob,{Zip:JSZip});
   assert.equal(candidate.schemaVersion,1);assert.equal(candidate.project.historical.length,3);assert.equal(candidate.companyProfile.companyName,'Acme Environmental');
   assert.deepEqual(candidate.project.companyProfileSnapshot,candidate.companyProfile);assert.deepEqual(candidate.assets.map(value=>value.metadata.id),['company-logo-acme',IDS.firstAsset,IDS.secondAsset]);
   const archive=await JSZip.loadAsync(await first.blob.arrayBuffer()),manifest=JSON.parse(await archive.file('manifest.json').async('text'));
@@ -156,7 +172,7 @@ test('export fails closed for missing, foreign-kind, mismatched-hash, unpermitte
 
 test('inspection is mutation-free and rejects extra, missing, tampered, wrong-kind, wrong-media, nested, and trust-upgraded contents',async()=>{
   const {output}=await exported();let mutations=0;const trapStore={put(){mutations++;},delete(){mutations++;}};
-  const clean=await inspectProjectPackage(output.blob,{Zip:JSZip,assetStore:trapStore});assert.equal(mutations,0);assert.equal(clean.assets.length,3);
+  const clean=await inspectPackage(output.blob,{Zip:JSZip,assetStore:trapStore});assert.equal(mutations,0);assert.equal(clean.assets.length,3);
   const adversaries=[
     await regenerate(output.blob,zip=>zip.file('unexpected.js','alert(1)')),
     await regenerate(output.blob,zip=>zip.remove('README.txt')),
@@ -168,45 +184,86 @@ test('inspection is mutation-free and rejects extra, missing, tampered, wrong-ki
     await regenerate(output.blob,async zip=>{const manifest=JSON.parse(await zip.file('manifest.json').async('text'));const entry=manifest.entries.find(value=>value.assetId===IDS.firstAsset);entry.referenceIds=[IDS.officialItem];zip.file('manifest.json',JSON.stringify(manifest));}),
     await regenerate(output.blob,zip=>zip.file(`assets/${IDS.firstAsset}.zip`,new Uint8Array([0x50,0x4b,3,4])))
   ];
-  for(const file of adversaries)await assert.rejects(()=>inspectProjectPackage(file,{Zip:JSZip}),/unexpected|missing|hash|kind|media|redistribution|policy|reference|archive|manifest|project/i);
+  for(const file of adversaries)await assert.rejects(()=>inspectPackage(file,{Zip:JSZip}),/unexpected|missing|hash|kind|media|redistribution|policy|reference|archive|manifest|project/i);
   assert.equal(mutations,0);
+});
+
+test('inspection rejects manifest-declared extra metadata, duplicate roles, and nested archives',async()=>{
+  const {output}=await exported(),nested=new Uint8Array([0x50,0x4b,0x03,0x04,0,0,0,0]);
+  const adversaries=[
+    await addManifestDeclaredMetadata(output.blob,{path:'nested.zip',kind:'readme',mediaType:'application/zip',bytes:nested,evidence:'import-instructions'}),
+    await addManifestDeclaredMetadata(output.blob,{path:'second-readme.txt',kind:'readme',mediaType:'text/plain; charset=utf-8',bytes:new TextEncoder().encode('extra'),evidence:'import-instructions'}),
+    await addManifestDeclaredMetadata(output.blob,{path:'project-copy.json',kind:'project-json',mediaType:'application/json',bytes:new TextEncoder().encode('{}'),evidence:'required-project-data'}),
+    await regenerate(output.blob,async zip=>{const manifest=JSON.parse(await zip.file('manifest.json').async('text')),source=manifest.entries.find(value=>value.assetId===IDS.firstAsset),duplicate=structuredClone(source);duplicate.path='assets/duplicate-role.png';zip.file(duplicate.path,await zip.file(source.path).async('uint8array'),{createFolders:false});manifest.entries.splice(-1,0,duplicate);zip.file('manifest.json',canonicalJson(manifest));})
+  ];
+  for(const file of adversaries)await assert.rejects(()=>inspectPackage(file,{Zip:JSZip}),/extra|exact|role|cardinality|unexpected|nested|archive|manifest/i);
+});
+
+test('inspection completely validates image bytes instead of trusting a matching header, hash, and dimensions',async()=>{
+  const {output}=await exported(),forgedBytes=new Uint8Array(24);forgedBytes.set([137,80,78,71,13,10,26,10]);forgedBytes.set([73,72,68,82],12);
+  new DataView(forgedBytes.buffer).setUint32(16,3);new DataView(forgedBytes.buffer).setUint32(20,2);
+  const forged=await regenerate(output.blob,async zip=>{
+    const manifest=JSON.parse(await zip.file('manifest.json').async('text')),entry=manifest.entries.find(value=>value.assetId===IDS.firstAsset);
+    zip.file(entry.path,forgedBytes,{createFolders:false});entry.size=forgedBytes.byteLength;entry.sha256=await sha256(forgedBytes);zip.file('manifest.json',canonicalJson(manifest));
+  });
+  const decodedSizes=[];
+  await assert.rejects(()=>inspectPackage(forged,{Zip:JSZip,decodeImage:(file,options)=>{decodedSizes.push(file.size);return decodeManualImage(file,{...options,decodeBitmap:async()=>({width:3,height:2,close(){}})});}}),/PNG|decode|image data|structure|CRC/i);
+  assert.ok(decodedSizes.includes(forgedBytes.byteLength),'the forged image reaches the bounded complete decoder');
 });
 
 test('raw archive preflight rejects traversal, absolute/backslash/NUL paths, normalized duplicates, symlinks, encryption, unsupported methods, duplicate records, size abuse, and compression bombs',async()=>{
   const {output}=await exported();
   const pathCases=['../project.json','/project.json','C:/project.json','folder\\project.json','bad\u0000name','ＭＡＮＩＦＥＳＴ.json'];
-  for(const path of pathCases){const file=await regenerate(output.blob,zip=>zip.file(path,'x'));await assert.rejects(()=>inspectProjectPackage(file,{Zip:JSZip}),/path|absolute|backslash|NUL|normalized|unexpected|duplicate/i,path);}
+  for(const path of pathCases){const file=await regenerate(output.blob,zip=>zip.file(path,'x'));await assert.rejects(()=>inspectPackage(file,{Zip:JSZip}),/path|absolute|backslash|NUL|normalized|unexpected|duplicate/i,path);}
   const caseDuplicate=await regenerate(output.blob,zip=>zip.file('MANIFEST.JSON','{}'));
-  await assert.rejects(()=>inspectProjectPackage(caseDuplicate,{Zip:JSZip}),/duplicate normalized path/i);
+  await assert.rejects(()=>inspectPackage(caseDuplicate,{Zip:JSZip}),/duplicate normalized path/i);
   const duplicate=await duplicateCentralRecord(output.blob,'project.json');
-  await assert.rejects(()=>inspectProjectPackage(duplicate,{Zip:JSZip}),/duplicate normalized path|central directory/i);
+  await assert.rejects(()=>inspectPackage(duplicate,{Zip:JSZip}),/duplicate normalized path|central directory/i);
   const symlink=await patchRecord(output.blob,'project.json',({view},record)=>{view.setUint16(record.offset+4,0x031e,true);view.setUint32(record.offset+38,0xa1ff0000,true);});
-  await assert.rejects(()=>inspectProjectPackage(symlink,{Zip:JSZip}),/symlink|external attribute/i);
+  await assert.rejects(()=>inspectPackage(symlink,{Zip:JSZip}),/symlink|external attribute/i);
   const encrypted=await patchRecord(output.blob,'project.json',({view},record)=>{view.setUint16(record.offset+8,view.getUint16(record.offset+8,true)|1,true);view.setUint16(record.localOffset+6,view.getUint16(record.localOffset+6,true)|1,true);});
-  await assert.rejects(()=>inspectProjectPackage(encrypted,{Zip:JSZip}),/encrypted/i);
+  await assert.rejects(()=>inspectPackage(encrypted,{Zip:JSZip}),/encrypted/i);
   const method=await patchRecord(output.blob,'project.json',({view},record)=>{view.setUint16(record.offset+10,99,true);view.setUint16(record.localOffset+8,99,true);});
-  await assert.rejects(()=>inspectProjectPackage(method,{Zip:JSZip}),/compression|unsupported/i);
+  await assert.rejects(()=>inspectPackage(method,{Zip:JSZip}),/compression|unsupported/i);
   const oversized=await patchRecord(output.blob,'project.json',({view},record)=>view.setUint32(record.offset+24,70*1024*1024,true));
-  await assert.rejects(()=>inspectProjectPackage(oversized,{Zip:JSZip}),/size|decompressed|limit/i);
+  await assert.rejects(()=>inspectPackage(oversized,{Zip:JSZip}),/size|decompressed|limit/i);
   const bomb=await regenerate(output.blob,zip=>zip.file('README.txt','A'.repeat(2_000_000)),{compression:'DEFLATE'});
-  await assert.rejects(()=>inspectProjectPackage(bomb,{Zip:JSZip}),/compression ratio|bomb/i);
+  await assert.rejects(()=>inspectPackage(bomb,{Zip:JSZip}),/compression ratio|bomb/i);
+});
+
+test('raw archive preflight rejects every security-relevant local and central header disagreement',async()=>{
+  const {output}=await exported(),mutations=[
+    ['version needed',(view,record)=>view.setUint16(record.localOffset+4,view.getUint16(record.localOffset+4,true)+1,true)],
+    ['flags',(view,record)=>view.setUint16(record.localOffset+6,view.getUint16(record.localOffset+6,true)^0x800,true)],
+    ['method',(view,record)=>view.setUint16(record.localOffset+8,view.getUint16(record.localOffset+8,true)===0?8:0,true)],
+    ['modification time',(view,record)=>view.setUint16(record.localOffset+10,view.getUint16(record.localOffset+10,true)^1,true)],
+    ['modification date',(view,record)=>view.setUint16(record.localOffset+12,view.getUint16(record.localOffset+12,true)^1,true)],
+    ['CRC32',(view,record)=>view.setUint32(record.localOffset+14,view.getUint32(record.localOffset+14,true)^1,true)],
+    ['compressed size',(view,record)=>view.setUint32(record.localOffset+18,view.getUint32(record.localOffset+18,true)+1,true)],
+    ['uncompressed size',(view,record)=>view.setUint32(record.localOffset+22,view.getUint32(record.localOffset+22,true)+1,true)],
+    ['name length',(view,record)=>view.setUint16(record.localOffset+26,view.getUint16(record.localOffset+26,true)-1,true)],
+    ['extra length',(view,record)=>view.setUint16(record.localOffset+28,1,true)]
+  ];
+  for(const [label,mutate] of mutations){const file=await patchRecord(output.blob,'project.json',({view},record)=>mutate(view,record));await assert.rejects(()=>inspectPackage(file,{Zip:JSZip}),/local and central|header|record|match|boundary/i,label);}
+  const diskStart=await patchRecord(output.blob,'project.json',({view},record)=>view.setUint16(record.offset+34,1,true));await assert.rejects(()=>inspectPackage(diskStart,{Zip:JSZip}),/disk|header|unsupported/i);
+  const internalAttributes=await patchRecord(output.blob,'project.json',({view},record)=>view.setUint16(record.offset+36,1,true));await assert.rejects(()=>inspectPackage(internalAttributes,{Zip:JSZip}),/attribute|header|unsupported/i);
 });
 
 test('commit stages assets, reuses byte-identical pre-existing records, and publishes state only after every asset is durable',async()=>{
-  const {output}=await exported(),candidate=await inspectProjectPackage(output.blob,{Zip:JSZip}),preExisting=candidate.assets[0];
+  const {output}=await exported(),candidate=await inspectPackage(output.blob,{Zip:JSZip}),preExisting=candidate.assets[0];
   const store=memoryStore([preExisting]),previous={project:{id:'current'},companyProfile:{id:'current-company'}},events=[];let state=structuredClone(previous);
-  const result=await commitProjectPackage(candidate,{assetStore:store,readState:async()=>structuredClone(state),persistState:async(next,context)=>{events.push({kind:'persist',context});state=structuredClone(next);},initialize:async next=>events.push({kind:'initialize',id:next.project.id})});
+  const result=await commitProjectPackage(candidate,{assetStore:store,readState:async()=>structuredClone(state),persistState:async(next,context)=>{assert.deepEqual(store.operations.filter(value=>value.startsWith('add:')),[`add:${IDS.firstAsset}`,`add:${IDS.secondAsset}`],'all atomic adds precede persistence');events.push({kind:'persist',context});state=structuredClone(next);},initialize:async next=>events.push({kind:'initialize',id:next.project.id})});
   assert.deepEqual(result.reusedAssetIds,[preExisting.metadata.id]);assert.deepEqual(result.addedAssetIds,[IDS.firstAsset,IDS.secondAsset]);
-  assert.deepEqual(store.operations.filter(value=>value.startsWith('put:')),[`put:${IDS.firstAsset}`,`put:${IDS.secondAsset}`]);
+  assert.deepEqual(store.operations.filter(value=>value.startsWith('add:')),[`add:${IDS.firstAsset}`,`add:${IDS.secondAsset}`]);
   assert.equal(state.project.id,'project-historical-1');assert.equal(state.companyProfile.logoAssetId,'company-logo-acme');
-  assert.equal(events.at(-1).kind,'initialize');assert.ok(store.operations.lastIndexOf(`put:${IDS.secondAsset}`)<events.findIndex(value=>value.kind==='persist')+store.operations.length,'all puts precede persistence');
+  assert.equal(events.at(-1).kind,'initialize');
 });
 
 test('commit compensates asset, persistence, initialization, cancellation, and stale-state failures without deleting pre-existing or shared assets',async()=>{
-  const {output}=await exported(),candidate=await inspectProjectPackage(output.blob,{Zip:JSZip}),old={project:{id:'old-project'},companyProfile:{id:'old-company',logoAssetId:'shared-old'}};
+  const {output}=await exported(),candidate=await inspectPackage(output.blob,{Zip:JSZip}),old={project:{id:'old-project'},companyProfile:{id:'old-company',logoAssetId:'shared-old'}};
   for(const phase of ['asset','persist','initialize','abort']){
     const shared=candidate.assets[0],store=memoryStore([shared,{metadata:{...shared.metadata,id:'shared-old'},blob:shared.blob}]);let state=structuredClone(old),puts=0,persists=0,controller=new AbortController(),initialized=[];
-    const originalPut=store.put.bind(store);store.put=async value=>{puts++;if(phase==='asset'&&puts===2)throw Error('second asset write failed');await originalPut(value);if(phase==='abort'&&puts===1)controller.abort(new DOMException('Cancelled','AbortError'));};
+    const originalAdd=store.addIfAbsent.bind(store);store.addIfAbsent=async(value,options)=>{puts++;if(phase==='asset'&&puts===2)throw Error('second asset write failed');const receipt=await originalAdd(value,options);if(phase==='abort'&&puts===1)controller.abort(new DOMException('Cancelled','AbortError'));return receipt;};
     await assert.rejects(()=>commitProjectPackage(candidate,{assetStore:store,signal:controller.signal,readState:async()=>structuredClone(state),
       persistState:async next=>{persists++;if(phase==='persist'&&persists===1)throw Error('metadata persistence failed');state=structuredClone(next);},
       initialize:async(next,context)=>{initialized.push({id:next.project.id,phase:context?.phase??'commit'});if(phase==='initialize'&&context?.phase!=='rollback')throw Error('UI initialization failed');}
@@ -216,28 +273,50 @@ test('commit compensates asset, persistence, initialization, cancellation, and s
     if(phase==='initialize')assert.deepEqual(initialized,[{id:'project-historical-1',phase:'commit'},{id:'old-project',phase:'rollback'}],'failed UI initialization is compensated by reinitializing the restored state');
   }
   let live={project:{id:'initial'},companyProfile:{id:'initial-company'}},writeCount=0;const target=memoryStore();
-  const originalPut=target.put.bind(target);target.put=async value=>{await originalPut(value);if(++writeCount===1)live={project:{id:'edited-during-import'},companyProfile:{id:'edited-company'}};};
+  const originalAdd=target.addIfAbsent.bind(target);target.addIfAbsent=async(value,options)=>{const receipt=await originalAdd(value,options);if(++writeCount===1)live={project:{id:'edited-during-import'},companyProfile:{id:'edited-company'}};return receipt;};
   await assert.rejects(()=>commitProjectPackage(candidate,{assetStore:target,readState:async()=>structuredClone(live),persistState:async next=>{live=structuredClone(next);},initialize:async()=>{throw Error('initialize after concurrent edit');}}),/initialize/i);
   assert.deepEqual(live,{project:{id:'edited-during-import'},companyProfile:{id:'edited-company'}},'compensation restores the state re-read immediately before publish');
 });
 
 test('commit refuses an ID collision with different bytes and never overwrites or deletes the pre-existing asset',async()=>{
-  const {output}=await exported(),candidate=await inspectProjectPackage(output.blob,{Zip:JSZip}),colliding=candidate.assets.find(value=>value.metadata.id===IDS.firstAsset);
+  const {output}=await exported(),candidate=await inspectPackage(output.blob,{Zip:JSZip}),colliding=candidate.assets.find(value=>value.metadata.id===IDS.firstAsset);
   const blob=new Blob(['different'],{type:'image/png'}),store=memoryStore([{metadata:{...colliding.metadata,size:blob.size,sha256:await sha256(await blob.arrayBuffer()),width:1,height:1},blob}]);
   await assert.rejects(()=>commitProjectPackage(candidate,{assetStore:store}),/collision|different|already exists/i);
   assert.equal(await (await store.get(IDS.firstAsset)).blob.text(),'different');assert.equal(store.operations.includes(`delete:${IDS.firstAsset}`),false,'the colliding pre-existing asset is never deleted');
 });
 
 test('cancellation while verifying a reusable pre-existing asset remains AbortError and never becomes a collision',async()=>{
-  const {output}=await exported(),candidate=await inspectProjectPackage(output.blob,{Zip:JSZip}),existing=candidate.assets[0],controller=new AbortController(),bytes=await existing.blob.arrayBuffer();
+  const {output}=await exported(),candidate=await inspectPackage(output.blob,{Zip:JSZip}),existing=candidate.assets[0],controller=new AbortController(),bytes=await existing.blob.arrayBuffer();
   const delayed=new Blob([bytes],{type:existing.blob.type});Object.defineProperty(delayed,'arrayBuffer',{value:async()=>{controller.abort(new DOMException('Cancelled while hashing','AbortError'));return bytes;}});
   const store=memoryStore([{metadata:existing.metadata,blob:delayed}]);
-  await assert.rejects(()=>commitProjectPackage(candidate,{assetStore:store,signal:controller.signal}),{name:'AbortError'});assert.deepEqual(store.operations.filter(value=>value.startsWith('put:')),[]);assert.deepEqual(store.operations.filter(value=>value.startsWith('delete:')),[]);
+  await assert.rejects(()=>commitProjectPackage(candidate,{assetStore:store,signal:controller.signal}),{name:'AbortError'});assert.deepEqual(store.operations.filter(value=>value.startsWith('add:')),[]);assert.deepEqual(store.operations.filter(value=>value.startsWith('delete-owned:')),[]);
 });
 
 test('cancellation thrown after an asset write compensates that pending asset and remains AbortError',async()=>{
-  const {output}=await exported(),candidate=await inspectProjectPackage(output.blob,{Zip:JSZip}),controller=new AbortController(),store=memoryStore(),put=store.put.bind(store);
-  store.put=async value=>{await put(value);controller.abort(new DOMException('Cancelled after durable write','AbortError'));throw controller.signal.reason;};
+  const {output}=await exported(),candidate=await inspectPackage(output.blob,{Zip:JSZip}),controller=new AbortController(),store=memoryStore(),add=store.addIfAbsent.bind(store);
+  store.addIfAbsent=async(value,options)=>{const receipt=await add(value,options),error=new DOMException('Cancelled after durable write','AbortError');Object.defineProperty(error,'ownershipReceipt',{value:receipt});controller.abort(error);throw error;};
   await assert.rejects(()=>commitProjectPackage(candidate,{assetStore:store,signal:controller.signal}),{name:'AbortError'});
-  assert.equal(store.values.size,0,'the asset written immediately before cancellation is compensated');assert.deepEqual(store.operations.filter(value=>value.startsWith('delete:')),[`delete:${candidate.assets[0].metadata.id}`]);
+  assert.equal(store.values.size,0,'the asset written immediately before cancellation is compensated');assert.deepEqual(store.operations.filter(value=>value.startsWith('delete-owned:')),[`delete-owned:${candidate.assets[0].metadata.id}`]);
+});
+
+test('an ambiguous add collision preserves a concurrent same-byte asset because the import has no ownership receipt',async()=>{
+  const {output}=await exported(),candidate=await inspectPackage(output.blob),store=memoryStore(),concurrentOwners=new Map();
+  const collide=async value=>{store.operations.push(`ambiguous:${value.metadata.id}`);store.values.set(value.metadata.id,value);concurrentOwners.set(value.metadata.id,'another-operation');throw new DOMException('Concurrent insert','ConstraintError');};
+  store.put=collide;store.addIfAbsent=collide;
+  store.deleteOwned=async receipt=>{store.operations.push(`delete-owned:${receipt.assetId}`);if(concurrentOwners.get(receipt.assetId)!==receipt.ownerToken)return false;concurrentOwners.delete(receipt.assetId);return store.values.delete(receipt.assetId);};
+  await assert.rejects(()=>commitProjectPackage(candidate,{assetStore:store}),/Concurrent insert|already exists/i);
+  assert.ok(store.values.has(candidate.assets[0].metadata.id),'the concurrent asset survives the ambiguous write outcome');
+  assert.deepEqual(store.operations.filter(value=>value.startsWith('delete:')||value.startsWith('delete-owned:')),[],'cleanup cannot run without an exact ownership receipt');
+});
+
+test('rollback after publication is conditional and never overwrites state edited after the imported state was published',async()=>{
+  const {output}=await exported(),candidate=await inspectPackage(output.blob),store=memoryStore(),before={project:{id:'before'},companyProfile:{id:'before-company'}},edited={project:{id:'edited-after-publish'},companyProfile:{id:'edited-company'}};
+  let state=structuredClone(before);const persistPhases=[],initializePhases=[];
+  await assert.rejects(()=>commitProjectPackage(candidate,{assetStore:store,readState:async()=>structuredClone(state),
+    persistState:async(next,context)=>{persistPhases.push(context);state=structuredClone(next);},
+    initialize:async(next,context)=>{initializePhases.push({id:next.project.id,phase:context.phase});if(context.phase==='commit'){state=structuredClone(edited);throw Error('initialize failed after later edit');}}
+  }),/initialize|rollback conflict/i);
+  assert.deepEqual(state,edited,'later state remains authoritative');
+  assert.deepEqual(persistPhases.map(value=>value.phase),['commit'],'rollback persistence is skipped after a conflict');
+  assert.deepEqual(initializePhases,[{id:candidate.project.id,phase:'commit'}],'the old UI is not reinitialized over later edits');
 });

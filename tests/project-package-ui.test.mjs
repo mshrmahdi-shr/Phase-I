@@ -34,7 +34,11 @@ test('export reports progress and cancellation prevents a late package from down
   h.document.getElementById('exportProjectPackage').focus();h.document.getElementById('exportProjectPackage').click();
   await Promise.resolve();assert.equal(h.document.getElementById('projectPackageDialog').hidden,false);assert.equal(h.document.body.classList.contains('project-package-open'),true);
   onProgress({phase:'reading-assets',completed:1,total:2});assert.match(h.document.getElementById('projectPackageStatus').textContent,/1 of 2/i);
-  h.document.getElementById('cancelProjectPackage').click();assert.equal(signal.aborted,true);gate.resolve({blob:new Blob(['late']),filename:'late.phasei-project.zip'});await h.controller.whenIdle();
+  h.document.getElementById('cancelProjectPackage').click();assert.equal(signal.aborted,true);
+  assert.equal(h.document.getElementById('projectPackageDialog').hidden,false,'cancelling dialog remains visible until the operation settles');
+  assert.equal(h.document.getElementById('cancelProjectPackage').disabled,false);assert.equal(h.document.activeElement,h.document.getElementById('cancelProjectPackage'));
+  assert.match(h.document.getElementById('projectPackageStatus').textContent,/cancelling/i);
+  gate.resolve({blob:new Blob(['late']),filename:'late.phasei-project.zip'});await h.controller.whenIdle();
   assert.equal(h.downloads.length,0);assert.equal(h.document.getElementById('projectPackageDialog').hidden,true);assert.equal(h.document.activeElement,h.document.getElementById('exportProjectPackage'));
   assert.deepEqual(h.events,['busy:true','busy:false']);h.controller.destroy();h.dom.window.close();
 });
