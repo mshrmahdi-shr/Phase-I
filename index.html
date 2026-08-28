@@ -63,7 +63,8 @@
 
       <section>
         <div class="section-heading"><h2>Export</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
-        <button id="exportPdf" class="primary wide">Export PDF / AutoCAD</button>
+        <button id="exportPdf" class="primary wide" aria-describedby="exportButtonHelp" title="Open the export checklist to see exactly what is missing">Export PDF / AutoCAD</button>
+        <p id="exportButtonHelp" class="helper export-button-help">If export is unavailable, open the checklist: disabled rows show the exact missing item and the top warning lists all active problems.</p>
         <button id="exportProjectPackage" class="primary wide">Download Project Package</button>
         <div class="button-grid"><button id="importProjectPackage" type="button">Import Project Package</button><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button></div>
         <input id="importProjectPackageFile" type="file" accept="application/zip,.phasei-project.zip" hidden />
