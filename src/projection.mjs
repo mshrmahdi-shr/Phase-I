@@ -1,11 +1,16 @@
-import defaultProj4 from './proj4-runtime.mjs';
-
 const SUPPORTED_ZONES=Object.freeze([15,16,17,18]);
 const WEST_LIMIT=-96,EAST_LIMIT=-72,MAX_NORTH_LATITUDE=84,MAX_RING_POINTS=5000;
 const ZONE_BOUNDARIES=new Set([-96,-90,-84,-78,-72]);
 
 function fail(message){throw new Error(message);}
 function finite(value,label){if(typeof value!=='number'||!Number.isFinite(value))fail(`${label} must be finite.`);return value;}
+
+async function loadDefaultProj4(){
+  if(typeof process==='object'&&process?.versions?.node)return (await import('proj4')).default;
+  return (await import(new URL('../vendor/proj4.esm.mjs',import.meta.url).href)).default;
+}
+
+const defaultProj4=await loadDefaultProj4();
 
 function checkedLocation(location){
   if(!location||typeof location!=='object'||Array.isArray(location))fail('SITE location must contain latitude and longitude.');
