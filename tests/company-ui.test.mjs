@@ -24,7 +24,7 @@ async function asset(id='logo-old',companyName='Old Engineering'){
 }
 
 function memoryStore(initial=[]){
-  const values=new Map(initial.map(value=>[value.metadata.id,value]));
+  const values=new Map(initial.map(value=>[value.metadata.id,{metadata:value.metadata,blob:value.blob}]));
   return {
     values,
     async get(id){return values.get(id)||null;},
@@ -79,6 +79,12 @@ test('first use stays gated with field errors until a decoded PNG logo and every
   assert.equal(decoded,1);assert.equal(dialog.hidden,true);assert.equal(fixture.saved.companyName,'Acme Environmental');
   assert.match(fixture.saved.logoAssetId,/^company-logo-/);assert.equal('logoDataUrl' in fixture.saved,false);
   assert.equal(fixture.store.values.size,1);assert.equal(fixture.changes.at(-1).companyName,'Acme Environmental');
+});
+
+test('output snapshot returns the exact saved logo record and Blob that it verifies',async t=>{
+  const saved=await asset(),fixture=setup({persisted:saved.profile,store:memoryStore([saved])});t.after(()=>{fixture.controller.destroy();fixture.dom.window.close();});
+  await fixture.controller.refresh();const snapshot=await fixture.controller.outputSnapshot(saved.profile);
+  assert.deepEqual(snapshot.companyLogo.metadata,saved.metadata);assert.equal(snapshot.companyLogo.blob,saved.blob);assert.match(snapshot.companyLogoDataUrl,/^data:image\/png;base64,/);
 });
 
 test('logo selection rejects spoofed, over-4-MiB and over-16-megapixel files before storage',async t=>{

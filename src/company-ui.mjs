@@ -3,6 +3,10 @@ import {commitCompanyTemplate,exportCompanyTemplate,inspectCompanyTemplate} from
 
 const MAX_LOGO_BYTES=4*1024*1024;
 const MAX_LOGO_PIXELS=16_000_000;
+const LOGO_ASSET_FIELDS=Object.freeze(['blob','metadata']);
+const LOGO_METADATA_FIELDS=Object.freeze(['createdAt','height','id','kind','mime','sha256','size','width']);
+const SHA256=/^[a-f0-9]{64}$/;
+const ISO_TIMESTAMP=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const FIELD_IDS={
   companyName:'companyName',address:'companyAddress',phone:'companyPhone',email:'companyEmail',website:'companyWebsite',
   preparedBy:'companyPreparedBy',reviewedBy:'companyReviewedBy'
@@ -68,6 +72,12 @@ function dataUrl(bytes,mime,document){
 
 function validProfile(value){
   try{const profile=normalizeCompanyProfile(value);return validateCompanyProfile(profile).length?null:profile;}catch{return null;}
+}
+
+function exactRecord(value,fields,label){
+  if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(`${label} must be a plain record.`);const prototype=Object.getPrototypeOf(value);if(prototype!==Object.prototype&&prototype!==null)throw new Error(`${label} must be a plain record.`);
+  const keys=Reflect.ownKeys(value);if(keys.some(key=>typeof key!=='string')||keys.length!==fields.length||fields.some(key=>!keys.includes(key)))throw new Error(`${label} must contain its exact saved fields.`);
+  const result={};for(const key of fields){const descriptor=Object.getOwnPropertyDescriptor(value,key);if(!descriptor?.enumerable||!Object.hasOwn(descriptor,'value'))throw new Error(`${label}.${key} must be a saved data field.`);result[key]=descriptor.value;}return result;
 }
 
 function downloadBlob({blob,filename},document){
@@ -138,14 +148,16 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
     return normalizeCompanyProfile(value);
   }
   async function storedLogo(profile){
-    const asset=await assetStore.get(profile.logoAssetId);
-    if(!asset)throw new Error('The saved company logo is missing. Upload the PNG or JPEG logo again.');
-    if(asset.metadata?.id!==profile.logoAssetId||asset.metadata?.mime!==profile.logoMime||asset.metadata?.width!==profile.logoWidth||asset.metadata?.height!==profile.logoHeight){
+    const saved=await assetStore.get(profile.logoAssetId);
+    if(!saved)throw new Error('The saved company logo is missing. Upload the PNG or JPEG logo again.');
+    const asset=exactRecord(saved,LOGO_ASSET_FIELDS,'Saved company logo'),metadata=exactRecord(asset.metadata,LOGO_METADATA_FIELDS,'Saved company logo metadata');
+    if(metadata.id!==profile.logoAssetId||metadata.kind!=='company-logo'||metadata.mime!==profile.logoMime||metadata.width!==profile.logoWidth||metadata.height!==profile.logoHeight||!Number.isSafeInteger(metadata.size)||metadata.size<=0||!(asset.blob instanceof Blob)||asset.blob.size!==metadata.size||asset.blob.type!==metadata.mime||!SHA256.test(metadata.sha256)||typeof metadata.createdAt!=='string'||!ISO_TIMESTAMP.test(metadata.createdAt)||Number.isNaN(Date.parse(metadata.createdAt))){
       throw new Error('The saved company logo metadata does not match the profile. Upload the logo again.');
     }
     const decoded=await decodeLogo(asset.blob,document);
     if(decoded.mime!==profile.logoMime||decoded.width!==profile.logoWidth||decoded.height!==profile.logoHeight)throw new Error('The saved company logo no longer matches its decoded dimensions. Upload the logo again.');
-    return decoded;
+    if(await sha256(decoded.bytes)!==metadata.sha256)throw new Error('The saved company logo hash does not match its bytes. Upload the logo again.');
+    const companyLogo=Object.freeze({metadata:Object.freeze({...metadata}),blob:asset.blob});return {decoded,companyLogo};
   }
   async function notify(profile){current=profile?snapshotCompanyProfile(profile):null;await onChanged(current);return current;}
   async function refresh(){
@@ -156,7 +168,7 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
     if(destroyed||ticket!==refreshGeneration)return current;
     if(!loaded){fields(loaded);previewLogo('','');await notify(null);return null;}
     try{
-      const decoded=await storedLogo(loaded);if(destroyed||ticket!==refreshGeneration)return current;
+      const {decoded}=await storedLogo(loaded);if(destroyed||ticket!==refreshGeneration)return current;
       fields(loaded);previewLogo(dataUrl(decoded.bytes,decoded.mime,document),`${loaded.companyName} logo`);
       return await notify(loaded);
     }catch(error){
@@ -306,8 +318,8 @@ export function createCompanyProfileDialog({document,assetStore,loadProfile,save
       const errors=validateCompanyProfile(expected||emptyCompanyProfile());
       throw new Error(`Company profile is incomplete: ${errors.map(error=>error.message).join(' ')}`);
     }
-    const decoded=await storedLogo(profile);
-    return {companyProfile:snapshotCompanyProfile(profile),companyLogoDataUrl:dataUrl(decoded.bytes,decoded.mime,document)};
+    const {decoded,companyLogo}=await storedLogo(profile);
+    return Object.freeze({companyProfile:snapshotCompanyProfile(profile),companyLogoDataUrl:dataUrl(decoded.bytes,decoded.mime,document),companyLogo});
   }
   function keydown(event){
     if(dialog.hidden)return;

@@ -46,8 +46,8 @@ test('app wires the atomic CAD package through the shared export dialog and save
   const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
   assert.match(source,/import\s*\{exportCadPackage\}\s*from\s*['"]\.\/src\/cad-package\.mjs['"]/);
   assert.match(source,/createExportDialog\([\s\S]*prepareCadBranding[\s\S]*exportCadPackage/);
-  assert.match(source,/assetStore\.get\(branding\.companyProfile\.logoAssetId\)/);
-  assert.match(source,/return\s*\{companyProfile:branding\.companyProfile,companyLogo\}/);
+  assert.doesNotMatch(source,/prepareCadBranding[\s\S]{0,500}assetStore\.get/);
+  assert.match(source,/return\s+Object\.freeze\(\{companyProfile:branding\.companyProfile,companyLogo:branding\.companyLogo\}\)/);
 });
 
 test('app wires compensated project-package persistence and keeps JSON import/export explicitly legacy',()=>{
@@ -97,7 +97,7 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   const companyAssets=createAssetStore({indexedDB:globalThis.indexedDB});
   const logoBlob=new Blob([LOGO_BYTES],{type:'image/png'});
   await companyAssets.put({metadata:{id:'logo-ui',kind:'company-logo',mime:'image/png',size:logoBlob.size,width:1,height:1,
-    sha256:'0'.repeat(64),createdAt:'2026-08-26T12:00:00Z'},blob:logoBlob});
+    sha256:Buffer.from(await crypto.subtle.digest('SHA-256',LOGO_BYTES)).toString('hex'),createdAt:'2026-08-26T12:00:00Z'},blob:logoBlob});
   globalThis.createImageBitmap=dom.window.createImageBitmap=async()=>({width:1,height:1,close(){}});
   globalThis.fetch=async()=>{throw Error('No network in this test');};
   t.after(async()=>{if(drawingBindings){dom.window.dispatchEvent(new dom.window.Event('pagehide'));dom.window.dispatchEvent(new dom.window.Event('pagehide'));assert.equal(drawingBindings.signal.aborted,true,'drawing listeners abort idempotently during permanent page teardown');assert.equal(document[Symbol.for('phase-i-esa.drawing-bindings')],undefined);}map?.remove();await companyAssets.close();dom.window.close();for(const [key,descriptor] of Object.entries(previous))descriptor?Object.defineProperty(globalThis,key,descriptor):delete globalThis[key];});

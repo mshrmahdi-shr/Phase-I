@@ -17,6 +17,11 @@ const surficialDataset=()=>({features:Array.from({length:28},(_,index)=>({...str
 const companyProfile=()=>({schemaVersion:1,id:'company-1',companyName:'Acme Environmental',address:'22 King Street',phone:'416-555-0110',
   email:'hello@acme.test',website:'https://acme.test',preparedBy:'',reviewedBy:'',logoAssetId:'logo-1',logoMime:'image/png',
   logoWidth:320,logoHeight:160,logoPlacement:{align:'left',scale:1},updatedAt:'2026-08-26T12:00:00Z'});
+const CAD_LOGO_BYTES=Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64'));
+async function validCadBranding(profile=companyProfile()){
+  const companyProfile={...profile,logoWidth:1,logoHeight:1},blob=new Blob([CAD_LOGO_BYTES],{type:'image/png'}),sha256=Buffer.from(await crypto.subtle.digest('SHA-256',CAD_LOGO_BYTES)).toString('hex');
+  return {companyProfile,companyLogo:{metadata:{id:'logo-1',kind:'company-logo',mime:'image/png',size:blob.size,width:1,height:1,sha256,createdAt:'2026-08-26T12:00:00Z'},blob}};
+}
 
 test('selection evaluates actual prerequisites, not active figure or saved geology badges',async()=>{
   const {exportRows,selectedReadyCodes}=await import('../src/export-selection.mjs');
@@ -46,7 +51,7 @@ test('geology readiness checks the fitted batch footprint, actual geometry and S
 
 function fixture(){
   const dom=new JSDOM(fs.readFileSync(new URL('../index.html',import.meta.url),'utf8'),{url:'https://example.test/'});
-  const document=dom.window.document;
+  const document=dom.window.document;dom.window.createImageBitmap=async()=>({width:1,height:1,close(){}});
   return {dom,document,$:id=>document.getElementById(id)};
 }
 
@@ -218,10 +223,10 @@ test('dialog persists typed historical selection, keeps legacy codes, and snapsh
 });
 
 test('PDF and AutoCAD actions consume exactly the same checked typed selection',async()=>{
-  const {createExportDialog}=await import('../src/export-selection.mjs'),{document,dom,$}=fixture(),p=project(),item=historicalItem();p.historical=[item];p.historicalSequenceCounters={'1972':1};p.exportPreferences={...p.exportPreferences,codes:['A'],selection:[{kind:'figure',code:'A'},{kind:'historical',id:item.id}]};
-  const state={project:p,datasets:{},companyProfile:companyProfile(),providers:[TORONTO_IMAGERY_PROVIDER],assetStore:{}};let cadInput;const cadDownloads=[];
+  const {createExportDialog}=await import('../src/export-selection.mjs'),{document,dom,$}=fixture(),p=project(),item=historicalItem(),branding=await validCadBranding();p.historical=[item];p.historicalSequenceCounters={'1972':1};p.exportPreferences={...p.exportPreferences,codes:['A'],selection:[{kind:'figure',code:'A'},{kind:'historical',id:item.id}]};
+  const state={project:p,datasets:{},companyProfile:branding.companyProfile,providers:[TORONTO_IMAGERY_PROVIDER],assetStore:{}};let cadInput;const cadDownloads=[];
   const dialog=createExportDialog({document,getState:()=>state,save(){},setBusy(){},planPdf:async({selection})=>({pageCount:1,continuationCounts:selection[0].kind==='figure'?{[selection[0].code]:0}:{}}),exportPdf:async()=>{throw Error('PDF should remain idle');},download(){},
-    prepareCadBranding:async company=>({companyProfile:company,companyLogo:{metadata:{id:'logo-1',kind:'company-logo',mime:'image/png',size:3,width:320,height:160,sha256:'0'.repeat(64),createdAt:'2026-08-26T12:00:00Z'},blob:new Blob(['png'],{type:'image/png'})}}),
+    prepareCadBranding:async()=>branding,
     exportCadPackage:async args=>{cadInput=args;args.onProgress({phase:'assembling',completed:1,total:2});return {blob:new Blob(['zip'],{type:'application/zip'}),filename:'ab-12345-cad-package.zip',imageCount:2,pageCount:2,crs:{zone:17,name:'NAD83 / UTM zone 17N',units:'m'}};},downloadCad:value=>cadDownloads.push(value)});
   await dialog.open();
   assert.equal($('exportFigureA').checked,true);
@@ -233,15 +238,15 @@ test('PDF and AutoCAD actions consume exactly the same checked typed selection',
 });
 
 test('late planner render keeps replacement rows and both export actions locked during CAD',async()=>{
-  const {createExportDialog}=await import('../src/export-selection.mjs'),{document,dom,$}=fixture(),p=project();p.exportPreferences={codes:['A'],selection:[{kind:'figure',code:'A'}]};const gates=new Map(),cadGate=deferred();let cadCalls=0,pdfCalls=0;
+  const {createExportDialog}=await import('../src/export-selection.mjs'),{document,dom,$}=fixture(),p=project(),branding=await validCadBranding();p.exportPreferences={codes:['A'],selection:[{kind:'figure',code:'A'}]};const gates=new Map(),cadGate=deferred();let cadCalls=0,pdfCalls=0;
   const planPdf=({codes})=>new Promise((resolve,reject)=>gates.set(codes[0],{resolve,reject}));
-  const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:companyProfile(),assetStore:{}}),save(){},setBusy(){},planPdf,exportPdf:async()=>{pdfCalls++;return {blob:new Blob(['pdf']),filename:'x.pdf',pageCount:1};},download(){},prepareCadBranding:async company=>({companyProfile:company,companyLogo:{metadata:{id:'logo-1',kind:'company-logo',mime:'image/png',size:3,width:320,height:160,sha256:'0'.repeat(64),createdAt:'2026-08-26T12:00:00Z'},blob:new Blob(['png'],{type:'image/png'})}}),exportCadPackage:async()=>{cadCalls++;return new Promise(resolve=>{cadGate.release=()=>resolve({blob:new Blob(['zip'],{type:'application/zip'}),filename:'x.zip',imageCount:1,pageCount:1,crs:{zone:17,name:'NAD83 / UTM zone 17N',units:'m'}});});},downloadCad(){}});
+  const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:branding.companyProfile,assetStore:{}}),save(){},setBusy(){},planPdf,exportPdf:async()=>{pdfCalls++;return {blob:new Blob(['pdf']),filename:'x.pdf',pageCount:1};},download(){},prepareCadBranding:async()=>branding,exportCadPackage:async()=>{cadCalls++;return new Promise(resolve=>{cadGate.release=()=>resolve({blob:new Blob(['zip'],{type:'application/zip'}),filename:'x.zip',imageCount:1,pageCount:1,crs:{zone:17,name:'NAD83 / UTM zone 17N',units:'m'}});});},downloadCad(){}});
   const opening=dialog.open();await waitFor(()=>gates.has('A')&&gates.has('C'),'A/C planners did not start');gates.get('A').resolve({pageCount:1,continuationCounts:{A:0}});await waitFor(()=>$('downloadCad').disabled===false,'CAD did not become ready after selected A planning');const oldA=$('exportFigureA');$('downloadCad').click();await waitFor(()=>cadCalls===1,'CAD did not start');gates.get('C').resolve({pageCount:1,continuationCounts:{C:0}});await opening;const replacement=$('exportFigureA');assert.notEqual(replacement,oldA);for(const control of [replacement,$('exportFigureC'),$('selectAllReady'),$('clearExport'),$('downloadPdf'),$('downloadCad')])assert.equal(control.disabled,true,`${control.id} unlocked while CAD was busy`);assert.match($('exportProgress').textContent,/validating/i,'late planner status must not overwrite active CAD progress');await dialog.start();assert.equal(pdfCalls,0,'PDF cannot start while CAD owns the dialog');cadGate.release();await dialog.whenIdle();assert.equal($('exportFigureA').disabled,false);assert.equal($('downloadPdf').disabled,false);assert.equal($('downloadCad').disabled,false);assert.equal(cadCalls,1);dom.window.close();
 });
 
 test('active PDF keeps CAD locked until PDF settles',async()=>{
-  const {createExportDialog}=await import('../src/export-selection.mjs'),{document,dom,$}=fixture(),p=project(),pdfGate=deferred();p.exportPreferences={codes:['A'],selection:[{kind:'figure',code:'A'}]};let cadCalls=0;
-  const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:companyProfile(),assetStore:{}}),save(){},setBusy(){},planPdf:async({codes})=>({pageCount:1,continuationCounts:{[codes[0]]:0}}),exportPdf:async()=>pdfGate.promise,download(){},prepareCadBranding:async company=>({companyProfile:company,companyLogo:{metadata:{id:'logo-1',kind:'company-logo',mime:'image/png',size:3,width:320,height:160,sha256:'0'.repeat(64),createdAt:'2026-08-26T12:00:00Z'},blob:new Blob(['png'],{type:'image/png'})}}),exportCadPackage:async()=>{cadCalls++;throw Error('CAD must remain idle');},downloadCad(){}});
+  const {createExportDialog}=await import('../src/export-selection.mjs'),{document,dom,$}=fixture(),p=project(),pdfGate=deferred(),branding=await validCadBranding();p.exportPreferences={codes:['A'],selection:[{kind:'figure',code:'A'}]};let cadCalls=0;
+  const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:branding.companyProfile,assetStore:{}}),save(){},setBusy(){},planPdf:async({codes})=>({pageCount:1,continuationCounts:{[codes[0]]:0}}),exportPdf:async()=>pdfGate.promise,download(){},prepareCadBranding:async()=>branding,exportCadPackage:async()=>{cadCalls++;throw Error('CAD must remain idle');},downloadCad(){}});
   await dialog.open();const pdfRun=dialog.start();assert.equal($('downloadCad').disabled,true);$('downloadCad').click();assert.equal(cadCalls,0);pdfGate.resolve({blob:new Blob(['pdf']),filename:'x.pdf',pageCount:1});await pdfRun;assert.equal($('downloadCad').disabled,false);assert.equal(cadCalls,0);dom.window.close();
 });
 
@@ -249,7 +254,7 @@ test('CAD logo readiness is asynchronous, stale-safe, actionable, and reuses the
   const {createExportDialog}=await import('../src/export-selection.mjs');
   const failures=[
     {message:'The saved company logo is missing. Upload the PNG or JPEG logo again.',prepare:async()=>{throw new Error('The saved company logo is missing. Upload the PNG or JPEG logo again.');}},
-    {message:'The saved company logo metadata does not match the profile. Upload the logo again.',prepare:async()=>({companyProfile:companyProfile(),companyLogo:{metadata:{id:'wrong-logo',kind:'company-logo',mime:'image/png',size:3,width:320,height:160},blob:new Blob(['png'],{type:'image/png'})}})},
+    {message:'The saved company logo metadata does not match the profile. Upload the logo again.',prepare:async()=>({companyProfile:companyProfile(),companyLogo:{metadata:{id:'wrong-logo',kind:'company-logo',mime:'image/png',size:3,width:320,height:160,sha256:'0'.repeat(64),createdAt:'2026-08-26T12:00:00Z'},blob:new Blob(['png'],{type:'image/png'})}})},
     {message:'The saved company logo no longer matches its decoded dimensions. Upload the logo again.',prepare:async()=>{throw new Error('The saved company logo no longer matches its decoded dimensions. Upload the logo again.');}}
   ];
   for(const {message,prepare} of failures){
@@ -257,9 +262,32 @@ test('CAD logo readiness is asynchronous, stale-safe, actionable, and reuses the
     const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:companyProfile(),assetStore:{}}),save(){},setBusy(){},planPdf:async()=>({pageCount:1,continuationCounts:{A:0,C:0}}),exportPdf:async()=>{throw Error('unused');},download(){},prepareCadBranding:prepare,exportCadPackage:async()=>{packageCalls++;throw Error('must not run');},downloadCad(){}});
     await dialog.open();assert.equal($('downloadCad').disabled,true);assert.match($('cadReadiness').textContent,new RegExp(message.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));$('downloadCad').click();await dialog.whenIdle();assert.equal(packageCalls,0);dom.window.close();
   }
-  const {document,dom,$}=fixture(),p=project(),first=deferred(),second=deferred();p.exportPreferences={codes:['A'],selection:[{kind:'figure',code:'A'}]};let profile=companyProfile(),calls=0,packageInput;
+  const {document,dom,$}=fixture(),p=project(),first=deferred(),second=deferred(),branding=await validCadBranding();p.exportPreferences={codes:['A'],selection:[{kind:'figure',code:'A'}]};let profile=branding.companyProfile,calls=0,packageInput;
   const prepare=()=>{calls++;return calls===1?first.promise:second.promise;},dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:profile,assetStore:{}}),save(){},setBusy(){},planPdf:async()=>({pageCount:1,continuationCounts:{A:0,C:0}}),exportPdf:async()=>{throw Error('unused');},download(){},prepareCadBranding:prepare,exportCadPackage:async args=>{packageInput=args;return {blob:new Blob(['zip'],{type:'application/zip'}),filename:'x.zip',imageCount:1,pageCount:1,crs:{zone:17,name:'NAD83 / UTM zone 17N',units:'m'}};},downloadCad(){}});
-  const older=dialog.open();await waitFor(()=>calls===1,'first logo check did not start');profile={...profile,updatedAt:'2026-08-27T12:00:00Z'};const newer=dialog.refresh();await waitFor(()=>calls===2,'second logo check did not start');const logo={metadata:{id:'logo-1',kind:'company-logo',mime:'image/png',size:3,width:320,height:160,sha256:'0'.repeat(64),createdAt:'2026-08-26T12:00:00Z'},blob:new Blob(['png'],{type:'image/png'})};second.resolve({companyProfile:profile,companyLogo:logo});await newer;first.reject(new Error('stale missing logo'));await older;assert.equal($('downloadCad').disabled,false);assert.doesNotMatch($('cadReadiness').textContent,/stale missing/i);$('downloadCad').click();await dialog.whenIdle();assert.equal(packageInput.companyLogo.blob,logo.blob);assert.deepEqual(packageInput.companyLogo.metadata,logo.metadata);dom.window.close();
+  const older=dialog.open();await waitFor(()=>calls===1,'first logo check did not start');profile={...profile,updatedAt:'2026-08-27T12:00:00Z'};const newer=dialog.refresh();await waitFor(()=>calls===2,'second logo check did not start');const logo=branding.companyLogo;second.resolve({companyProfile:profile,companyLogo:logo});await newer;first.reject(new Error('stale missing logo'));await older;assert.equal($('downloadCad').disabled,false);assert.doesNotMatch($('cadReadiness').textContent,/stale missing/i);$('downloadCad').click();await dialog.whenIdle();assert.equal(packageInput.companyLogo.blob,logo.blob);assert.deepEqual(packageInput.companyLogo.metadata,logo.metadata);dom.window.close();
+});
+
+test('CAD branding preflight rejects substituted profiles and every noncanonical or corrupt exact logo snapshot',async()=>{
+  const {createExportDialog}=await import('../src/export-selection.mjs'),baseProfile=companyProfile(),baseBlob=new Blob(['png'],{type:'image/png'}),baseHash=Buffer.from(await crypto.subtle.digest('SHA-256',await baseBlob.arrayBuffer())).toString('hex'),baseMetadata={id:'logo-1',kind:'company-logo',mime:'image/png',size:3,width:320,height:160,sha256:baseHash,createdAt:'2026-08-26T12:00:00Z'};
+  const cases=[
+    {name:'substituted company',value:{companyProfile:{...baseProfile,companyName:'Substituted Company'},companyLogo:{metadata:baseMetadata,blob:baseBlob}}},
+    {name:'missing hash',value:{companyProfile:baseProfile,companyLogo:{metadata:Object.fromEntries(Object.entries(baseMetadata).filter(([key])=>key!=='sha256')),blob:baseBlob}}},
+    {name:'missing timestamp',value:{companyProfile:baseProfile,companyLogo:{metadata:Object.fromEntries(Object.entries(baseMetadata).filter(([key])=>key!=='createdAt')),blob:baseBlob}}},
+    {name:'extra metadata key',value:{companyProfile:baseProfile,companyLogo:{metadata:{...baseMetadata,owner:'attacker'},blob:baseBlob}}},
+    {name:'wrong metadata key',value:{companyProfile:baseProfile,companyLogo:{metadata:{...Object.fromEntries(Object.entries(baseMetadata).filter(([key])=>key!=='sha256')),digest:baseHash},blob:baseBlob}}},
+    {name:'invalid hash',value:{companyProfile:baseProfile,companyLogo:{metadata:{...baseMetadata,sha256:'INVALID'},blob:baseBlob}}},
+    {name:'invalid timestamp',value:{companyProfile:baseProfile,companyLogo:{metadata:{...baseMetadata,createdAt:'yesterday'},blob:baseBlob}}},
+    {name:'corrupt PNG bytes',value:{companyProfile:baseProfile,companyLogo:{metadata:baseMetadata,blob:baseBlob}}},
+    {name:'same-id mutated Blob',value:{companyProfile:baseProfile,companyLogo:{metadata:{...baseMetadata,size:4},blob:new Blob(['evil'],{type:'image/png'})}}}
+  ];
+  for(const scenario of cases){
+    const {document,dom,$}=fixture(),p=project();p.exportPreferences={codes:['A'],selection:[{kind:'figure',code:'A'}]};let packageCalls=0;
+    const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:baseProfile,assetStore:{}}),save(){},setBusy(){},planPdf:async()=>({pageCount:1,continuationCounts:{A:0,C:0}}),exportPdf:async()=>{throw Error('unused');},download(){},prepareCadBranding:async()=>scenario.value,exportCadPackage:async()=>{packageCalls++;throw Error('must not run');},downloadCad(){}});
+    await dialog.open();assert.equal($('downloadCad').disabled,true,scenario.name);assert.match($('cadReadiness').textContent,/blocked.*logo|blocked.*company/i,scenario.name);$('downloadCad').click();await dialog.whenIdle();assert.equal(packageCalls,0,scenario.name);dom.window.close();
+  }
+  const {document,dom,$}=fixture(),p=project(),older=deferred(),newer=deferred();p.exportPreferences={codes:['A'],selection:[{kind:'figure',code:'A'}]};let generation=0,packageCalls=0;
+  const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:baseProfile,assetStore:{}}),save(){},setBusy(){},planPdf:async()=>({pageCount:1,continuationCounts:{A:0,C:0}}),exportPdf:async()=>{throw Error('unused');},download(){},prepareCadBranding:()=>++generation===1?older.promise:newer.promise,exportCadPackage:async()=>{packageCalls++;throw Error('must not run');},downloadCad(){}});
+  const first=dialog.open();await waitFor(()=>generation===1,'older branding check did not start');const second=dialog.refresh();await waitFor(()=>generation===2,'newer branding check did not start');newer.reject(new Error('The current saved logo is corrupt. Upload the logo again.'));await second;older.resolve({companyProfile:baseProfile,companyLogo:{metadata:baseMetadata,blob:baseBlob}});await first;assert.equal($('downloadCad').disabled,true);assert.match($('cadReadiness').textContent,/current saved logo is corrupt/i);$('downloadCad').click();await dialog.whenIdle();assert.equal(packageCalls,0);dom.window.close();
 });
 
 test('historical planning failure keeps its visible row but clears persisted selection and blocks download',async()=>{
