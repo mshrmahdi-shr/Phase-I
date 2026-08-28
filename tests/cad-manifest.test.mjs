@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {MIN_ACQUISITION_YEAR} from '../src/imagery/provider-registry.mjs';
 
 const manifestModule=()=>import('../src/cad-manifest.mjs');
 const HASHES=Object.freeze({a:'a'.repeat(64),b:'b'.repeat(64),c:'c'.repeat(64),d:'d'.repeat(64),e:'e'.repeat(64),f:'f'.repeat(64),g:'1'.repeat(64),h:'2'.repeat(64),zero:'0'.repeat(64)});
@@ -84,6 +85,16 @@ function csvRows(text){
   }
   assert.equal(quoted,false,'CSV ends outside a quoted field');assert.deepEqual(row,[]);assert.equal(field,'');return rows;
 }
+
+test('manifest enforces the shared acquisition-year boundaries and preserves unknown years',async()=>{
+  const {buildCadManifest}=await manifestModule(),maximum=new Date().getUTCFullYear()+1;
+  const withYear=year=>{const source=input();source.items[0].acquisitionYear=year;source.items[0].sources[0].acquisitionYear=year;return source;};
+  assert.throws(()=>buildCadManifest(withYear(MIN_ACQUISITION_YEAR-1)),/1850|year|range/i);
+  assert.equal(JSON.parse(buildCadManifest(withYear(MIN_ACQUISITION_YEAR)).json).items[0].acquisitionYear,MIN_ACQUISITION_YEAR);
+  assert.equal(JSON.parse(buildCadManifest(withYear(maximum)).json).items[0].acquisitionYear,maximum);
+  assert.throws(()=>buildCadManifest(withYear(maximum+1)),/year|range/i);
+  const unknown=withYear(null);unknown.items[0].acquisitionYearVerification='unknown';unknown.items[0].sources[0].acquisitionYearVerification='unknown';assert.equal(JSON.parse(buildCadManifest(unknown).json).items[0].acquisitionYear,null);
+});
 
 test('builds deterministic canonical JSON with complete CRS, file, company, source, licence, and corner metadata',async()=>{
   const {buildCadManifest}=await manifestModule(),source=input(),permuted=clone(source);permuted.files.reverse();permuted.items.reverse();

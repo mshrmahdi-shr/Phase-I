@@ -1,3 +1,5 @@
+import {validateAcquisitionYearRange} from './acquisition-year.mjs';
+
 const SCHEMA_VERSION=2;
 const FORMAT='phase-i-cad-manifest';
 export const CAD_RASTER_NORMALIZATION='physical-resolution-stripped';
@@ -203,7 +205,7 @@ function checkedProjectionFit(row,attachment,code){
 function checkedAcquisition(value,status,label){
   if(!['verified','unverified','unknown'].includes(status))fail(`${label} verification must be verified, unverified, or unknown.`);
   if(value===null){if(status!=='unknown')fail(`${label} must use unknown verification when the acquisition year is null.`);return null;}
-  const year=safePositiveInteger(value,`${label} year`,9999);if(year<1850)fail(`${label} year is outside the supported source range.`);if(status==='unknown')fail(`${label} with a known year cannot use unknown verification.`);return year;
+  const year=validateAcquisitionYearRange(value,{label:`${label} year`});if(status==='unknown')fail(`${label} with a known year cannot use unknown verification.`);return year;
 }
 
 function checkedSources(value,code){

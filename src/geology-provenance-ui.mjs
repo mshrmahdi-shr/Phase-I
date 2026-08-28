@@ -1,4 +1,5 @@
 import {customGeologySourceDraft,normalizeCustomGeologySource} from './geology-provenance.mjs';
+import {MIN_ACQUISITION_YEAR,maximumAcquisitionYear} from './acquisition-year.mjs';
 
 const IDS=['geologyProvenanceDialog','geologyProvenanceForm','geologyProvenanceHeading','geologySourceName','geologySourceCredits','geologySourceUrl','geologySourceLicense','geologyPermissionEvidence','geologyAcquisitionYear','geologyYearVerification','geologyRightsConfirmed','geologyProvenanceStatus','saveGeologyProvenance','cancelGeologyProvenance'];
 function fail(message){throw new Error(message);}
@@ -6,7 +7,7 @@ function fail(message){throw new Error(message);}
 export function createGeologyProvenanceController({document,parsePolys,readKmz,Zip,onCommit}={}){
   if(!document?.getElementById||typeof parsePolys!=='function'||typeof readKmz!=='function'||typeof onCommit!=='function')fail('Custom geology provenance dependencies are incomplete.');
   const $=id=>document.getElementById(id),nodes=Object.fromEntries(IDS.map(id=>[id,$(id)]));for(const [id,node] of Object.entries(nodes))if(!node)fail(`Custom geology provenance UI is missing #${id}.`);
-  nodes.geologyAcquisitionYear.max=String(new Date().getUTCFullYear()+1);
+  nodes.geologyAcquisitionYear.min=String(MIN_ACQUISITION_YEAR);nodes.geologyAcquisitionYear.max=String(maximumAcquisitionYear());
   let active=null,destroyed=false;
   function fields(source){nodes.geologySourceName.value=source.name;nodes.geologySourceCredits.value=source.credits;nodes.geologySourceUrl.value=source.sourceUrl??'';nodes.geologySourceLicense.value=source.license;nodes.geologyPermissionEvidence.value=source.redistributionEvidence;nodes.geologyAcquisitionYear.value=source.acquisitionYear??'';nodes.geologyYearVerification.value=source.acquisitionYearVerification;nodes.geologyRightsConfirmed.checked=source.permissionConfirmed;nodes.geologyProvenanceStatus.textContent='';}
   function close(value){if(!active)return;const {resolve}=active;active=null;nodes.geologyProvenanceDialog.hidden=true;resolve(value);}

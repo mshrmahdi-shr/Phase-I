@@ -6,6 +6,7 @@ import JSZip from 'jszip';
 import {parsePolys,readKmz} from '../src/geology.mjs';
 import {createGeologyProvenanceController} from '../src/geology-provenance-ui.mjs';
 import {createCadExportController} from '../src/cad-ui.mjs';
+import {MIN_ACQUISITION_YEAR} from '../src/imagery/provider-registry.mjs';
 
 const KML='<kml><Document><Placemark><name>55b Custom meaning</name><description>Customer geology</description><Polygon><outerBoundaryIs><LinearRing><coordinates>-80,43 -79,43 -79,44 -80,44 -80,43</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark></Document></kml>';
 const PROFILE={schemaVersion:1,id:'company-1',companyName:'Acme Environmental',address:'22 King Street',phone:'416-555-0110',email:'hello@acme.test',website:'https://acme.test',preparedBy:'',reviewedBy:'',logoAssetId:'logo-1',logoMime:'image/png',logoWidth:3,logoHeight:2,logoPlacement:{align:'left',scale:1},updatedAt:'2026-08-26T12:00:00Z'};
@@ -36,4 +37,13 @@ test('the same provenance gate reads a real KMZ before showing the form',async()
   const dom=new JSDOM(fs.readFileSync(new URL('../index.html',import.meta.url),'utf8'),{url:'https://app.test/'}),document=dom.window.document,$=id=>document.getElementById(id);let committed=false;
   const archive=new JSZip();archive.file('doc.kml',KML);const file=await archive.generateAsync({type:'uint8array'});Object.defineProperty(file,'name',{value:'supplied.kmz'});
   const provenance=createGeologyProvenanceController({document,parsePolys:parser(dom),readKmz,Zip:JSZip,onCommit:()=>{committed=true;}}),pending=provenance.importFile(file,'bedrock');await waitFor(()=>$('geologyProvenanceDialog').hidden===false);assert.match($('geologySourceName').value,/supplied\.kmz/);$('cancelGeologyProvenance').click();assert.equal(await pending,false);assert.equal(committed,false);provenance.destroy();dom.window.close();
+});
+
+test('the provenance form exposes and enforces the same acquisition-year range before commit',async()=>{
+  const dom=new JSDOM(fs.readFileSync(new URL('../index.html',import.meta.url),'utf8'),{url:'https://app.test/'}),document=dom.window.document,$=id=>document.getElementById(id),commits=[];
+  const maximum=new Date().getUTCFullYear()+1,provenance=createGeologyProvenanceController({document,parsePolys:parser(dom),readKmz,Zip:class{},onCommit:value=>commits.push(value)});
+  assert.equal($('geologyAcquisitionYear').min,String(MIN_ACQUISITION_YEAR));assert.equal($('geologyAcquisitionYear').max,String(maximum));
+  let pending=provenance.importFile({name:'too-early.kml',text:async()=>KML},'bedrock');await waitFor(()=>$('geologyProvenanceDialog').hidden===false);fill(document,{year:String(MIN_ACQUISITION_YEAR-1),verification:'verified'});$('saveGeologyProvenance').click();await Promise.resolve();assert.deepEqual(commits,[]);assert.match($('geologyProvenanceStatus').textContent,/1850|year|range/i);$('cancelGeologyProvenance').click();assert.equal(await pending,false);
+  pending=provenance.importFile({name:'minimum.kml',text:async()=>KML},'bedrock');await waitFor(()=>$('geologyProvenanceDialog').hidden===false);fill(document,{year:String(MIN_ACQUISITION_YEAR),verification:'verified'});$('saveGeologyProvenance').click();assert.equal(await pending,true);assert.equal(commits[0].source.acquisitionYear,MIN_ACQUISITION_YEAR);
+  provenance.destroy();dom.window.close();
 });

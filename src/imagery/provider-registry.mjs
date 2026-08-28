@@ -1,5 +1,7 @@
+import {MIN_ACQUISITION_YEAR} from '../acquisition-year.mjs';
+
 export const IMAGERY_POLICIES=Object.freeze(['exportable','link-only','unknown']);
-export const MIN_ACQUISITION_YEAR=1850;
+export {MIN_ACQUISITION_YEAR};
 
 const PROVIDER_FIELDS=['allowedOrigins','allowedRoots','attribution','coverage','covers','id','label','licenseUrl','organization','policy','priority','search'];
 const RESULT_FIELDS=['attribution','coverage','export','id','licenseUrl','policy','preview','providerId','resolutionMeters','sourceUrl','title','year'];

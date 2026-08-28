@@ -10,6 +10,7 @@ import {pixelToGround} from '../src/world-file.mjs';
 import {exportCadPackage} from '../src/cad-package.mjs';
 import {createProjector} from '../src/projection.mjs';
 import {TORONTO_IMAGERY_PROVIDER} from '../src/imagery/providers/toronto.mjs';
+import {MIN_ACQUISITION_YEAR} from '../src/imagery/provider-registry.mjs';
 
 const STAMP='2026-08-28T12:00:00.000Z';
 const IDS=Object.freeze({item:'74f14168-4de6-4c5f-88f4-87db8ec731c2',asset:'237589d9-3d5d-4817-9d0a-a5fb2d151286'});
@@ -142,6 +143,12 @@ test('CAD export fails before composition when a selected geology overlay lacks 
   value.options.datasets={surficial:{features:[polygon],coverage:{west:-80,south:43,east:-79,north:44},source:{id:'custom',name:'unlicensed.kml'}}};
   await assert.rejects(exportCadPackage(value.options),/geology.*licen[cs]e|provenance|permission/i);
   assert.deepEqual(value.composed,[]);
+});
+
+test('custom geology acquisition-year boundaries fail before composition and the shared minimum exports without a late manifest failure',async()=>{
+  const setup=async acquisitionYear=>{const value=await fixture({selection:[{kind:'figure',code:'E'}]}),location=value.project.location,polygon={polygon:[[location.lng-.5,location.lat-.5],[location.lng+.5,location.lat-.5],[location.lng+.5,location.lat+.5],[location.lng-.5,location.lat+.5],[location.lng-.5,location.lat-.5]],holes:[],name:'Custom unit',unitCode:'X',description:'Custom',color:'#22aa66',fillOpacity:.6};value.options.datasets={bedrock:{features:[polygon],coverage:{west:-80,south:43,east:-79,north:44},source:{id:'custom',name:'bounded.kml',credits:'Example Engineer',sourceUrl:null,license:'Written project licence',redistributionEvidence:'Permission email on file',acquisitionYear,acquisitionYearVerification:'verified',permissionConfirmed:true}}};return value;};
+  const invalid=await setup(MIN_ACQUISITION_YEAR-1);await assert.rejects(exportCadPackage(invalid.options),/1850|year|range|provenance/i);assert.deepEqual(invalid.composed,[],'invalid provenance must fail before raster composition');
+  const valid=await setup(MIN_ACQUISITION_YEAR),result=await exportCadPackage(valid.options),{zip}=await archiveEntries(result.blob),manifest=JSON.parse(await text(zip,'Manifest.json'));assert.deepEqual(valid.composed,['E']);assert.equal(manifest.items[0].sources[1].acquisitionYear,MIN_ACQUISITION_YEAR);
 });
 
 test('production raster dimensions preserve true ordered UTM controls and fit one converged CAD affine within documented tolerance',async()=>{

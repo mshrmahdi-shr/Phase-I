@@ -30,7 +30,7 @@ function readiness(snapshot){
     if(!kind)continue;
     const source=snapshot?.datasets?.[kind]?.source,fields=['name','credits','license','redistributionEvidence'];
     try{if(source?.id==='custom')normalizeCustomGeologySource(source);else if(!source||fields.some(field=>typeof source[field]!=='string'||!source[field].trim()))throw new Error('missing official provenance');}
-    catch{blockers.push(`Figure ${item.code} geology source, credits, licence, permission evidence, and rights confirmation are required before CAD export. Edit custom source details to correct them.`);}
+    catch(error){blockers.push(`Figure ${item.code} geology source, credits, licence, permission evidence, rights confirmation, and acquisition year must be valid before CAD export. Edit custom source details to correct them. ${error.message}`);}
   }
   try{for(const error of validateCompanyProfile(snapshot?.companyProfile))blockers.push(`${error.message} Open Company Profile and save it before exporting.`);}catch(error){blockers.push(`Company Profile is incomplete: ${error.message} Open Company Profile and save it before exporting.`);}
   let crs=null;try{crs=utmZoneForLocation(snapshot?.project?.location);}catch(error){blockers.push(`CAD coordinate system unavailable: ${error.message}`);}

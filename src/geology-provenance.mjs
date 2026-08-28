@@ -1,3 +1,5 @@
+import {validateAcquisitionYearRange} from './acquisition-year.mjs';
+
 const LIMITS=Object.freeze({name:200,credits:500,sourceUrl:2048,license:1000,redistributionEvidence:1000});
 const STATUSES=Object.freeze(['unknown','unverified','verified']);
 
@@ -6,7 +8,7 @@ function text(value,field,{required=true,maximum=500}={}){
   if(required&&!result)throw new Error(`Custom geology ${field} is required.`);if(result.length>maximum||/[\u0000-\u001f\u007f]/.test(result))throw new Error(`Custom geology ${field} must be bounded safe text.`);return result;
 }
 function sourceUrl(value){if(value===null||value==='')return null;const result=text(value,'source URL',{maximum:LIMITS.sourceUrl});let url;try{url=new URL(result);}catch{throw new Error('Custom geology source URL must be a valid public HTTP(S) URL.');}if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw new Error('Custom geology source URL must be a valid public HTTP(S) URL.');return url.href;}
-function year(value){if(value===null||value==='')return null;if(!Number.isSafeInteger(value)||value<1800||value>new Date().getUTCFullYear()+1)throw new Error('Custom geology acquisition/publication year must be a four-digit year from 1800 through next year.');return value;}
+function year(value){return validateAcquisitionYearRange(value===''?null:value,{label:'Custom geology acquisition/publication year',allowNull:true});}
 
 /** Safe migration/edit draft. Missing legal evidence remains visibly blank and cannot become CAD-ready. */
 export function customGeologySourceDraft(value={}, {filename=''}={}){

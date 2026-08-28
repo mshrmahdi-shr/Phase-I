@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {JSDOM} from 'jsdom';
 import {createCadExportController,downloadCadPackage} from '../src/cad-ui.mjs';
+import {MIN_ACQUISITION_YEAR} from '../src/imagery/provider-registry.mjs';
 
 const HTML=fs.readFileSync(new URL('../index.html',import.meta.url),'utf8');
 
@@ -41,6 +42,12 @@ test('CAD readiness visibly blocks a selected geology overlay with incomplete le
 test('CAD readiness requires the persisted rights confirmation even when text evidence exists',()=>{
   const h=fixture(),byId=id=>h.document.getElementById(id),source={id:'custom',name:'uploaded.kml',credits:'Example Engineer',sourceUrl:null,license:'Written project licence',redistributionEvidence:'Permission email on file',acquisitionYear:null,acquisitionYearVerification:'unknown',permissionConfirmed:false};
   h.snapshot=snapshot({selection:[{kind:'figure',code:'E'}],datasets:{bedrock:{source}}});h.controller.refresh();assert.equal(byId('downloadCad').disabled,true);assert.match(byId('cadReadiness').textContent,/confirm|permission|rights/i);h.controller.destroy();h.dom.window.close();
+});
+
+test('CAD readiness rejects an out-of-range custom geology year before export and accepts the shared minimum',()=>{
+  const h=fixture(),byId=id=>h.document.getElementById(id),source={id:'custom',name:'uploaded.kml',credits:'Example Engineer',sourceUrl:null,license:'Written project licence',redistributionEvidence:'Permission email on file',acquisitionYear:MIN_ACQUISITION_YEAR-1,acquisitionYearVerification:'verified',permissionConfirmed:true};
+  h.snapshot=snapshot({selection:[{kind:'figure',code:'E'}],datasets:{bedrock:{source}}});h.controller.refresh();assert.equal(byId('downloadCad').disabled,true);assert.match(byId('cadReadiness').textContent,/1850|year|range|source details/i);
+  h.snapshot.datasets.bedrock.source={...source,acquisitionYear:MIN_ACQUISITION_YEAR};assert.equal(h.controller.refresh(),true);assert.equal(byId('downloadCad').disabled,false);h.controller.destroy();h.dom.window.close();
 });
 
 test('CAD export snapshots once, prevents duplicate clicks, maps phases, and restores every control',async()=>{
