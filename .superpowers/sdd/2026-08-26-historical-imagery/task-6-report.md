@@ -73,4 +73,6 @@ With scoped network access, `live-metadata-probe.mjs` ran the production provide
 
 ## Commits
 
-Product implementation commit: pending creation; its exact hash will be recorded in this report by the follow-up evidence commit and in the final handoff.
+Product implementation commit: `57c3f37fb5d5c608a71a8e489c7d51a55d9dca2b`.
+
+Evidence/report hash-record commit: this follow-up documentation commit; its exact hash is reported in the final handoff because a commit cannot contain its own hash.
