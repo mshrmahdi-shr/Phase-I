@@ -9,6 +9,9 @@ const earthDistance=([firstLng,firstLat],[secondLng,secondLat])=>{
   const radians=Math.PI/180,meanLat=(firstLat+secondLat)/2*radians;
   return Math.hypot((firstLng-secondLng)*radians*6378137*Math.cos(meanLat),(firstLat-secondLat)*radians*6378137);
 };
+const maliciousProj4=({forward=point=>point,inverse=point=>point}={})=>{
+  const implementation=()=>({forward,inverse});implementation.defs=()=>{};return implementation;
+};
 
 test('SITE longitude selects the four supported NAD83 UTM zones with explicit metre metadata',async()=>{
   const {utmZoneForLocation}=await projectionModule();
@@ -77,6 +80,15 @@ test('projectors reject malformed and out-of-range geographic or projected coord
   for(const point of [undefined,null,[],[1],[1,2,3],['500000',4800000],[NaN,4800000],[500000,Infinity],[99999,4800000],[900001,4800000],[500000,-1],[500000,10000001]])assert.throws(()=>projector.inverse(point),/coordinate|point|finite|easting|northing|supported/i);
 });
 
+test('forward projection rejects every finite but implausible coordinate returned by an injected proj4 implementation',async()=>{
+  const {createProjector}=await projectionModule(),location={lat:45,lng:-79},point=[-79,45];
+  for(const output of [[-1,4800000],[99999,4800000],[900001,4800000],[500000,-1],[500000,10000001],[9e99,1e50],[500000,4800000,1]]){
+    const projector=createProjector(location,{proj4Impl:maliciousProj4({forward:()=>output})});
+    assert.throws(()=>projector.forward(point),/projected|UTM|easting|northing|coordinate|supported/i,JSON.stringify(output));
+  }
+  assert.deepEqual(createProjector(location,{proj4Impl:maliciousProj4({forward:()=>[500000,4800000]})}).forward(point),[500000,4800000]);
+});
+
 test('closed geographic rings are projected without mutation and preserve exact closure',async()=>{
   const {createProjector,projectRing}=await projectionModule(),projector=createProjector({lat:43.65,lng:-79.38});
   const ring=[[-79.39,43.64],[-79.37,43.64],[-79.37,43.66],[-79.39,43.66],[-79.39,43.64]],snapshot=structuredClone(ring);
@@ -97,9 +109,35 @@ test('ring projection rejects empty, open, degenerate, malformed, and nonfinite 
   assert.throws(()=>projectRing([[-79,43],[-78,43],[-78,44],[-79,43]],{forward:()=>[NaN,0]}),/projected|finite/i);
 });
 
+test('ring degeneracy is scale-aware for exact, near, and alternating collinear Ontario coordinates',async()=>{
+  const {createProjector,projectRing}=await projectionModule(),projector=createProjector({lat:50,lng:-80});
+  const rings=[
+    [[-80.7,49.4],[-79.5,52.7],[-80.3,50.5],[-80.7,49.4]],
+    [[-80.7,49.4],[-79.5,52.7],[-80.3,50.500000000001],[-80.7,49.4]],
+    [[-80.7,49.4],[-79.5,52.7],[-80.4,50.225],[-79.8,51.875],[-80.7,49.4]]
+  ];
+  for(const ring of rings)assert.throws(()=>projectRing(ring,projector),/ring|degenerate|collinear/i);
+});
+
+test('local scale preserves a valid small Ontario ring despite its large absolute coordinates',async()=>{
+  const {createProjector,projectRing}=await projectionModule(),projector=createProjector({lat:50,lng:-80});
+  const ring=[[-80,50],[-79.99999999,50],[-79.99999999,50.00000001],[-80,50.00000001],[-80,50]];
+  const projected=projectRing(ring,projector);
+  assert.equal(projected.length,5);assert.deepEqual(projected.at(-1),projected[0]);
+  assert.ok(Math.hypot(projected[1][0]-projected[0][0],projected[1][1]-projected[0][1])>.0005);
+});
+
 test('projected bounds cover every point and reject absent or malformed input',async()=>{
   const {projectedBounds}=await projectionModule();
   assert.deepEqual(projectedBounds([[630004.5,4830009],[629998,4830012.25],[630001,4829997]]),{west:629998,south:4829997,east:630004.5,north:4830012.25});
   assert.deepEqual(projectedBounds([[500000,4800000]]),{west:500000,south:4800000,east:500000,north:4800000});
   for(const points of [undefined,null,[],[[1]],[[1,2,3]],[[1,NaN]],'1,2'])assert.throws(()=>projectedBounds(points),/point|bounds|coordinate|finite/i);
+});
+
+test('projected rings and direct bounds enforce the same plausible NAD83 UTM coordinate range',async()=>{
+  const {projectRing,projectedBounds}=await projectionModule(),ring=[[-79,43],[-78.5,43],[-78.5,43.5],[-79,43]];
+  for(const output of [[-1,4800000],[900001,4800000],[500000,-1],[500000,10000001],[9e99,1e50]]){
+    assert.throws(()=>projectRing(ring,{forward:()=>output}),/projected|UTM|easting|northing|supported/i,`ring ${output}`);
+    assert.throws(()=>projectedBounds([[500000,4800000],output]),/projected|UTM|easting|northing|supported/i,`bounds ${output}`);
+  }
 });

@@ -1,18 +1,11 @@
+import defaultProj4 from './proj4-runtime.mjs';
+
 const SUPPORTED_ZONES=Object.freeze([15,16,17,18]);
 const WEST_LIMIT=-96,EAST_LIMIT=-72,MAX_NORTH_LATITUDE=84,MAX_RING_POINTS=5000;
 const ZONE_BOUNDARIES=new Set([-96,-90,-84,-78,-72]);
 
 function fail(message){throw new Error(message);}
 function finite(value,label){if(typeof value!=='number'||!Number.isFinite(value))fail(`${label} must be finite.`);return value;}
-
-async function loadDefaultProj4(){
-  if(typeof process==='object'&&process?.versions?.node)return (await import('proj4')).default;
-  await import(new URL('../vendor/proj4.js',import.meta.url).href);
-  if(typeof globalThis.proj4!=='function')fail('The staged projection browser module did not initialize.');
-  return globalThis.proj4;
-}
-
-const defaultProj4=await loadDefaultProj4();
 
 function checkedLocation(location){
   if(!location||typeof location!=='object'||Array.isArray(location))fail('SITE location must contain latitude and longitude.');
@@ -47,16 +40,11 @@ function checkedGeographicPoint(point){
   return [lng,lat];
 }
 
-function checkedProjectedPoint(point){
-  const [easting,northing]=checkedPair(point,'Projected point');
+function checkedProjectedPoint(point,label='Projected point'){
+  const [easting,northing]=checkedPair(point,label);
   if(easting<100_000||easting>900_000)fail('UTM easting is outside the supported coordinate range.');
   if(northing<0||northing>10_000_000)fail('UTM northing is outside the supported coordinate range.');
   return [easting,northing];
-}
-
-function checkedProjectionResult(point,label){
-  if(!Array.isArray(point)||point.length<2||!Number.isFinite(point[0])||!Number.isFinite(point[1]))fail(`${label} returned invalid projected coordinates.`);
-  return [point[0],point[1]];
 }
 
 function registerDefinitions(proj4Impl){
@@ -70,10 +58,9 @@ export function createProjector(location,{proj4Impl=defaultProj4}={}){
   if(!conversion||typeof conversion.forward!=='function'||typeof conversion.inverse!=='function')fail('proj4 could not create the NAD83 UTM conversion.');
   return Object.freeze({
     crs,
-    forward(point){return checkedProjectionResult(conversion.forward(checkedGeographicPoint(point)),'Forward projection');},
+    forward(point){return checkedProjectedPoint(conversion.forward(checkedGeographicPoint(point)),'Forward projection result');},
     inverse(point){
-      const geographic=checkedProjectionResult(conversion.inverse(checkedProjectedPoint(point)),'Inverse projection');
-      return checkedGeographicPoint(geographic);
+      return checkedGeographicPoint(conversion.inverse(checkedProjectedPoint(point,'Inverse projection input')));
     }
   });
 }
@@ -84,8 +71,26 @@ function checkedRing(ring){
   if(first[0]!==last[0]||first[1]!==last[1])fail('Ring must be closed.');
   const vertices=points.slice(0,-1);
   if(new Set(vertices.map(point=>`${point[0]},${point[1]}`)).size!==vertices.length)fail('Ring must contain distinct vertices.');
-  let twiceArea=0;for(let index=0;index<points.length-1;index++)twiceArea+=points[index][0]*points[index+1][1]-points[index+1][0]*points[index][1];
-  if(!Number.isFinite(twiceArea)||Math.abs(twiceArea)<1e-14)fail('Ring is degenerate.');
+  const origin=vertices[0],xs=vertices.map(point=>point[0]),ys=vertices.map(point=>point[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const scale=Math.max(maxX-minX,maxY-minY),extremes=[vertices[xs.indexOf(minX)],vertices[xs.indexOf(maxX)],vertices[ys.indexOf(minY)],vertices[ys.indexOf(maxY)]];
+  let baselineStart=extremes[0],baselineEnd=extremes[0],baselineSquared=0;
+  for(let firstIndex=0;firstIndex<extremes.length;firstIndex++)for(let secondIndex=firstIndex+1;secondIndex<extremes.length;secondIndex++){
+    const dx=extremes[secondIndex][0]-extremes[firstIndex][0],dy=extremes[secondIndex][1]-extremes[firstIndex][1],distanceSquared=dx*dx+dy*dy;
+    if(distanceSquared>baselineSquared){baselineStart=extremes[firstIndex];baselineEnd=extremes[secondIndex];baselineSquared=distanceSquared;}
+  }
+  const baselineX=baselineEnd[0]-baselineStart[0],baselineY=baselineEnd[1]-baselineStart[1];
+  const maxLineOffset=Math.max(...vertices.map(point=>Math.abs(baselineX*(point[1]-baselineStart[1])-baselineY*(point[0]-baselineStart[0]))));
+  if(maxLineOffset<=baselineSquared*Number.EPSILON*1024)fail('Ring is degenerate or collinear.');
+  let twiceArea=0,compensation=0;
+  for(let index=1;index<vertices.length-1;index++){
+    const first=[vertices[index][0]-origin[0],vertices[index][1]-origin[1]],second=[vertices[index+1][0]-origin[0],vertices[index+1][1]-origin[1]];
+    const term=first[0]*second[1]-first[1]*second[0],sum=twiceArea+term;
+    compensation+=Math.abs(twiceArea)>=Math.abs(term)?(twiceArea-sum)+term:(term-sum)+twiceArea;twiceArea=sum;
+  }
+  twiceArea+=compensation;
+  const areaTolerance=scale*scale*Number.EPSILON*256*vertices.length;
+  if(!Number.isFinite(twiceArea)||!Number.isFinite(areaTolerance)||Math.abs(twiceArea)<=areaTolerance)fail('Ring is degenerate or collinear.');
   const cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
   const onSegment=(point,start,end)=>Math.abs(cross(start,end,point))<1e-14&&point[0]>=Math.min(start[0],end[0])&&point[0]<=Math.max(start[0],end[0])&&point[1]>=Math.min(start[1],end[1])&&point[1]<=Math.max(start[1],end[1]);
   for(let firstIndex=0;firstIndex<vertices.length;firstIndex++)for(let secondIndex=firstIndex+2;secondIndex<vertices.length;secondIndex++){
@@ -98,14 +103,14 @@ function checkedRing(ring){
 
 export function projectRing(ring,projector){
   if(!projector||typeof projector.forward!=='function')fail('Ring projection requires a projector.');
-  const projected=checkedRing(ring).map(point=>checkedProjectionResult(projector.forward(point),'Ring projector'));
+  const projected=checkedRing(ring).map(point=>checkedProjectedPoint(projector.forward(point),'Ring projector result'));
   projected[projected.length-1]=[...projected[0]];
   return projected;
 }
 
 export function projectedBounds(points){
   if(!Array.isArray(points)||points.length===0)fail('Projected bounds require at least one point.');
-  const checked=points.map(point=>checkedPair(point,'Projected bounds point'));
+  const checked=points.map(point=>checkedProjectedPoint(point,'Projected bounds point'));
   let west=Infinity,south=Infinity,east=-Infinity,north=-Infinity;
   for(const [x,y] of checked){west=Math.min(west,x);south=Math.min(south,y);east=Math.max(east,x);north=Math.max(north,y);}
   return {west,south,east,north};

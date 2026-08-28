@@ -42,8 +42,9 @@ export async function buildSite({output=path.join(root,'_site'),revision=process
   await fs.writeFile(path.join(output,'print-preflight.mjs'),releaseModuleSource(await fs.readFile(path.join(output,'print-preflight.mjs'),'utf8'),revision));
   await versionModuleTree(path.join(output,'src'),revision);
   await fs.mkdir(path.join(output,'vendor'),{recursive:true});
+  await fs.rm(path.join(output,'vendor/proj4.js'),{force:true});
   await fs.mkdir(path.join(output,'assets/fonts'),{recursive:true});
-  for(const [from,to] of [['node_modules/jspdf/dist/jspdf.umd.min.js','vendor/jspdf.umd.min.js'],['node_modules/jspdf/LICENSE','vendor/jspdf.LICENSE'],['node_modules/geotiff/dist-browser/geotiff.js','vendor/geotiff.js'],['node_modules/geotiff/LICENSE','vendor/geotiff.LICENSE'],['node_modules/proj4/dist/proj4.js','vendor/proj4.js'],['node_modules/proj4/LICENSE.md','vendor/proj4.LICENSE.md'],['assets/fonts/DejaVuSans.ttf','assets/fonts/DejaVuSans.ttf'],['assets/fonts/LICENSE.txt','assets/fonts/LICENSE.txt']])await fs.copyFile(path.join(root,from),path.join(output,to));
+  for(const [from,to] of [['node_modules/jspdf/dist/jspdf.umd.min.js','vendor/jspdf.umd.min.js'],['node_modules/jspdf/LICENSE','vendor/jspdf.LICENSE'],['node_modules/geotiff/dist-browser/geotiff.js','vendor/geotiff.js'],['node_modules/geotiff/LICENSE','vendor/geotiff.LICENSE'],['node_modules/proj4/dist/proj4.js','vendor/proj4.umd.mjs'],['node_modules/proj4/LICENSE.md','vendor/proj4.LICENSE.md'],['assets/fonts/DejaVuSans.ttf','assets/fonts/DejaVuSans.ttf'],['assets/fonts/LICENSE.txt','assets/fonts/LICENSE.txt']])await fs.copyFile(path.join(root,from),path.join(output,to));
   await fs.writeFile(path.join(output,'version.json'),JSON.stringify({revision,builtAt:new Date().toISOString()},null,2));
   console.log('Pages source staged in '+output);
 }
