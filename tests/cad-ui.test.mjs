@@ -60,11 +60,13 @@ test('failure is actionable and restores editing without publishing a partial re
   h.controller.destroy();h.dom.window.close();
 });
 
-test('browser ZIP download rechecks cancellation and revokes its object URL on success and failure',async t=>{
-  const dom=new JSDOM('<body></body>',{url:'https://app.test/'}),document=dom.window.document,original={create:URL.createObjectURL,revoke:URL.revokeObjectURL},revoked=[];let clicks=0;
+test('browser ZIP download defers successful revoke but immediately cleans abort, click, and scheduler failures',async t=>{
+  const dom=new JSDOM('<body></body>',{url:'https://app.test/'}),document=dom.window.document,original={create:URL.createObjectURL,revoke:URL.revokeObjectURL,click:dom.window.HTMLAnchorElement.prototype.click},revoked=[],scheduled=[];let clicks=0;
   t.after(()=>{URL.createObjectURL=original.create;URL.revokeObjectURL=original.revoke;dom.window.close();});document.addEventListener('click',event=>{if(event.target.tagName==='A')clicks++;});
   URL.createObjectURL=()=> 'blob:success';URL.revokeObjectURL=url=>revoked.push(url);
-  downloadCadPackage({blob:new Blob(['zip'],{type:'application/zip'}),filename:'safe.zip'},{document});assert.equal(clicks,1);assert.deepEqual(revoked,['blob:success']);assert.equal(document.querySelectorAll('a[download]').length,0);
+  downloadCadPackage({blob:new Blob(['zip'],{type:'application/zip'}),filename:'safe.zip'},{document,scheduleRevoke:callback=>scheduled.push(callback)});assert.equal(clicks,1);assert.deepEqual(revoked,[],'successful URL remains valid until a later task');assert.equal(scheduled.length,1);assert.equal(document.querySelectorAll('a[download]').length,0);scheduled.shift()();assert.deepEqual(revoked,['blob:success']);
   const controller=new AbortController();URL.createObjectURL=()=>{controller.abort();return 'blob:cancelled';};
   assert.throws(()=>downloadCadPackage({blob:new Blob(['zip'],{type:'application/zip'}),filename:'late.zip'},{document,signal:controller.signal}),{name:'AbortError'});assert.equal(clicks,1);assert.deepEqual(revoked,['blob:success','blob:cancelled']);assert.equal(document.querySelectorAll('a[download]').length,0);
+  URL.createObjectURL=()=> 'blob:click-error';dom.window.HTMLAnchorElement.prototype.click=()=>{throw new Error('click failed');};assert.throws(()=>downloadCadPackage({blob:new Blob(['zip'],{type:'application/zip'}),filename:'bad.zip'},{document}),/click failed/);assert.deepEqual(revoked,['blob:success','blob:cancelled','blob:click-error']);
+  dom.window.HTMLAnchorElement.prototype.click=original.click;URL.createObjectURL=()=> 'blob:scheduler-error';downloadCadPackage({blob:new Blob(['zip'],{type:'application/zip'}),filename:'safe.zip'},{document,scheduleRevoke:()=>{throw new Error('timer unavailable');}});assert.deepEqual(revoked,['blob:success','blob:cancelled','blob:click-error','blob:scheduler-error']);
 });

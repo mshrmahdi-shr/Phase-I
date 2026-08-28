@@ -45,9 +45,9 @@ test('app wires the current historical provider registry and asset store into PD
 test('app wires the atomic CAD package through the shared export dialog and saved logo asset',()=>{
   const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
   assert.match(source,/import\s*\{exportCadPackage\}\s*from\s*['"]\.\/src\/cad-package\.mjs['"]/);
-  assert.match(source,/createExportDialog\([\s\S]*exportCadPackage\s*:\s*exportBrandedCadPackage/);
+  assert.match(source,/createExportDialog\([\s\S]*prepareCadBranding[\s\S]*exportCadPackage/);
   assert.match(source,/assetStore\.get\(branding\.companyProfile\.logoAssetId\)/);
-  assert.match(source,/exportCadPackage\(\{\.\.\.args,[\s\S]*companyLogo/);
+  assert.match(source,/return\s*\{companyProfile:branding\.companyProfile,companyLogo\}/);
 });
 
 test('app wires compensated project-package persistence and keeps JSON import/export explicitly legacy',()=>{

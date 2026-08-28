@@ -32,21 +32,22 @@ function readiness(snapshot){
 
 function exportInput(source,selection){
   const copy={...source,project:cloneData(source.project,'Project'),companyProfile:cloneData(source.companyProfile,'Company Profile'),selection:cloneData(selection,'CAD selection'),datasets:cloneData(source.datasets||{},'Map datasets')};
+  if(source.companyLogo)copy.companyLogo={metadata:cloneData(source.companyLogo.metadata,'Company logo metadata'),blob:source.companyLogo.blob};
   delete copy.blockers;delete copy.ready;
   return copy;
 }
 
 /** Download a completed atomic package. The URL is owned and revoked by this call on every path. */
-export function downloadCadPackage(result,{document,signal}={}){
+export function downloadCadPackage(result,{document,signal,scheduleRevoke=callback=>setTimeout(callback,0)}={}){
   throwIfAborted(signal);if(!result||!(result.blob instanceof Blob)||result.blob.type!=='application/zip')throw new Error('The completed CAD package is not a ZIP Blob.');if(typeof result.filename!=='string'||!result.filename.trim())throw new Error('The completed CAD package filename is missing.');
-  const url=URL.createObjectURL(result.blob),link=document.createElement('a');
-  try{link.href=url;link.download=result.filename;link.hidden=true;document.body.append(link);throwIfAborted(signal);link.click();}
-  finally{link.remove();URL.revokeObjectURL(url);}
+  if(typeof scheduleRevoke!=='function')throw new Error('CAD download cleanup scheduler is unavailable.');const url=URL.createObjectURL(result.blob),link=document.createElement('a');let clicked=false;
+  try{link.href=url;link.download=result.filename;link.hidden=true;document.body.append(link);throwIfAborted(signal);link.click();clicked=true;}
+  finally{link.remove();if(clicked){try{scheduleRevoke(()=>URL.revokeObjectURL(url));}catch{URL.revokeObjectURL(url);}}else URL.revokeObjectURL(url);}
 }
 
 /** Controls the CAD action inside the shared PDF/CAD selection dialog. */
-export function createCadExportController({document,getSnapshot,setBusy,exportPackage,download=downloadCadPackage}={}){
-  if(!document||typeof getSnapshot!=='function'||typeof setBusy!=='function'||typeof exportPackage!=='function'||typeof download!=='function')throw new Error('CAD export controller dependencies are incomplete.');
+export function createCadExportController({document,getSnapshot,setBusy,exportPackage,download=downloadCadPackage,onBusyChange=()=>{}}={}){
+  if(!document||typeof getSnapshot!=='function'||typeof setBusy!=='function'||typeof exportPackage!=='function'||typeof download!=='function'||typeof onBusyChange!=='function')throw new Error('CAD export controller dependencies are incomplete.');
   const elements=checkedElements(document);let active=null,destroyed=false,lastReady=false,currentRun=Promise.resolve();
 
   function read(){const source=getSnapshot();if(!source||typeof source!=='object')throw new Error('CAD export snapshot is unavailable.');return {source,...readiness(source)};}
@@ -64,11 +65,11 @@ export function createCadExportController({document,getSnapshot,setBusy,exportPa
     if(destroyed||active)return;let state;try{state=read();}catch(error){elements.progress.textContent=`CAD export blocked: ${error.message}`;refresh();return;}
     refresh();if(!state.ready){elements.progress.textContent=`CAD export blocked: ${state.blockers.join(' ')}`;return;}
     let input;try{input=exportInput(state.source,state.selection);}catch(error){elements.progress.textContent=`CAD export blocked: ${error.message}`;return;}
-    const pending=new AbortController();active=pending;const controls=[...elements.dialog.querySelectorAll('button,input,select')].filter(node=>node!==elements.cancel),disabled=controls.map(node=>[node,node.disabled]);controls.forEach(node=>node.disabled=true);elements.cancel.disabled=false;elements.cancel.textContent='Cancel export';elements.meter.hidden=false;elements.meter.removeAttribute('value');elements.progress.textContent=PHASE_LABELS.preflight;
+    const pending=new AbortController();active=pending;onBusyChange(true);const controls=[...elements.dialog.querySelectorAll('button,input,select')].filter(node=>node!==elements.cancel),disabled=controls.map(node=>[node,node.disabled]);controls.forEach(node=>node.disabled=true);elements.cancel.disabled=false;elements.cancel.textContent='Cancel export';elements.meter.hidden=false;elements.meter.removeAttribute('value');elements.progress.textContent=PHASE_LABELS.preflight;
     try{
       setBusy(true);const result=await exportPackage({...input,signal:pending.signal,onProgress:progress});throwIfAborted(pending.signal);download(result,{document,signal:pending.signal});throwIfAborted(pending.signal);elements.progress.textContent=`Downloaded ${imageLabel(result.imageCount)} with ${result.pageCount} PDF ${result.pageCount===1?'sheet':'sheets'} in one AutoCAD ZIP.`;
     }catch(error){elements.progress.textContent=pending.signal.aborted||error?.name==='AbortError'?'AutoCAD export cancelled. No ZIP downloaded.':`Export blocked: ${error?.message||String(error)}`;}
-    finally{active=null;setBusy(false);disabled.forEach(([node,value])=>node.disabled=value);elements.cancel.textContent='Close';elements.meter.hidden=true;refresh();}
+    finally{active=null;let cleanupError=null;try{setBusy(false);}catch(error){cleanupError=error;}disabled.forEach(([node,value])=>node.disabled=value);elements.cancel.textContent='Close';elements.meter.hidden=true;refresh();onBusyChange(false);if(cleanupError)elements.progress.textContent=`Export finished, but editing controls could not be restored: ${cleanupError.message}`;}
   }
   function start(){if(destroyed||active)return;currentRun=run();return currentRun;}
   function onKeydown(event){if(event.key==='Escape'&&active){event.preventDefault();cancel();}}

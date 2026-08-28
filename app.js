@@ -325,12 +325,12 @@ function setExportBusy(value){
   }
 }
 async function exportBrandedPdf(args){const branding=await companyDialog.outputSnapshot(args.companyProfile);return exportCombinedPdf({...args,...branding});}
-async function exportBrandedCadPackage(args){
-  const branding=await companyDialog.outputSnapshot(args.companyProfile),companyLogo=await assetStore.get(branding.companyProfile.logoAssetId);
+async function prepareCadBranding(expected,{signal}={}){
+  signal?.throwIfAborted();const branding=await companyDialog.outputSnapshot(expected);signal?.throwIfAborted();const companyLogo=await assetStore.get(branding.companyProfile.logoAssetId);signal?.throwIfAborted();
   if(!companyLogo)throw new Error('The saved company logo is missing. Open Company Profile and upload it again.');
-  return exportCadPackage({...args,companyProfile:branding.companyProfile,companyLogo});
+  return {companyProfile:branding.companyProfile,companyLogo};
 }
-exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile,providers:HISTORICAL_PROVIDERS,assetStore}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport,exportCadPackage:exportBrandedCadPackage});
+exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile,providers:HISTORICAL_PROVIDERS,assetStore}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport,prepareCadBranding,exportCadPackage});
 $('exportPdf').onclick=()=>{if(!printSession.isOpen)return exportDialog.open();};
 function refreshPrint(){
   const f=project.figures[active];
