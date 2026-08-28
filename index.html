@@ -61,9 +61,12 @@
       <section>
         <div class="section-heading"><h2>Export</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
         <button id="exportPdf" class="primary wide">Export PDF</button>
-        <div class="button-grid"><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button><button id="exportJson">Export Project</button><label class="file-button">Import Project<input id="importJson" type="file" accept="application/json,.json" /></label></div>
+        <button id="exportProjectPackage" class="primary wide">Download Project Package</button>
+        <div class="button-grid"><button id="importProjectPackage" type="button">Import Project Package</button><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button></div>
+        <input id="importProjectPackageFile" type="file" accept="application/zip,.phasei-project.zip" hidden />
+        <div class="legacy-project-tools"><span class="helper">Legacy compatibility</span><div class="button-grid"><button id="exportJson">Export Legacy JSON</button><label for="importJson" class="file-button">Import Legacy JSON<input id="importJson" type="file" accept="application/json,.json" /></label></div></div>
         <div id="printValidation" class="validation-panel" role="alert" hidden></div>
-        <p class="helper">A3 opens a full-size preview before printing. DPI is a preference, not a guarantee of source resolution. DXF currently exports boundaries only; no raster package yet.</p>
+        <p class="helper">The recommended .phasei-project.zip backup includes the project, company profile, logo, and permitted local historical files. JSON is legacy metadata-only compatibility. A3 opens a full-size preview before printing. DXF currently exports boundaries only; no raster package yet.</p>
       </section>
     </aside>
 
@@ -81,6 +84,21 @@
       <div class="aerial-card"><div class="section-heading"><h3>Historical aerials</h3><span class="badge" id="aerialCount">0</span></div><div id="historicalApprovedList" class="helper">No historical imagery approved.</div></div>
     </aside>
   </main>
+
+  <div id="projectPackageDialog" hidden role="dialog" aria-modal="true" aria-labelledby="projectPackageHeading" aria-describedby="projectPackageHelp">
+    <section class="project-package-panel">
+      <div class="project-package-heading"><div><div class="eyebrow">RECOMMENDED BACKUP AND SHARE FORMAT</div><h2 id="projectPackageHeading">Project Package</h2></div></div>
+      <p id="projectPackageHelp">The recommended .phasei-project.zip backup/share package preserves the project, required company branding, and permitted local historical imagery. Import always inspects the complete package before anything is replaced.</p>
+      <div id="projectPackagePreview" class="project-package-preview" hidden>
+        <h3>Review imported package</h3>
+        <p id="projectPackageSummary"></p><p id="projectPackageCompanySummary"></p><p id="projectPackageAssetSummary"></p>
+        <p>Confirm only if this is the project and company profile you intend to restore. Existing verified shared files are reused; remote imagery remains subject to current provider policy.</p>
+      </div>
+      <div id="projectPackageStatus" class="helper" role="status" aria-live="polite"></div>
+      <progress id="projectPackageMeter" aria-label="Project package progress" hidden></progress>
+      <div class="project-package-actions"><button id="cancelProjectPackage" type="button">Close</button><button id="confirmProjectPackageImport" type="button" class="primary" disabled>Confirm package import</button></div>
+    </section>
+  </div>
 
   <div id="historicalDialog" hidden role="dialog" aria-modal="true" aria-labelledby="historicalHeading" aria-describedby="historicalHelp">
     <section class="historical-panel">

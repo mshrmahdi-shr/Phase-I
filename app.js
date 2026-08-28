@@ -8,8 +8,9 @@ import {loadBedrockCache} from './src/bedrock-cache.mjs';
 import {createExportDialog} from './src/export-selection.mjs';
 import {exportCombinedPdf,planPdfExport} from './src/pdf-export.mjs';
 import {createAssetStore} from './src/asset-store.mjs';
-import {normalizeCompanyProfile} from './src/company-profile.mjs';
+import {normalizeCompanyProfile,validateCompanyProfile} from './src/company-profile.mjs';
 import {createCompanyProfileDialog} from './src/company-ui.mjs';
+import {createProjectPackageUI} from './src/project-package-ui.mjs';
 import {createDrawingController} from './src/drawing-controller.mjs';
 import {createHistoricalImageryUI,migrateLegacyHistoricalImagery} from './src/historical-ui.mjs';
 import {ONTARIO_IMAGERY_PROVIDER} from './src/imagery/providers/ontario.mjs';
@@ -21,7 +22,7 @@ const DRAWING_BINDINGS=Symbol.for('phase-i-esa.drawing-bindings');
 document[DRAWING_BINDINGS]?.abort();
 const drawingBindings=new window.AbortController();document[DRAWING_BINDINGS]=drawingBindings;
 let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject()})();
-let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,exportBusy=false,companyProfile=null,printBranding=null;
+let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,packageUI,exportBusy=false,companyProfile=null,printBranding=null;
 const assetStore=createAssetStore();
 function loadCompanyProfile(){try{const saved=localStorage.getItem(COMPANY_STORAGE);return saved?normalizeCompanyProfile(JSON.parse(saved)):null;}catch{return null;}}
 function saveCompanyProfile(profile){const normalized=normalizeCompanyProfile(profile);localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized));return normalized;}
@@ -69,6 +70,25 @@ function persistHistoricalProject(next){
   try{localStorage.setItem(STORAGE,JSON.stringify(scoped));}
   catch{status('saveMessage','Browser storage is unavailable or full. Export Project now to keep a backup.','error');return false;}
   project=scoped;try{$('saveState').textContent='Saved';status('saveMessage','Saved in this browser. Export Project for a backup.');}catch{}return true;
+}
+function readPackageState(){return {project:structuredClone(project),companyProfile:companyProfile?structuredClone(companyProfile):null};}
+function normalizedPackageState(next,{requireProfile=true}={}){
+  if(!next||typeof next!=='object')throw new Error('Project package state is invalid.');
+  const nextProject=restoreProject(next.project),nextProfile=next.companyProfile===null?null:normalizeCompanyProfile(next.companyProfile);
+  if(nextProfile&&validateCompanyProfile(nextProfile).length||requireProfile&&!nextProfile)throw new Error('Project package company profile is incomplete.');
+  if(requireProfile&&JSON.stringify(nextProject.companyProfileSnapshot)!==JSON.stringify(nextProfile))throw new Error('Project package company snapshot does not match its active company profile.');
+  return {project:nextProject,companyProfile:nextProfile};
+}
+function restoreStorageValue(key,value){if(value===null)localStorage.removeItem(key);else localStorage.setItem(key,value);}
+async function persistPackageState(next,context={}){
+  const normalized=normalizedPackageState(next,{requireProfile:context.phase!=='rollback'}),previousMemory=readPackageState(),previousProject=localStorage.getItem(STORAGE),previousCompany=localStorage.getItem(COMPANY_STORAGE);
+  try{
+    localStorage.setItem(STORAGE,JSON.stringify(normalized.project));if(normalized.companyProfile)localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized.companyProfile));else localStorage.removeItem(COMPANY_STORAGE);project=normalized.project;companyProfile=normalized.companyProfile;return true;
+  }catch(error){
+    project=previousMemory.project;companyProfile=previousMemory.companyProfile;const failures=[];
+    for(const [key,value] of [[STORAGE,previousProject],[COMPANY_STORAGE,previousCompany]])try{restoreStorageValue(key,value);}catch(restoreError){failures.push(restoreError);}
+    if(failures.length)throw new AggregateError([error,...failures],'Project/profile metadata persistence and local rollback failed.',{cause:error});throw error;
+  }
 }
 function status(id,t,k=''){$(id).textContent=t;$(id).dataset.kind=k}
 function loadingButton(id,value){const button=$(id);button.dataset.loading=String(value);button.disabled=value||exportBusy;}
@@ -122,7 +142,7 @@ map.on('click',e=>{
 });
 document.addEventListener('keydown',event=>drawingController.handleKey(event),{signal:drawingBindings.signal});
 map.getContainer().addEventListener('contextmenu',event=>drawingController.handleContextMenu(event),{signal:drawingBindings.signal});
-window.addEventListener('pagehide',event=>{if(event.persisted)return;historicalUI?.destroy();drawingBindings.abort();if(document[DRAWING_BINDINGS]===drawingBindings)delete document[DRAWING_BINDINGS];},{signal:drawingBindings.signal});
+window.addEventListener('pagehide',event=>{if(event.persisted)return;packageUI?.destroy();historicalUI?.destroy();drawingBindings.abort();if(document[DRAWING_BINDINGS]===drawingBindings)delete document[DRAWING_BINDINGS];},{signal:drawingBindings.signal});
 function redraw(){siteLayer?.remove();buildingLayer?.remove();if(project.siteBoundary?.length)siteLayer=L.polygon(project.siteBoundary.map(([x,y])=>[y,x]),{color:'#ef4444',weight:4,fill:false}).addTo(map);if(project.buildingBoundary?.length)buildingLayer=L.polygon(project.buildingBoundary.map(([x,y])=>[y,x]),{color:'#111827',weight:3,dashArray:'6 4',fillColor:'#fff',fillOpacity:.1}).addTo(map)}
 function renderFigures(){const h=$('figureList');h.innerHTML='';for(const [c,f] of Object.entries(project.figures)){const d=document.createElement('div');d.className='figure-row'+(c===active?' active':'');d.innerHTML=`<div class="figure-top"><div><div class="figure-code">FIGURE ${c}</div><div class="figure-title">${esc(f.title)}</div></div><span class="badge" title="${f.bounds?'Saved A3 map span':'Default A3 map span'}">${fmt(f.extentMeters)}</span></div><div class="figure-actions"><button title="${f.bounds?'Restore the saved A3 map position and zoom':'Show the current A3 map extent'}">${f.bounds?'View saved':'View'}</button><button title="Save the current map position and zoom for A3/PDF">${f.bounds?'Update A3 view':'Use for A3'}</button></div>`;d.children[1].children[0].onclick=()=>selectFig(c,true);d.children[1].children[1].onclick=()=>useForA3(c);h.appendChild(d)}}
 function fmt(m){return m>=1000?`${m/1000} km`:`${m} m`;}
@@ -265,8 +285,8 @@ map.on('moveend resize',()=>{renderGeo();updateScale();if(printSession?.isOpen)r
 
 $('saveProject').onclick=save;
 $('newProject').onclick=()=>{if(confirm('Start a new local project? Export your current project first if you need a backup.')){localStorage.removeItem(STORAGE);localStorage.removeItem('phase-i-esa-project-v1');location.reload();}};
-$('exportJson').onclick=()=>dl(`${safe(project.name||'phase-i-project')}.json`,JSON.stringify(project,null,2),'application/json');
-$('importJson').onchange=async e=>{const file=e.target.files?.[0];if(!file||exportBusy)return;try{const imported=restoreProject(JSON.parse(await file.text()));if(exportBusy){status('saveMessage','Reimport the project after PDF export finishes.');return;}project=imported;if(save())location.reload();}catch(error){status('saveMessage',`Project import failed: ${error.message}`,'error');}};
+$('exportJson').onclick=()=>{dl(`${safe(project.name||'phase-i-project')}.legacy.json`,JSON.stringify(project,null,2),'application/json');status('saveMessage','Legacy JSON exported. It does not include the company logo or local historical image files; use Project Package for a complete backup.');};
+$('importJson').onchange=async e=>{const file=e.target.files?.[0];if(!file||exportBusy)return;try{const imported=restoreProject(JSON.parse(await file.text()));if(exportBusy){status('saveMessage','Reimport the Legacy JSON after export finishes.');return;}project=imported;if(save())location.reload();}catch(error){status('saveMessage',`Legacy JSON project import failed: ${error.message}`,'error');}finally{e.target.value='';}};
 $('exportDxf').onclick=async()=>{try{const branding=await companyDialog.outputSnapshot(companyProfile);dl(`${safe(project.name||'phase-i')}.dxf`,buildDxf(project,{companyProfile:branding.companyProfile}),'application/dxf');}catch(error){status('saveMessage',`DXF blocked: ${error.message}`,'error');await companyDialog.refresh();await companyDialog.open();}};
 function printState(){
   const kind=geologyKind(),hit=kind?siteFeature(geo[kind],project.location):null;
@@ -324,6 +344,15 @@ try{
 }catch(error){status('imageryStatus',error.message,'error');status('saveMessage','Legacy imagery was not changed. Export Project now to preserve the original data before retrying.','error');}
 historicalUI=createHistoricalImageryUI({document,map,L,assetStore,providers:HISTORICAL_PROVIDERS,getProject:()=>project,
   saveProject:persistHistoricalProject,isAssetReferencedOutsideHistorical:id=>(companyProfile||loadCompanyProfile())?.logoAssetId===id,onChanged:()=>{preflight?.refresh();exportDialog?.refresh();}});
+async function initializePackageState(next,context={}){
+  const normalized=normalizedPackageState(next,{requireProfile:context.phase!=='rollback'});project=normalized.project;companyProfile=normalized.companyProfile;drawingController.cancel();printSession?.close();printBranding=null;locationRevision++;
+  for(const kind of ['surficial','bedrock']){geoRequest[kind]++;geo[kind].length=0;geoSource[kind]=null;geoCoverage[kind]=null;geoReady[kind]=false;}
+  geoLayer?.remove();geoLayer=null;siteMarker?.remove();siteMarker=null;siteLayer?.remove();siteLayer=null;buildingLayer?.remove();buildingLayer=null;active='A';$('coords').textContent='No site selected';
+  sync();await companyDialog.refresh();await historicalUI.refresh();preflight?.refresh();exportDialog?.refresh();return true;
+}
+packageUI=createProjectPackageUI({document,assetStore,Zip:JSZip,getState:readPackageState,readState:readPackageState,persistState:persistPackageState,initialize:initializePackageState,
+  isAssetReferenced:(id,state)=>state?.companyProfile?.logoAssetId===id||state?.project?.historical?.some(item=>item.assetId===id),setBusy:setExportBusy,
+  onCommitted:()=>{status('saveMessage','Project package imported and saved in this browser. Remote official imagery will be revalidated before export.','ok');preflight?.refresh();exportDialog?.refresh();}});
 const openHistorical=()=>{if(exportBusy)return;drawingController.cancel();historicalUI.open();};
 $('manageHistorical').onclick=openHistorical;$('manageHistoricalHeader').onclick=openHistorical;
 sync();await companyDialog.refresh();if(!companyProfile)await companyDialog.open();

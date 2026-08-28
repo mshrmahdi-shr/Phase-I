@@ -5,6 +5,15 @@
 @media(max-width:540px){.app-shell{gap:8px}.panel{padding:12px}.two-col{grid-template-columns:1fr}.button-grid{grid-template-columns:1fr 1fr}.map-toolbar{align-items:flex-start;gap:8px;flex-direction:column}.coords{word-break:break-all}.map-home,.map-home #map,#map{min-height:460px}}
 
 [hidden]{display:none!important}
+.legacy-project-tools{margin-top:12px;padding-top:10px;border-top:1px solid #334155}.legacy-project-tools>.helper{display:block;margin:0 0 5px;color:#cbd5e1;font-weight:650}.legacy-project-tools .file-button{display:flex;align-items:center;justify-content:center;margin-top:5px}
+.project-package-open{overflow:hidden}
+#projectPackageDialog{position:fixed;inset:0;z-index:5200;display:flex;align-items:center;justify-content:center;padding:20px;background:#020617cc}
+.project-package-panel{width:min(760px,100%);max-height:calc(100dvh - 40px);overflow-y:auto;overscroll-behavior:contain;padding:24px;border:1px solid #475569;border-radius:14px;background:#111827;box-shadow:0 16px 70px #0008}
+.project-package-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.project-package-heading h2{margin:3px 0 0;font-size:22px}.project-package-panel>p,.project-package-preview p{color:#cbd5e1;font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.project-package-preview{margin:16px 0;padding:14px;border:1px solid #38bdf8;border-radius:10px;background:#0c4a6e55}.project-package-preview h3{margin:0 0 8px}.project-package-preview p{margin:7px 0}
+#projectPackageStatus{min-height:42px;padding:8px 0;overflow-wrap:anywhere}#projectPackageMeter{width:100%;height:12px;accent-color:#38bdf8}
+.project-package-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px}.project-package-actions button{width:auto;min-width:180px;margin:0}.project-package-actions #confirmProjectPackageImport{flex:2}.project-package-actions #cancelProjectPackage{flex:1}
+@media(max-width:540px){#projectPackageDialog{padding:8px;align-items:stretch}.project-package-panel{max-height:calc(100dvh - 16px);padding:16px;border-radius:10px}.project-package-heading h2{font-size:19px}.project-package-actions{flex-direction:column-reverse}.project-package-actions button{width:100%;min-width:0}.legacy-project-tools .button-grid{grid-template-columns:1fr}}
 .company-profile-open{overflow:hidden}
 #companyProfileDialog{position:fixed;inset:0;z-index:5000;background:#020617cc;display:flex;align-items:center;justify-content:center;padding:20px}
 .company-profile-panel{width:min(920px,100%);max-height:calc(100dvh - 40px);overflow-y:auto;overscroll-behavior:contain;background:#111827;border:1px solid #475569;border-radius:14px;padding:24px;box-shadow:0 16px 70px #0008}

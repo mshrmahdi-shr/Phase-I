@@ -26,6 +26,7 @@ test('index exposes the core Phase I workflow controls', () => {
   const html=fs.readFileSync(new URL('../index.html', import.meta.url),'utf8');
   for (const id of ['address','searchAddress','drawSite','drawBuilding','finishDraw','figureList','manageHistorical','historicalDialog','historicalYear',
     'searchHistorical','manualHistoricalFile','manualWorldFile','manualCitation','manualPermission','historicalCropFrame','historicalApprovedList','historicalViewControls','cancelHistoricalView','uploadGeology','printA3','exportDxf',
+    'exportProjectPackage','importProjectPackage','importProjectPackageFile','projectPackageDialog','projectPackageStatus','confirmProjectPackageImport','cancelProjectPackage',
     'editCompanyProfile','exportCompanyTemplate','importCompanyTemplate','companyProfileDialog','printCompanyLogo','printCompanyName','printCompanyContact']) {
     assert.match(html,new RegExp(`id=["']${id}["']`),`missing #${id}`);
   }
@@ -37,6 +38,15 @@ test('app wires the current historical provider registry and asset store into PD
   assert.match(source,/const HISTORICAL_PROVIDERS=Object\.freeze\(\[ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER\]\)/);
   assert.match(source,/getState:\(\)=>\(\{project,datasets:datasets\(\),companyProfile,providers:HISTORICAL_PROVIDERS,assetStore\}\)/);
   assert.match(source,/providers:HISTORICAL_PROVIDERS,getProject:/);
+});
+
+test('app wires compensated project-package persistence and keeps JSON import/export explicitly legacy',()=>{
+  const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
+  assert.match(source,/import \{createProjectPackageUI\} from '\.\/src\/project-package-ui\.mjs'/);
+  assert.match(source,/packageUI=createProjectPackageUI\(\{document,assetStore,Zip:JSZip/);
+  assert.match(source,/readState:readPackageState,persistState:persistPackageState,initialize:initializePackageState/);
+  assert.match(source,/function persistPackageState\(/);assert.match(source,/function initializePackageState\(/);
+  assert.match(source,/Legacy JSON/);assert.match(source,/\.legacy\.json/);
 });
 
 test('print panel stays visible until all live requirements are corrected',async()=>{
