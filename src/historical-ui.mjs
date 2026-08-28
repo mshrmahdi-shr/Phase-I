@@ -610,7 +610,7 @@ export function createHistoricalImageryUI({
     if(event.key!=='Tab')return;
     const viewing=$('historicalDialog').classList.contains('historical-viewing'),cropping=$('historicalDialog').classList.contains('historical-cropping');
     const focusable=[...$('historicalDialog').querySelectorAll('button,input,select,textarea,a[href]')].filter(element=>{
-      if(element.disabled||element.closest('[hidden]'))return false;
+      if(element.disabled||element.closest('[hidden]')||element.tabIndex===-1)return false;
       if(viewing)return element.id==='closeHistorical'||Boolean(element.closest('#historicalViewControls'));
       if(cropping)return element.id==='closeHistorical'||Boolean(element.closest('#historicalCropControls'))||Boolean(!element.closest('#historicalOfficialPanel')&&element.closest('#manualPlacementControls'));
       return true;

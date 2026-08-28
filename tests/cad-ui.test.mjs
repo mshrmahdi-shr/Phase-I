@@ -39,6 +39,16 @@ test('CAD readiness visibly blocks a selected geology overlay with incomplete le
   h.controller.destroy();h.dom.window.close();
 });
 
+test('CAD readiness explains how to assign missing project branding',()=>{
+  const h=fixture(),byId=id=>h.document.getElementById(id);
+  h.snapshot=snapshot({companyProfile:null});
+  h.controller.refresh();
+  assert.equal(byId('downloadCad').disabled,true);
+  assert.match(byId('cadReadiness').textContent,/Apply Current Template|project branding/i);
+  assert.doesNotMatch(byId('cadReadiness').textContent,/plain object/i);
+  h.controller.destroy();h.dom.window.close();
+});
+
 test('CAD readiness requires the persisted rights confirmation even when text evidence exists',()=>{
   const h=fixture(),byId=id=>h.document.getElementById(id),source={id:'custom',name:'uploaded.kml',credits:'Example Engineer',sourceUrl:null,license:'Written project licence',redistributionEvidence:'Permission email on file',acquisitionYear:null,acquisitionYearVerification:'unknown',permissionConfirmed:false};
   h.snapshot=snapshot({selection:[{kind:'figure',code:'E'}],datasets:{bedrock:{source}}});h.controller.refresh();assert.equal(byId('downloadCad').disabled,true);assert.match(byId('cadReadiness').textContent,/confirm|permission|rights/i);h.controller.destroy();h.dom.window.close();

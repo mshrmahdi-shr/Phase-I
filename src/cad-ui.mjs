@@ -32,7 +32,9 @@ function readiness(snapshot){
     try{if(source?.id==='custom')normalizeCustomGeologySource(source);else if(!source||fields.some(field=>typeof source[field]!=='string'||!source[field].trim()))throw new Error('missing official provenance');}
     catch(error){blockers.push(`Figure ${item.code} geology source, credits, licence, permission evidence, rights confirmation, and acquisition year must be valid before CAD export. Edit custom source details to correct them. ${error.message}`);}
   }
-  try{for(const error of validateCompanyProfile(snapshot?.companyProfile))blockers.push(`${error.message} Open Company Profile and save it before exporting.`);}catch(error){blockers.push(`Company Profile is incomplete: ${error.message} Open Company Profile and save it before exporting.`);}
+  if(snapshot?.companyProfile==null){
+    blockers.push('Project branding is not assigned. Click Apply Current Template to this project, then export again.');
+  }else try{for(const error of validateCompanyProfile(snapshot.companyProfile))blockers.push(`${error.message} Open Company Profile and save it before exporting.`);}catch(error){blockers.push(`Company Profile is incomplete: ${error.message} Open Company Profile and save it before exporting.`);}
   let crs=null;try{crs=utmZoneForLocation(snapshot?.project?.location);}catch(error){blockers.push(`CAD coordinate system unavailable: ${error.message}`);}
   if(snapshot?.ready===false&&!blockers.length)blockers.push('The selected export rows are not ready. Correct the highlighted rows and try again.');
   return {selection,crs,blockers:[...new Set(blockers)],ready:snapshot?.ready!==false&&selection.length>0&&blockers.length===0};
