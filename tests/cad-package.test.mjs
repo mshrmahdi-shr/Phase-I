@@ -5,9 +5,10 @@ import {createHash} from 'node:crypto';
 import {crc32,deflateSync} from 'node:zlib';
 import JSZip from 'jszip';
 import {createProject} from '../src/core.mjs';
-import {projectPoint,unprojectPoint} from '../src/sheet-layout.mjs';
+import {projectPoint,sheetGeometry,unprojectPoint} from '../src/sheet-layout.mjs';
 import {pixelToGround} from '../src/world-file.mjs';
 import {exportCadPackage} from '../src/cad-package.mjs';
+import {createProjector} from '../src/projection.mjs';
 import {TORONTO_IMAGERY_PROVIDER} from '../src/imagery/providers/toronto.mjs';
 
 const STAMP='2026-08-28T12:00:00.000Z';
@@ -29,6 +30,9 @@ function dataUrl(bytes,mime='image/png'){return `data:${mime};base64,${Buffer.fr
 function sha256(bytes){return createHash('sha256').update(bytes).digest('hex');}
 function pngDimensions(bytes){const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);return {width:view.getUint32(16),height:view.getUint32(20)};}
 function hasPngChunk(bytes,name){for(let offset=8;offset+12<=bytes.length;){const length=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength).getUint32(offset),type=String.fromCharCode(...bytes.subarray(offset+4,offset+8));if(type===name)return true;offset+=12+length;}return false;}
+function jpegWithDimensions(source,width,height){const bytes=new Uint8Array(source);for(let offset=2;offset<bytes.length-8;){if(bytes[offset++]!==0xff)throw new Error('invalid JPEG fixture marker');while(bytes[offset]===0xff)offset++;const marker=bytes[offset++];if(marker===0xda||marker===0xd9)break;if(marker===0x01||marker>=0xd0&&marker<=0xd7)continue;const length=bytes[offset]<<8|bytes[offset+1];if([0xc0,0xc1,0xc2,0xc3,0xc5,0xc6,0xc7,0xc9,0xca,0xcb,0xcd,0xce,0xcf].includes(marker)){bytes[offset+3]=height>>8;bytes[offset+4]=height&255;bytes[offset+5]=width>>8;bytes[offset+6]=width&255;return bytes;}offset+=length;}throw new Error('JPEG fixture has no SOF marker');}
+const PRODUCTION_PNGS=new Map();
+function productionPng(width,height,marker){const key=`${width}x${height}:${marker}`;if(PRODUCTION_PNGS.has(key))return PRODUCTION_PNGS.get(key);const row=Buffer.alloc(1+width*4);for(let offset=1;offset<row.length;offset+=4){row[offset]=marker;row[offset+3]=255;}const raw=Buffer.alloc(row.length*height);for(let index=0;index<height;index++)row.copy(raw,index*row.length);const header=Buffer.alloc(13);header.writeUInt32BE(width,0);header.writeUInt32BE(height,4);header[8]=8;header[9]=6;const physical=Buffer.alloc(9);physical.writeUInt32BE(11811,0);physical.writeUInt32BE(11811,4);physical[8]=1;const result=new Uint8Array(Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('pHYs',physical),chunk('IDAT',deflateSync(raw)),chunk('IEND',Buffer.alloc(0))]));PRODUCTION_PNGS.set(key,result);return result;}
 
 function a3Bounds(location,halfWidth=12_000){
   const [x,y]=projectPoint([location.lng,location.lat]),halfHeight=halfWidth/(420/297),southwest=unprojectPoint([x-halfWidth,y-halfHeight]),northeast=unprojectPoint([x+halfWidth,y+halfHeight]);
@@ -62,7 +66,7 @@ function compositor(log=[],disposed=[],options={}){
     try{
       if(options.fail===label)throw new Error(`${label} compositor failed`);
       options.controller?.abort();
-      const raster=options.raster??{bytes:png({marker:label.charCodeAt(0)}),mime:'image/png',width:1,height:1};
+      const raster=options.raster??{bytes:productionPng(geometry.raster.width,geometry.raster.height,label.charCodeAt(0)),mime:'image/png',width:geometry.raster.width,height:geometry.raster.height};
       return {dataUrl:dataUrl(raster.bytes,raster.mime),width:raster.width,height:raster.height,bounds:{...geometry.bounds},dispose(){disposed.push(label);active--;}};
     }catch(error){active--;throw error;}
   };
@@ -112,9 +116,21 @@ test('one projected affine drives each world file, DXF frame, attachment command
   for(const path of names.filter(path=>path!=='Manifest.json')){const content=await bytes(zip,path),row=declared.get(path);assert.equal(row.bytes,content.byteLength,path);assert.equal(row.sha256,sha256(content),path);}
 });
 
+test('production raster dimensions preserve true ordered UTM controls and fit one converged CAD affine within documented tolerance',async()=>{
+  const exportPdf=async options=>{for(const selected of options.selection){const geometry=selected.kind==='figure'?(await import('../src/sheet-layout.mjs')).sheetGeometry(options.project,selected.code,options.dpi):(await import('../src/historical-layout.mjs')).historicalSheetGeometry(options.project,options.project.historical.find(item=>item.id===selected.id),options.dpi),surface=await (selected.kind==='figure'?options.compose({project:options.project,code:selected.code,geometry,features:[],signal:options.signal}):options.composeHistorical({project:options.project,item:options.project.historical.find(item=>item.id===selected.id),geometry,signal:options.signal}));surface.dispose();}return {blob:new Blob(['%PDF-1.3\n%%EOF\n'],{type:'application/pdf'}),pageCount:options.selection.length};};
+  const {result}=await archiveResult({composeOptions:{productionDimensions:true},options:{exportPdf}}),{zip}=await archiveEntries(result.blob),manifest=JSON.parse(await text(zip,'Manifest.json')),dxf=await text(zip,'Project.dxf'),frames=dxfPolylines(dxf,'IMAGE_FRAMES'),script=await text(zip,'Attach-Images.scr'),readme=await text(zip,'README.txt'),sources=await text(zip,'Sources-and-Licences.txt'),projector=createProjector({lat:43.7,lng:-79.3});assert.match(readme,/contextual, not survey grade/i);assert.match(readme,/0\.15%/);assert.match(sources,/True-control residual:/);assert.match(sources,/Fitness: contextual-not-survey-grade/);
+  for(const [index,item] of manifest.items.entries()){
+    const controls=item.geographicCorners.map(point=>projector.forward(point));for(let corner=0;corner<4;corner++)assert.ok(Math.hypot(controls[corner][0]-item.projectedControlCorners[corner][0],controls[corner][1]-item.projectedControlCorners[corner][1])<1e-5,`${item.code} true control ${corner}`);
+    assert.deepEqual(item.cadFrameCorners,item.projectedCorners);assert.deepEqual(frames[index],item.cadFrameCorners);assert.equal(item.projectionFit.method,'least-squares-similarity');assert.equal(item.projectionFit.fitness,'contextual-not-survey-grade');assert.ok(item.projectionFit.residualMetres<=item.projectionFit.maxToleranceMetres,item.code);assert.ok(item.rotation>1&&item.rotation<2,`${item.code} UTM convergence`);
+    const residual=Math.max(...controls.map((point,corner)=>Math.hypot(point[0]-item.cadFrameCorners[corner][0],point[1]-item.cadFrameCorners[corner][1]))),diagonal=Math.hypot(controls[2][0]-controls[0][0],controls[2][1]-controls[0][1]),tolerance=Math.max(2,diagonal*.0015);assert.ok(Math.abs(residual-item.projectionFit.residualMetres)<1e-4,item.code);assert.ok(Math.abs(tolerance-item.projectionFit.maxToleranceMetres)<1e-4,item.code);if(item.code==='A'||item.code==='C')assert.ok(residual<2,`${item.code} high-quality control fit`);else assert.ok(residual>2,`${item.code} documents contextual fit`);
+    const world=(await text(zip,item.worldFilePath)).trim().split('\n').map(Number),image=manifest.files.find(file=>file.path===item.imagePath),[A,D,B,E,C,F]=world,outer=[C-(A+B)/2,F-(D+E)/2],reconstructed=[outer,[outer[0]+A*image.pixelWidth,outer[1]+D*image.pixelWidth],[outer[0]+A*image.pixelWidth+B*image.pixelHeight,outer[1]+D*image.pixelWidth+E*image.pixelHeight],[outer[0]+B*image.pixelHeight,outer[1]+E*image.pixelHeight]];for(let corner=0;corner<4;corner++)assert.ok(Math.hypot(reconstructed[corner][0]-item.cadFrameCorners[corner][0],reconstructed[corner][1]-item.cadFrameCorners[corner][1])<1e-5,`${item.code} world frame`);
+    const command=script.split('\r\n').findIndex(line=>line===`"${item.imagePath}"`);assert.ok(command>0);assert.ok(Math.abs(Number(script.split('\r\n')[command+3])-item.rotation)<1e-8,item.code);
+  }
+});
+
 test('production-style JPEG composers allocate matching .jpg/.jgw paths and strip JFIF/EXIF density metadata',async()=>{
-  const jpeg=new Uint8Array(await fs.readFile(new URL('./fixtures/imagery/manual/valid-2x3-o1.jpg',import.meta.url))),decodeBitmap=async blob=>blob.type==='image/jpeg'?{width:2,height:3,close(){}}:{...pngDimensions(new Uint8Array(await blob.arrayBuffer())),close(){}};
-  const value=await fixture({selection:[{kind:'figure',code:'A'}],composeOptions:{raster:{bytes:jpeg,mime:'image/jpeg',width:2,height:3}},options:{decodeOptions:{decodeBitmap}}}),result=await exportCadPackage(value.options),{zip,names}=await archiveEntries(result.blob);
+  const geometry=sheetGeometry(projectFixture(),'A',150),jpeg=jpegWithDimensions(new Uint8Array(await fs.readFile(new URL('./fixtures/imagery/manual/valid-2x3-o1.jpg',import.meta.url))),geometry.raster.width,geometry.raster.height),decodeBitmap=async blob=>blob.type==='image/jpeg'?{...geometry.raster,close(){}}:{...pngDimensions(new Uint8Array(await blob.arrayBuffer())),close(){}},exportPdf=async options=>{const surface=await options.compose({project:options.project,code:'A',geometry:sheetGeometry(options.project,'A',options.dpi),features:[],signal:options.signal});surface.dispose();return {blob:new Blob(['%PDF-1.3\n%%EOF\n'],{type:'application/pdf'}),pageCount:1};};
+  const value=await fixture({selection:[{kind:'figure',code:'A'}],composeOptions:{raster:{bytes:jpeg,mime:'image/jpeg',...geometry.raster}},options:{decodeOptions:{decodeBitmap},exportPdf}}),result=await exportCadPackage(value.options),{zip,names}=await archiveEntries(result.blob);
   assert.deepEqual(names.slice(-2),['images/Figure-A.jpg','images/Figure-A.jgw']);const image=await bytes(zip,'images/Figure-A.jpg');assert.equal(image[0],0xff);assert.equal(image[1],0xd8);assert.equal(Buffer.from(image).includes(Buffer.from('JFIF')),false);assert.equal(Buffer.from(image).includes(Buffer.from('Exif')),false);
   const manifest=JSON.parse(await text(zip,'Manifest.json'));assert.equal(manifest.items[0].imagePath,'images/Figure-A.jpg');assert.equal(manifest.items[0].worldFilePath,'images/Figure-A.jgw');
 });
@@ -134,6 +150,16 @@ test('strict frozen preflight rejects duplicate, link-only, stale logo, and miss
     const value=await fixture();value.options.assetStore={get:async()=>null};cases.push([value,/missing.*historical|historical.*missing|asset/i]);
   }
   for(const [value,pattern] of cases){await assert.rejects(exportCadPackage(value.options),pattern);assert.deepEqual(value.composed,[]);assert.deepEqual(value.disposed,[]);}
+});
+
+test('invalid mandatory logo blocks all historical asset, provider, composer, PDF, and ZIP work',async()=>{
+  const value=await fixture(),official={...officialItem(),id:'9833e469-c7e8-4ef1-84f1-b89c608c2126'};value.project.historical.push(official);value.project.historicalSequenceCounters={'1960':1,'1972':1};value.options.selection=[{kind:'historical',id:IDS.item},{kind:'historical',id:official.id}];let providerCalls=0,pdfCalls=0,zipCalls=0;value.options.providers=[TORONTO_IMAGERY_PROVIDER];value.options.revalidateOfficial=async()=>{providerCalls++;return currentOfficial(official);};value.options.exportPdf=async()=>{pdfCalls++;throw new Error('must not export PDF');};value.options.Zip=class{constructor(){zipCalls++;}};value.options.companyLogo={...value.stored.logo,metadata:{...value.stored.logo.metadata,sha256:'0'.repeat(64)}};
+  await assert.rejects(exportCadPackage(value.options),/logo.*hash|hash.*logo|integrity/i);assert.deepEqual(value.reads,[]);assert.equal(providerCalls,0);assert.deepEqual(value.composed,[]);assert.equal(pdfCalls,0);assert.equal(zipCalls,0);
+});
+
+test('mandatory logo bytes and metadata are snapshotted before later historical asset work can mutate the caller record',async()=>{
+  const value=await fixture({selection:[{kind:'historical',id:IDS.item}]}),originalHash=value.stored.logo.metadata.sha256,normalizedHash=sha256(png({width:3,height:2,marker:76,resolution:false})),originalGet=value.options.assetStore.get;value.options.assetStore={get:async id=>{value.options.companyLogo.metadata.sha256='0'.repeat(64);value.options.companyLogo.blob=new Blob(['mutated'],{type:'image/png'});return originalGet(id);}};
+  const result=await exportCadPackage(value.options),{zip}=await archiveEntries(result.blob),manifest=JSON.parse(await text(zip,'Manifest.json')),logo=manifest.files.find(file=>file.path==='company/logo.png'),logoBytes=await bytes(zip,'company/logo.png');assert.equal(logo.sha256,normalizedHash);assert.equal(logo.sha256,sha256(logoBytes));assert.notEqual(value.options.companyLogo.metadata.sha256,originalHash);
 });
 
 test('typed selection rejects accessors without invoking untrusted getters',async()=>{
@@ -186,6 +212,17 @@ test('abort during final ZIP generation prevents publication after all temporary
 test('logo byte and package entry budgets fail closed before any map composition',async()=>{
   const value=await fixture(),oversized=new Uint8Array(16_000_001),blob=new Blob([oversized],{type:'image/png'});value.options.companyLogo={blob,metadata:{...value.stored.logo.metadata,size:blob.size,sha256:sha256(oversized)}};
   await assert.rejects(exportCadPackage(value.options),/16 MB|byte limit|too large|budget/i);assert.deepEqual(value.composed,[]);
+});
+
+test('conservative budget planner enforces aggregate pixel, raster, PDF, uncompressed, archive, and working-copy boundaries',async()=>{
+  const {planCadPackageBudget}=await import('../src/cad-package.mjs');assert.equal(typeof planCadPackageBudget,'function');const input={rasters:[{width:2,height:2},{width:2,height:2}],logoBytes:1,logoPixels:2,entryCount:2,pdfBytes:20,textBytes:10},base={imageBytes:10,imagePixels:100,rasterBytes:100,pixels:100,pdfBytes:100,textBytes:100,uncompressedBytes:1000,archiveBytes:2000,workingBytes:10000,zipEntryOverheadBytes:2,zipEndOverheadBytes:3};
+  const exact=[['pixels',10,/pixel/i],['rasterBytes',21,/raster.*byte/i],['pdfBytes',20,/PDF.*byte/i],['uncompressedBytes',51,/uncompressed/i],['archiveBytes',58,/archive/i],['workingBytes',190,/working|memory/i]];
+  for(const [field,boundary,pattern] of exact){assert.doesNotThrow(()=>planCadPackageBudget({...input,limits:{...base,[field]:boundary}}),field);assert.throws(()=>planCadPackageBudget({...input,limits:{...base,[field]:boundary-1}}),pattern,field);}
+});
+
+test('worst-case normalized raster budget fails before selected asset or provider I/O and every composer',async()=>{
+  const value=await fixture(),base=officialItem(),items=[0,1,2].map(index=>({...base,id:['74f14168-4de6-4c5f-88f4-87db8ec731c2','9833e469-c7e8-4ef1-84f1-b89c608c2126','6f9719eb-3083-4bdb-a35b-d638a6efac19'][index],year:1970+index,title:`Official ${1970+index}`,officialExport:{...base.officialExport,resultId:`toronto:official-${1970+index}`}}));value.project.historical=items;value.project.historicalSequenceCounters={'1970':1,'1971':1,'1972':1};value.options.selection=[...['A','B','C','D','E'].map(code=>({kind:'figure',code})),...items.map(item=>({kind:'historical',id:item.id}))];let providerCalls=0,pdfCalls=0;value.options.providers=[TORONTO_IMAGERY_PROVIDER];value.options.revalidateOfficial=async({item})=>{providerCalls++;return currentOfficial(item);};value.options.exportPdf=async()=>{pdfCalls++;throw new Error('must not export PDF');};
+  await assert.rejects(exportCadPackage(value.options),/worst-case|normalized raster|128 MB|budget/i);assert.deepEqual(value.reads,[]);assert.equal(providerCalls,0);assert.deepEqual(value.composed,[]);assert.equal(pdfCalls,0);
 });
 
 test('pre-aborted exports do not read assets, compose, invoke PDF generation, or construct ZIPs',async()=>{

@@ -26,10 +26,13 @@ const FIGURE_CODES=Object.freeze(['A','B','C','D','E']);
 const DEFAULT_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
 const LOGO_FIELDS=Object.freeze(['blob','metadata']);
 const ASSET_FIELDS=Object.freeze(['createdAt','height','id','kind','mime','sha256','size','width']);
-const SELECTION_LIMIT=20,ENTRY_LIMIT=48,IMAGE_BYTE_LIMIT=16_000_000,TOTAL_IMAGE_BYTE_LIMIT=128_000_000;
-const IMAGE_PIXEL_LIMIT=16_000_000,TOTAL_PIXEL_LIMIT=160_000_000,PDF_BYTE_LIMIT=64_000_000;
-const UNCOMPRESSED_BYTE_LIMIT=256_000_000,ARCHIVE_BYTE_LIMIT=257_000_000,MANUAL_SNAPSHOT_LIMIT=32_000_000;
-const TEXT_BYTE_LIMIT=8_000_000,SHA256=/^[a-f0-9]{64}$/;
+export const CAD_PACKAGE_LIMITS=Object.freeze({imageBytes:16_000_000,imagePixels:16_000_000,rasterBytes:128_000_000,pixels:160_000_000,pdfBytes:64_000_000,textBytes:8_000_000,uncompressedBytes:256_000_000,archiveBytes:257_000_000,workingBytes:768_000_000,zipEntryOverheadBytes:1024,zipEndOverheadBytes:1024});
+const SELECTION_LIMIT=20,ENTRY_LIMIT=48,IMAGE_BYTE_LIMIT=CAD_PACKAGE_LIMITS.imageBytes,TOTAL_IMAGE_BYTE_LIMIT=CAD_PACKAGE_LIMITS.rasterBytes;
+const IMAGE_PIXEL_LIMIT=16_000_000,TOTAL_PIXEL_LIMIT=CAD_PACKAGE_LIMITS.pixels,PDF_BYTE_LIMIT=CAD_PACKAGE_LIMITS.pdfBytes;
+const UNCOMPRESSED_BYTE_LIMIT=CAD_PACKAGE_LIMITS.uncompressedBytes,ARCHIVE_BYTE_LIMIT=CAD_PACKAGE_LIMITS.archiveBytes,MANUAL_SNAPSHOT_LIMIT=32_000_000;
+const TEXT_BYTE_LIMIT=CAD_PACKAGE_LIMITS.textBytes,SHA256=/^[a-f0-9]{64}$/;
+// AutoCAD IMAGEATTACH is a similarity transform. Fits are contextual, not survey grade, and may deviate by at most 0.15% of the projected control diagonal (or 2 m for small sheets).
+const CAD_FRAME_GRID=100_000,CONTROL_FIT_MIN_METRES=2,CONTROL_FIT_RATIO=.0015;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MIME_EXTENSION=Object.freeze({'image/png':'png','image/jpeg':'jpg'});
 const FIGURE_LICENCE=Object.freeze({
@@ -128,11 +131,12 @@ async function checkedLogo(value,profile,{signal,decodeImage,decodeOptions}){
 function snapshotStore(assets){return Object.freeze({async get(id){const asset=assets.get(id);return asset?{metadata:{...asset.metadata},blob:asset.blob}:null;}});}
 function cornerFrame(bounds,width,height,projector){
   const geographic=Object.freeze([[bounds.west,bounds.north],[bounds.east,bounds.north],[bounds.east,bounds.south],[bounds.west,bounds.south]].map(point=>Object.freeze(point)));
-  const controls=geographic.map(point=>projector.forward(point)),west=Math.min(...controls.map(point=>point[0])),east=Math.max(...controls.map(point=>point[0])),south=Math.min(...controls.map(point=>point[1])),north=Math.max(...controls.map(point=>point[1]));
-  const pixelSize=Math.ceil(Math.max((east-west)/width,(north-south)/height)*1000)/1000;if(!(pixelSize>0)||!Number.isFinite(pixelSize))fail('Projected raster transform is degenerate.');
-  const left=Math.floor(west*1000)/1000,top=Math.ceil(north*1000)/1000,right=left+pixelSize*width,bottom=top-pixelSize*height;
-  const projected=[[left,top],[right,top],[right,bottom],[left,bottom]].map(point=>Object.freeze(point.map(canonical))),rotation=0;
-  const world=worldFileFromCorners({upperLeft:projected[0],upperRight:projected[1],lowerLeft:projected[3],pixelWidth:width,pixelHeight:height});return Object.freeze({geographicCorners:geographic,projectedCorners:Object.freeze(projected),rotation,world});
+  const controls=geographic.map(point=>projector.forward(point)),uv=[[-width/2,-height/2],[width/2,-height/2],[width/2,height/2],[-width/2,height/2]],centre=[controls.reduce((sum,point)=>sum+point[0],0)/4,controls.reduce((sum,point)=>sum+point[1],0)/4];let denominator=0,columnNumerator=0,rowNumerator=0;
+  for(let index=0;index<4;index++){const [u,v]=uv[index],dx=controls[index][0]-centre[0],dy=controls[index][1]-centre[1];denominator+=u*u+v*v;columnNumerator+=u*dx-v*dy;rowNumerator+=v*dx+u*dy;}
+  if(!(denominator>0))fail('Projected raster transform is degenerate.');const columnMicro=Math.round(columnNumerator/denominator*CAD_FRAME_GRID),rowMicro=Math.round(rowNumerator/denominator*CAD_FRAME_GRID);if(columnMicro===0&&rowMicro===0)fail('Projected raster transform is degenerate.');
+  const predictedUpperLeft=[centre[0]-columnMicro/CAD_FRAME_GRID*width/2-rowMicro/CAD_FRAME_GRID*height/2,centre[1]-rowMicro/CAD_FRAME_GRID*width/2+columnMicro/CAD_FRAME_GRID*height/2],ul=[Math.round(predictedUpperLeft[0]*CAD_FRAME_GRID),Math.round(predictedUpperLeft[1]*CAD_FRAME_GRID)],ur=[ul[0]+columnMicro*width,ul[1]+rowMicro*width],ll=[ul[0]+rowMicro*height,ul[1]-columnMicro*height],lr=[ur[0]+ll[0]-ul[0],ur[1]+ll[1]-ul[1]],projected=[ul,ur,lr,ll].map(point=>Object.freeze(point.map(value=>value/CAD_FRAME_GRID)));
+  let rotation=Math.atan2(projected[1][1]-projected[0][1],projected[1][0]-projected[0][0])*180/Math.PI;if(rotation<0)rotation+=360;rotation=canonical(rotation);const projectedControls=Object.freeze(controls.map(point=>Object.freeze(point.map(canonical)))),maxResidualMetres=canonical(Math.max(...projectedControls.map((point,index)=>Math.hypot(point[0]-projected[index][0],point[1]-projected[index][1])))),diagonal=Math.hypot(projectedControls[2][0]-projectedControls[0][0],projectedControls[2][1]-projectedControls[0][1]),toleranceMetres=canonical(Math.max(CONTROL_FIT_MIN_METRES,diagonal*CONTROL_FIT_RATIO));
+  if(maxResidualMetres>toleranceMetres)fail(`Projected raster controls cannot be represented by one contextual CAD image attachment within ${toleranceMetres} metres.`);const world=worldFileFromCorners({upperLeft:projected[0],upperRight:projected[1],lowerLeft:projected[3],pixelWidth:width,pixelHeight:height});return Object.freeze({geographicCorners:geographic,projectedControlCorners:projectedControls,projectedCorners:Object.freeze(projected),projectionFit:Object.freeze({method:'least-squares-similarity',residualMetres:maxResidualMetres,maxToleranceMetres:toleranceMetres,fitness:'contextual-not-survey-grade'}),rotation,world});
 }
 function sourceMetadata(project,selection,frame,raster,providerById){
   const pixelSize=Math.hypot(frame.projectedCorners[1][0]-frame.projectedCorners[0][0],frame.projectedCorners[1][1]-frame.projectedCorners[0][1])/raster.width;
@@ -156,6 +160,20 @@ function logoFrameFromDxf(dxf){
 }
 function safeFilename(project){let stem=project.projectNo.normalize('NFKD').replace(/\p{Mark}/gu,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,80).replace(/-+$/,'')||'phase-i';if(/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem))stem=`project-${stem}`;return `${stem}-cad-package.zip`;}
 
+/** Conservative maximums include decoded RGBA, retained normalized rasters, PDF, ZIP input, and final STORE archive copies. */
+export function planCadPackageBudget({rasters,logoBytes,logoPixels,entryCount,pdfBytes=PDF_BYTE_LIMIT,textBytes=TEXT_BYTE_LIMIT,limits=CAD_PACKAGE_LIMITS}={}){
+  const checkedLimits=exactRecord(limits,['imageBytes','imagePixels','rasterBytes','pixels','pdfBytes','textBytes','uncompressedBytes','archiveBytes','workingBytes','zipEntryOverheadBytes','zipEndOverheadBytes'],'CAD package budget limits');for(const [key,value] of Object.entries(checkedLimits))if(!Number.isSafeInteger(value)||value<0||(key!=='zipEndOverheadBytes'&&value===0))fail(`CAD package budget limit ${key} must be a positive safe integer.`);
+  if(!Array.isArray(rasters)||!rasters.length||rasters.length>SELECTION_LIMIT)fail('CAD package budget rasters must match a bounded nonempty selection.');let selectedPixels=0;for(const [index,value] of rasters.entries()){const row=exactRecord(value,['width','height'],`CAD package budget raster ${index+1}`);if(!Number.isSafeInteger(row.width)||!Number.isSafeInteger(row.height)||row.width<=0||row.height<=0||row.width>Math.floor(Number.MAX_SAFE_INTEGER/row.height))fail(`CAD package budget raster ${index+1} dimensions are unsafe.`);const pixels=row.width*row.height;if(pixels>checkedLimits.imagePixels)fail(`CAD package budget raster ${index+1} exceeds the ${checkedLimits.imagePixels} pixel per-image limit.`);selectedPixels+=pixels;if(!Number.isSafeInteger(selectedPixels))fail('CAD package aggregate pixel count is unsafe.');}
+  for(const [value,label,{zero=false}={}] of [[logoBytes,'logo bytes'],[logoPixels,'logo pixels'],[entryCount,'entry count'],[pdfBytes,'PDF bytes'],[textBytes,'text bytes',{zero:true}]])if(!Number.isSafeInteger(value)||value<(zero?0:1))fail(`CAD package budget ${label} must be a bounded safe integer.`);
+  const totalPixels=selectedPixels+logoPixels;if(!Number.isSafeInteger(totalPixels)||totalPixels>checkedLimits.pixels)fail(`CAD package worst-case aggregate decoded pixel budget exceeds ${checkedLimits.pixels} pixels before composition.`);
+  const maximumRasterBytes=logoBytes+rasters.length*checkedLimits.imageBytes;if(!Number.isSafeInteger(maximumRasterBytes)||maximumRasterBytes>checkedLimits.rasterBytes)fail(`CAD package worst-case normalized raster byte budget exceeds ${checkedLimits.rasterBytes} bytes before composition.`);
+  if(pdfBytes>checkedLimits.pdfBytes)fail(`CAD package reserved PDF byte budget exceeds ${checkedLimits.pdfBytes} bytes.`);if(textBytes>checkedLimits.textBytes)fail(`CAD package reserved text byte budget exceeds ${checkedLimits.textBytes} bytes.`);
+  const maximumUncompressedBytes=maximumRasterBytes+pdfBytes+textBytes;if(!Number.isSafeInteger(maximumUncompressedBytes)||maximumUncompressedBytes>checkedLimits.uncompressedBytes)fail(`CAD package worst-case uncompressed entry budget exceeds ${checkedLimits.uncompressedBytes} bytes before composition.`);
+  const maximumArchiveBytes=maximumUncompressedBytes+entryCount*checkedLimits.zipEntryOverheadBytes+checkedLimits.zipEndOverheadBytes;if(!Number.isSafeInteger(maximumArchiveBytes)||maximumArchiveBytes>checkedLimits.archiveBytes)fail(`CAD package worst-case STORE archive byte budget exceeds ${checkedLimits.archiveBytes} bytes before composition.`);
+  const decodedRgbaBytes=totalPixels*4,maximumWorkingBytes=decodedRgbaBytes+maximumRasterBytes+pdfBytes+maximumUncompressedBytes+maximumArchiveBytes;if(!Number.isSafeInteger(maximumWorkingBytes)||maximumWorkingBytes>checkedLimits.workingBytes)fail(`CAD package conservative decoded RGBA and normalized raster/PDF/ZIP working memory budget exceeds ${checkedLimits.workingBytes} bytes before composition.`);
+  return Object.freeze({totalPixels,decodedRgbaBytes,maximumRasterBytes,pdfBytes,textBytes,maximumUncompressedBytes,maximumArchiveBytes,maximumWorkingBytes});
+}
+
 /** Builds the complete package in memory. Downloading belongs to the UI after its own final abort check. */
 export async function exportCadPackage({
   project,companyProfile,companyLogo,selection,datasets={},assetStore,dpi=300,signal,onProgress=()=>{},
@@ -166,20 +184,24 @@ export async function exportCadPackage({
   onProgress({phase:'preflight',completed:0,total:1});let snapshotProject;try{snapshotProject=restoreProject(structuredClone(project));}catch(error){throw new Error(`CAD package project preflight failed: ${error.message}`,{cause:error});}
   const snapshotProfile=checkedCompany(companyProfile),snapshotDatasets=deepFreeze(structuredClone(datasets)),snapshotSelection=selectionSnapshot(snapshotProject,selection),snapshotProviders=freezeProviders(providers),providerById=new Map(snapshotProviders.map(provider=>[provider.id,provider])),projector=createProjector(snapshotProject.location,{...(proj4Impl?{proj4Impl}:{})});deepFreeze(snapshotProject);
   const entryEstimate=8+snapshotSelection.length*2;if(entryEstimate>ENTRY_LIMIT)fail(`CAD package would exceed the ${ENTRY_LIMIT}-entry archive limit.`);
-  const manualAssets=new Map(),officialResults=new Map(),geometryByKey=new Map();let manualBytes=0,estimatedBytes=0,estimatedPixels=0;
+  const normalizedLogo=await checkedLogo(companyLogo,snapshotProfile,{signal,decodeImage,decodeOptions});
+  const manualAssets=new Map(),officialResults=new Map(),geometryByKey=new Map(),rasterDimensions=[];let manualBytes=0;
   for(const selected of snapshotSelection){
     throwIfAborted(signal);if(selected.kind==='figure'){
-      const geometry=sheetGeometry(snapshotProject,selected.code,dpi);geometryByKey.set(`figure:${selected.code}`,deepFreeze(geometry));estimatedPixels+=geometry.raster.width*geometry.raster.height;estimatedBytes+=Math.min(IMAGE_BYTE_LIMIT,Math.ceil(geometry.raster.width*geometry.raster.height/2));continue;
+      const geometry=sheetGeometry(snapshotProject,selected.code,dpi);geometryByKey.set(`figure:${selected.code}`,deepFreeze(geometry));rasterDimensions.push({width:geometry.raster.width,height:geometry.raster.height});continue;
     }
-    const item=snapshotProject.historical.find(candidate=>candidate.id===selected.id),code=historicalCode(item),geometry=historicalSheetGeometry(snapshotProject,item,dpi);geometryByKey.set(`historical:${selected.id}`,deepFreeze(geometry));estimatedPixels+=geometry.raster.width*geometry.raster.height;estimatedBytes+=Math.min(IMAGE_BYTE_LIMIT,Math.ceil(geometry.raster.width*geometry.raster.height/2));
+    const item=snapshotProject.historical.find(candidate=>candidate.id===selected.id),geometry=historicalSheetGeometry(snapshotProject,item,dpi);geometryByKey.set(`historical:${selected.id}`,deepFreeze(geometry));rasterDimensions.push({width:geometry.raster.width,height:geometry.raster.height});
+  }
+  planCadPackageBudget({rasters:rasterDimensions,logoBytes:normalizedLogo.bytes.byteLength,logoPixels:normalizedLogo.width*normalizedLogo.height,entryCount:entryEstimate});
+  for(const selected of snapshotSelection){
+    if(selected.kind==='figure')continue;throwIfAborted(signal);const item=snapshotProject.historical.find(candidate=>candidate.id===selected.id),code=historicalCode(item),geometry=geometryByKey.get(`historical:${selected.id}`);
     if(item.mode==='manual'){
       const asset=await loadHistoricalAssetSnapshot({project:snapshotProject,item,assetStore,signal});if(!manualAssets.has(item.assetId)){manualBytes+=asset.metadata.size;if(manualBytes>MANUAL_SNAPSHOT_LIMIT)fail(`${code}: selected manual historical assets exceed the 32 MB resident snapshot limit.`);manualAssets.set(item.assetId,deepFreeze({metadata:{...asset.metadata},blob:asset.blob}));}
     }else{
       const current=deepFreeze(structuredClone(await revalidateOfficial({project:snapshotProject,item,providers:snapshotProviders,signal,fetchImpl})));historicalImageryPlan({project:snapshotProject,item,geometry,providers:snapshotProviders,currentResult:current});officialResults.set(item.id,current);
     }
   }
-  if(estimatedPixels>TOTAL_PIXEL_LIMIT)fail('Selected CAD rasters exceed the 160 million pixel composition budget. Export fewer sheets together.');if(estimatedBytes>UNCOMPRESSED_BYTE_LIMIT-PDF_BYTE_LIMIT-TEXT_BYTE_LIMIT)fail('Selected CAD rasters exceed the estimated uncompressed package budget.');
-  const normalizedLogo=await checkedLogo(companyLogo,snapshotProfile,{signal,decodeImage,decodeOptions}),historicalStore=snapshotStore(manualAssets),cachedOfficial=async({item})=>{const result=officialResults.get(item.id);if(!result)fail(`${historicalCode(item)}: current official result was not frozen during preflight.`);return result;};
+  const historicalStore=snapshotStore(manualAssets),cachedOfficial=async({item})=>{const result=officialResults.get(item.id);if(!result)fail(`${historicalCode(item)}: current official result was not frozen during preflight.`);return result;};
   const planned=await planPdfExport({project:snapshotProject,selection:snapshotSelection,codes:snapshotSelection.filter(item=>item.kind==='figure').map(item=>item.code),datasets:snapshotDatasets,companyProfile:snapshotProfile,dpi,signal,providers:snapshotProviders,assetStore:historicalStore,revalidateOfficial:cachedOfficial,fetchImpl});throwIfAborted(signal);onProgress({phase:'preflight',completed:1,total:1});
   const rasters=new Map(),compositionRequests=new Set(),activeDisposals=new Set();let imageBytes=normalizedLogo.bytes.byteLength,pixels=normalizedLogo.width*normalizedLogo.height;
   const wrap=(kind,composer)=>async args=>{
@@ -204,7 +226,7 @@ export async function exportCadPackage({
   ordered=ordered.map(value=>Object.freeze({...value,allocated:filenameByKey.get(value.selected.kind==='figure'?`figure:${value.selected.code}`:`historical:${value.selected.id}`)}));
   const imageFrames=ordered.map(value=>({selection:value.selected,corners:value.frame.projectedCorners})),dxf=buildCadDxf({project:snapshotProject,companyProfile:snapshotProfile,selection:snapshotSelection,imageFrames,projector}),dxfBytes=utf8(dxf);throwIfAborted(signal);
   const logoPath=`company/logo.${MIME_EXTENSION[normalizedLogo.mime]}`,coreRows=[fileRow('Project.dxf','application/dxf',dxfBytes),fileRow('Combined-Phase-I.pdf','application/pdf',pdfBytes),fileRow(logoPath,normalizedLogo.mime,normalizedLogo.bytes,{pixelWidth:normalizedLogo.width,pixelHeight:normalizedLogo.height})],manifestItems=[];
-  for(const value of ordered){coreRows.push(fileRow(value.allocated.path,value.normalized.mime,value.normalized.bytes,{pixelWidth:value.normalized.width,pixelHeight:value.normalized.height,worldFilePath:value.allocated.worldFilePath}),fileRow(value.allocated.worldFilePath,'text/plain',utf8(value.frame.world.text)));manifestItems.push({...value.metadata,geographicCorners:value.frame.geographicCorners,projectedCorners:value.frame.projectedCorners,imagePath:value.allocated.path,rotation:value.frame.rotation});}
+  for(const value of ordered){coreRows.push(fileRow(value.allocated.path,value.normalized.mime,value.normalized.bytes,{pixelWidth:value.normalized.width,pixelHeight:value.normalized.height,worldFilePath:value.allocated.worldFilePath}),fileRow(value.allocated.worldFilePath,'text/plain',utf8(value.frame.world.text)));manifestItems.push({...value.metadata,geographicCorners:value.frame.geographicCorners,projectedControlCorners:value.frame.projectedControlCorners,projectedCorners:value.frame.projectedCorners,projectionFit:value.frame.projectionFit,imagePath:value.allocated.path,rotation:value.frame.rotation});}
   const logoAttachment=logoFrameFromDxf(dxf),coreFiles=await hashedFiles(coreRows,signal),input={project:snapshotProject,companyProfile:snapshotProfile,crs:projector.crs,rasterNormalization:CAD_RASTER_NORMALIZATION,files:coreFiles,items:manifestItems,logoAttachment},provisional=buildCadManifest(input);
   const textRows=[fileRow('Attach-Images.scr','text/plain',utf8(provisional.attachScript)),fileRow('README.txt','text/plain',utf8(provisional.readmeText)),fileRow('Sources-and-Licences.txt','text/plain',utf8(provisional.sourcesText)),fileRow('Manifest.csv','text/csv',utf8(provisional.csv))],finalFiles=await hashedFiles([...coreRows,...textRows],signal),manifest=buildCadManifest({...input,files:finalFiles});
   if(manifest.attachScript!==provisional.attachScript||manifest.readmeText!==provisional.readmeText||manifest.sourcesText!==provisional.sourcesText||manifest.csv!==provisional.csv)fail('CAD manifest text outputs changed while final file hashes were assembled.');

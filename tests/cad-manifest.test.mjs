@@ -102,6 +102,12 @@ test('builds deterministic canonical JSON with complete CRS, file, company, sour
   assert.deepEqual(Object.keys(manifest).sort(),Object.keys(manifest),'canonical top-level keys are lexically ordered');
 });
 
+test('preserves true projected controls separately from the contextual fitted CAD frame and fails closed above tolerance',async()=>{
+  const {buildCadManifest}=await manifestModule(),source=input(),controls=[[630000.5,4831000],[630240,4831000.5],[630239.5,4830840],[630000,4830839.5]];source.items[0]={...source.items[0],projectedControlCorners:controls,projectionFit:{method:'least-squares-similarity',residualMetres:.5,maxToleranceMetres:2,fitness:'contextual-not-survey-grade'}};const output=buildCadManifest(source),manifest=JSON.parse(output.json),figure=manifest.items[0];
+  assert.deepEqual(figure.projectedControlCorners,controls);assert.deepEqual(figure.cadFrameCorners,figureProjected);assert.deepEqual(figure.projectedCorners,figureProjected);assert.deepEqual(figure.projectionFit,{fitness:'contextual-not-survey-grade',maxToleranceMetres:2,method:'least-squares-similarity',residualMetres:.5});assert.match(output.csv,/True projected control upper left/);assert.match(output.sourcesText,/True-control residual: 0\.5 m/);assert.match(output.readmeText,/contextual, not survey grade/i);
+  for(const projectionFit of [{method:'least-squares-similarity',residualMetres:2.1,maxToleranceMetres:2,fitness:'contextual-not-survey-grade'},{method:'least-squares-similarity',residualMetres:.4,maxToleranceMetres:2,fitness:'contextual-not-survey-grade'},{method:'least-squares-similarity',residualMetres:.5,maxToleranceMetres:2,fitness:'survey-grade'}]){const invalid=input();invalid.items[0]={...invalid.items[0],projectedControlCorners:controls,projectionFit};assert.throws(()=>buildCadManifest(invalid),/residual|tolerance|contextual|survey/i);}
+});
+
 test('emits RFC 4180 CSV with CRLF, doubled quotes, embedded newlines, and formula-neutral text cells',async()=>{
   const {buildCadManifest}=await manifestModule(),source=input();
   source.project=project({name:' \t=CMD|\' /C calc\'!A0',projectNo:'+SUM(1,1)',address:'-2+3',date:'@NOW()'});

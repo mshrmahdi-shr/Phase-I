@@ -17,6 +17,8 @@ const EXTENSION_MIMES=Object.freeze({
 });
 const FILE_FIELDS=Object.freeze(['path','sha256','mime','bytes','pixelWidth','pixelHeight','worldFilePath']);
 const ITEM_FIELDS=Object.freeze(['code','year','provider','sourceResolutionMeters','geographicCorners','projectedCorners','attribution','license','redistributionEvidence','imagePath','rotation']);
+const FITTED_ITEM_FIELDS=Object.freeze([...ITEM_FIELDS,'projectedControlCorners','projectionFit']);
+const PROJECTION_FIT_FIELDS=Object.freeze(['method','residualMetres','maxToleranceMetres','fitness']);
 const INPUT_FIELDS=Object.freeze(['project','companyProfile','crs','rasterNormalization','files','items','logoAttachment']);
 
 function fail(message){throw new Error(message);}
@@ -37,6 +39,11 @@ function exactRecord(value,fields,label){
     result[key]=descriptor.value;
   }
   return result;
+}
+
+function itemRecord(value,label){
+  plainRecord(value,label);let keys;try{keys=Reflect.ownKeys(value);}catch{fail(`${label} must be inspectable.`);}const fields=keys.length===ITEM_FIELDS.length?ITEM_FIELDS:keys.length===FITTED_ITEM_FIELDS.length?FITTED_ITEM_FIELDS:null;
+  if(!fields)return exactRecord(value,ITEM_FIELDS,label);return exactRecord(value,fields,label);
 }
 
 function normalizedText(value,label,{maximum=4000,required=true}={}){
@@ -185,6 +192,13 @@ function attachmentGeometry(corners,pixelWidth,pixelHeight,rotation,label){
   return {projectedCorners:checked,insertionPoint:[...lowerLeft],pixelSizeMetres,attachmentWidthMetres,attachmentHeightMetres,rotation:supplied};
 }
 
+function checkedProjectionFit(row,attachment,code){
+  if(!Object.hasOwn(row,'projectedControlCorners'))return null;const controls=checkedCorners(row.projectedControlCorners,`CAD manifest item ${code} true projected control corners`),fit=exactRecord(row.projectionFit,PROJECTION_FIT_FIELDS,`CAD manifest item ${code} projection fit`);
+  if(fit.method!=='least-squares-similarity')fail(`CAD manifest item ${code} projection fit method must be least-squares-similarity.`);if(fit.fitness!=='contextual-not-survey-grade')fail(`CAD manifest item ${code} projection fit must be labelled contextual-not-survey-grade.`);const residualMetres=canonicalNumber(finite(fit.residualMetres,`CAD manifest item ${code} projection residual`),`CAD manifest item ${code} projection residual`),maxToleranceMetres=canonicalNumber(finite(fit.maxToleranceMetres,`CAD manifest item ${code} maximum projection tolerance`),`CAD manifest item ${code} maximum projection tolerance`);
+  if(residualMetres<0||!(maxToleranceMetres>0)||maxToleranceMetres>100_000||residualMetres>maxToleranceMetres)fail(`CAD manifest item ${code} fitted CAD frame residual ${residualMetres} m exceeds its declared ${maxToleranceMetres} m maximum projection tolerance.`);const measured=canonicalNumber(Math.max(...controls.map((point,index)=>Math.hypot(point[0]-attachment.projectedCorners[index][0],point[1]-attachment.projectedCorners[index][1]))),`CAD manifest item ${code} measured projection residual`),difference=Math.abs(measured-residualMetres),comparisonTolerance=Math.max(1e-8,Math.abs(measured)*1e-10);
+  if(difference>comparisonTolerance)fail(`CAD manifest item ${code} projection residual does not match its true controls and fitted CAD frame.`);return {projectedControlCorners:controls,cadFrameCorners:attachment.projectedCorners,projectionFit:{method:fit.method,residualMetres,maxToleranceMetres,fitness:fit.fitness}};
+}
+
 function itemRank(item){
   if(FIGURE_CODES.includes(item.code))return [0,FIGURE_CODES.indexOf(item.code)];
   const match=HISTORICAL_CODE.exec(item.code);return [1,Number(match[1]),Number(match[2]),item.code];
@@ -197,7 +211,7 @@ function checkedItems(value,fileByPath){
   if(!Array.isArray(value)||value.length<1||value.length>MAX_ITEMS)fail(`CAD manifest items must contain between 1 and ${MAX_ITEMS} selected rasters.`);
   const codes=new Set(),images=new Set(),items=[];
   for(const [index,candidate] of value.entries()){
-    const row=exactRecord(candidate,ITEM_FIELDS,`CAD manifest item ${index+1}`),code=normalizedText(row.code,`CAD manifest item ${index+1} code`,{maximum:32});
+    const row=itemRecord(candidate,`CAD manifest item ${index+1}`),code=normalizedText(row.code,`CAD manifest item ${index+1} code`,{maximum:32});
     const historical=HISTORICAL_CODE.exec(code);
     if(!FIGURE_CODES.includes(code)&&!historical)fail(`CAD manifest item ${index+1} code must be A through E or H-YYYY-N.`);
     const year=safePositiveInteger(row.year,`CAD manifest item ${code} year`,9999);if(year<1850)fail(`CAD manifest item ${code} year is outside the supported source range.`);
@@ -209,11 +223,11 @@ function checkedItems(value,fileByPath){
     if(withoutExtension(imagePath)!==expectedStem||extension(imagePath)!==IMAGE_MIMES[image.mime].extension)fail(`CAD manifest item ${code} image path is not its canonical generated path.`);
     if(images.has(imagePath))fail(`CAD manifest items duplicate raster image path ${imagePath}.`);images.add(imagePath);
     const geographicCorners=checkedCorners(row.geographicCorners,`CAD manifest item ${code} geographic corners`,{geographic:true}),rotation=normalizedAngle(row.rotation,`CAD manifest item ${code} rotation`);
-    const attachment=attachmentGeometry(row.projectedCorners,image.pixelWidth,image.pixelHeight,rotation,`CAD manifest item ${code}`);
+    const attachment=attachmentGeometry(row.projectedCorners,image.pixelWidth,image.pixelHeight,rotation,`CAD manifest item ${code}`),projectionFit=checkedProjectionFit(row,attachment,code);
     items.push({
       code,year,provider:normalizedText(row.provider,`CAD manifest item ${code} provider`,{maximum:1000}),
       sourceResolutionMeters:canonicalNumber(finite(row.sourceResolutionMeters,`CAD manifest item ${code} source resolution`),`CAD manifest item ${code} source resolution`),
-      geographicCorners,projectedCorners:attachment.projectedCorners,
+      geographicCorners,projectedCorners:attachment.projectedCorners,...(projectionFit??{}),
       attribution:normalizedText(row.attribution,`CAD manifest item ${code} attribution`,{maximum:4000}),
       license:normalizedText(row.license,`CAD manifest item ${code} license`,{maximum:4000}),
       redistributionEvidence:normalizedText(row.redistributionEvidence,`CAD manifest item ${code} redistribution evidence`,{maximum:1000}),
@@ -253,11 +267,11 @@ function csvCell(value){
 }
 function coordinateCell(point){return `[${decimal(point[0])} ${decimal(point[1])}]`;}
 function csv(project,company,items,crs){
-  const headers=['Project name','Project number','Project address','Project date','Company name','Company address','Company phone','Company email','Company website','Prepared by','Reviewed by','Code','Year','Provider','Source resolution (m)','Attribution','License','Redistribution evidence','Image path','World file path','MIME type','Bytes','Pixel width','Pixel height','SHA-256','Rotation (deg)','CRS EPSG','CRS name','CRS units','Geographic upper left','Geographic upper right','Geographic lower right','Geographic lower left','Projected upper left','Projected upper right','Projected lower right','Projected lower left'];
+  const fitted=items.some(item=>item.projectionFit),headers=['Project name','Project number','Project address','Project date','Company name','Company address','Company phone','Company email','Company website','Prepared by','Reviewed by','Code','Year','Provider','Source resolution (m)','Attribution','License','Redistribution evidence','Image path','World file path','MIME type','Bytes','Pixel width','Pixel height','SHA-256','Rotation (deg)','CRS EPSG','CRS name','CRS units','Geographic upper left','Geographic upper right','Geographic lower right','Geographic lower left',...(fitted?['True projected control upper left','True projected control upper right','True projected control lower right','True projected control lower left','Projection fit method','Projection residual (m)','Maximum projection tolerance (m)','Projection fitness','CAD frame upper left','CAD frame upper right','CAD frame lower right','CAD frame lower left']:['Projected upper left','Projected upper right','Projected lower right','Projected lower left'])];
   const rows=[headers,...items.map(item=>[
     project.name,project.projectNo,project.address,project.date,company.companyName,company.address,company.phone,company.email,company.website,company.preparedBy,company.reviewedBy,
     item.code,item.year,item.provider,decimal(item.sourceResolutionMeters),item.attribution,item.license,item.redistributionEvidence,item.imagePath,item.worldFilePath,item.mime,item.bytes,item.pixelWidth,item.pixelHeight,item.sha256,decimal(item.rotation),crs.epsg,crs.name,crs.units,
-    ...item.geographicCorners.map(coordinateCell),...item.projectedCorners.map(coordinateCell)
+    ...item.geographicCorners.map(coordinateCell),...(fitted?[...(item.projectedControlCorners??item.projectedCorners).map(coordinateCell),item.projectionFit?.method??'',item.projectionFit?decimal(item.projectionFit.residualMetres):'',item.projectionFit?decimal(item.projectionFit.maxToleranceMetres):'',item.projectionFit?.fitness??'',...(item.cadFrameCorners??item.projectedCorners).map(coordinateCell)]:item.projectedCorners.map(coordinateCell))
   ])];
   return rows.map(row=>row.map(csvCell).join(',')).join('\r\n')+'\r\n';
 }
@@ -268,7 +282,7 @@ function sources(project,company,crs,items){
     'COMPANY',`Name: ${displayValue(company.companyName)}`,`Address: ${displayValue(company.address)}`,`Phone: ${displayValue(company.phone)}`,`Email: ${displayValue(company.email)}`,`Website: ${displayValue(company.website)}`,`Prepared by: ${displayValue(company.preparedBy)}`,`Reviewed by: ${displayValue(company.reviewedBy)}`,'',
     'COORDINATE REFERENCE SYSTEM',`EPSG: ${crs.epsg}`,`Name: ${crs.name}`,`Units: ${crs.units} (metres)`,`Raster normalization: ${CAD_RASTER_NORMALIZATION}`,'','SOURCES AND LICENCES'];
   for(const [index,item] of items.entries())lines.push('',`${index+1}. ${item.code}`,`Year: ${item.year}`,`Provider: ${displayValue(item.provider)}`,`Source resolution: ${decimal(item.sourceResolutionMeters)} m`,
-    `Attribution: ${displayValue(item.attribution)}`,`Licence: ${displayValue(item.license)}`,`Redistribution evidence: ${displayValue(item.redistributionEvidence)}`,`Image: ${item.imagePath}`,`World file: ${item.worldFilePath}`,`SHA-256: ${item.sha256}`);
+    `Attribution: ${displayValue(item.attribution)}`,`Licence: ${displayValue(item.license)}`,`Redistribution evidence: ${displayValue(item.redistributionEvidence)}`,`Image: ${item.imagePath}`,`World file: ${item.worldFilePath}`,`SHA-256: ${item.sha256}`,...(item.projectionFit?[`Projection fit: ${item.projectionFit.method}`,`True-control residual: ${decimal(item.projectionFit.residualMetres)} m`,`Maximum projection tolerance: ${decimal(item.projectionFit.maxToleranceMetres)} m`,`Fitness: ${item.projectionFit.fitness}`]:[]));
   return lines.join('\n')+'\n';
 }
 
@@ -284,6 +298,7 @@ function readme(project,crs){
     'Map imagery and company logo remain external raster references that can be moved, scaled, rotated, clipped, detached, or replaced.',
     'Raster pixels are not editable CAD vectors. Editing the linework does not change the source image pixels.','',
     'IMAGE SCALE','All packaged raster files have embedded physical-resolution metadata stripped. The attachment script therefore supplies each full projected image width in drawing metres; pixel size remains in the world files and manifests.','',
+    'PROJECTION FIT','AutoCAD image attachment supports one uniform scale and rotation. Manifest.json and Manifest.csv therefore preserve both the independently projected true control corners and the fitted CAD frame used by the world file, DXF, and script.','The fit is contextual, not survey grade. Its residual and maximum tolerance are recorded per image; export fails when a fit exceeds the larger of 2 metres or 0.15% of the projected control diagonal.','',
     'FILES','Manifest.csv is the spreadsheet-friendly source list. Manifest.json is the machine-readable file and geometry record.',
     'Sources-and-Licences.txt records source, attribution, licence, resolution, hash, and redistribution evidence. World files beside each map image preserve its georeferencing.',''
   ].join('\n');
