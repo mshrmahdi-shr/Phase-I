@@ -267,6 +267,7 @@ function renderHistoricalPage(doc,project,page,index,count,{draw=true,companyPro
 async function createDocument(signal){
   const Constructor=await pdfLibrary();throwIfAborted(signal);
   const doc=new Constructor({orientation:'landscape',unit:'mm',format:'a3',putOnlyUsedFonts:true,compress:false,precision:4});
+  doc.setCreationDate("D:19800101000000+00'00'");doc.setFileId('00000000000000000000000000000000');
   doc.addFileToVFS('DejaVuSans.ttf',base64(await fontBytes(signal)));throwIfAborted(signal);
   doc.addFont('DejaVuSans.ttf',FONT,'normal');doc.setFont(FONT);return doc;
 }
