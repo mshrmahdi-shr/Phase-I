@@ -7,6 +7,7 @@ import {sheetGeometry,metricScale,captureFigureView} from './src/sheet-layout.mj
 import {loadBedrockCache} from './src/bedrock-cache.mjs';
 import {createExportDialog} from './src/export-selection.mjs';
 import {exportCombinedPdf,planPdfExport} from './src/pdf-export.mjs';
+import {exportCadPackage} from './src/cad-package.mjs';
 import {createAssetStore} from './src/asset-store.mjs';
 import {normalizeCompanyProfile,validateCompanyProfile} from './src/company-profile.mjs';
 import {createCompanyProfileDialog} from './src/company-ui.mjs';
@@ -324,7 +325,12 @@ function setExportBusy(value){
   }
 }
 async function exportBrandedPdf(args){const branding=await companyDialog.outputSnapshot(args.companyProfile);return exportCombinedPdf({...args,...branding});}
-exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile,providers:HISTORICAL_PROVIDERS,assetStore}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport});
+async function exportBrandedCadPackage(args){
+  const branding=await companyDialog.outputSnapshot(args.companyProfile),companyLogo=await assetStore.get(branding.companyProfile.logoAssetId);
+  if(!companyLogo)throw new Error('The saved company logo is missing. Open Company Profile and upload it again.');
+  return exportCadPackage({...args,companyProfile:branding.companyProfile,companyLogo});
+}
+exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile,providers:HISTORICAL_PROVIDERS,assetStore}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport,exportCadPackage:exportBrandedCadPackage});
 $('exportPdf').onclick=()=>{if(!printSession.isOpen)return exportDialog.open();};
 function refreshPrint(){
   const f=project.figures[active];

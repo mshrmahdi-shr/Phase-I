@@ -180,13 +180,18 @@
 
   <div id="exportDialog" hidden role="dialog" aria-modal="true" aria-labelledby="exportHeading" aria-describedby="exportHelp">
     <section class="export-panel">
-      <h2 id="exportHeading">Export combined PDF</h2>
-      <p id="exportHelp">Select ready figures. Each selected figure becomes one A3 landscape sheet, in A–E order. Readiness checks project data; source-image failures block the complete download.</p>
+      <h2 id="exportHeading">Export PDF or AutoCAD package</h2>
+      <p id="exportHelp">Select ready figures and historical images once. The same checked rows are used for the combined A3 PDF and the complete AutoCAD ZIP; source, company, logo, and layout failures block either complete download.</p>
       <div class="export-selection-actions"><button id="selectAllReady">Select all ready</button><button id="clearExport">Clear selection</button></div>
       <div id="exportRows"></div>
+      <section class="cad-export-summary" aria-labelledby="cadExportHeading">
+        <h3 id="cadExportHeading">Editable AutoCAD package</h3>
+        <div><span id="cadSelectionCount">0 images selected</span><span id="cadCrs">NAD83 / UTM unavailable</span></div>
+        <p id="cadReadiness">Select at least one ready image.</p>
+      </section>
       <div id="exportProgress" role="status" aria-live="polite"></div>
       <progress id="exportMeter" aria-label="Current export phase progress" hidden></progress>
-      <div class="export-footer"><button id="cancelExport">Cancel</button><button id="downloadPdf" class="primary" disabled>Download PDF (0 sheets)</button></div>
+      <div class="export-footer"><button id="cancelExport">Cancel</button><button id="downloadPdf" class="primary" disabled>Download PDF (0 sheets)</button><button id="downloadCad" class="primary cad-primary" disabled>Download AutoCAD ZIP (0 images)</button></div>
     </section>
   </div>
 

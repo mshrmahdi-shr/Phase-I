@@ -216,6 +216,20 @@ test('dialog persists typed historical selection, keeps legacy codes, and snapsh
   assert.deepEqual(p.exportPreferences.codes,['A']);assert.deepEqual(p.exportPreferences.selection,[{kind:'figure',code:'A'},{kind:'historical',id:item.id}]);dom.window.close();
 });
 
+test('PDF and AutoCAD actions consume exactly the same checked typed selection',async()=>{
+  const {createExportDialog}=await import('../src/export-selection.mjs'),{document,dom,$}=fixture(),p=project(),item=historicalItem();p.historical=[item];p.historicalSequenceCounters={'1972':1};p.exportPreferences={...p.exportPreferences,codes:['A'],selection:[{kind:'figure',code:'A'},{kind:'historical',id:item.id}]};
+  const state={project:p,datasets:{},companyProfile:companyProfile(),providers:[TORONTO_IMAGERY_PROVIDER],assetStore:{}};let cadInput;const cadDownloads=[];
+  const dialog=createExportDialog({document,getState:()=>state,save(){},setBusy(){},planPdf:async({selection})=>({pageCount:1,continuationCounts:selection[0].kind==='figure'?{[selection[0].code]:0}:{}}),exportPdf:async()=>{throw Error('PDF should remain idle');},download(){},
+    exportCadPackage:async args=>{cadInput=args;args.onProgress({phase:'assembling',completed:1,total:2});return {blob:new Blob(['zip'],{type:'application/zip'}),filename:'ab-12345-cad-package.zip',imageCount:2,pageCount:2,crs:{zone:17,name:'NAD83 / UTM zone 17N',units:'m'}};},downloadCad:value=>cadDownloads.push(value)});
+  await dialog.open();
+  assert.equal($('exportFigureA').checked,true);
+  assert.equal(document.querySelector('[data-export-kind="historical"] input').checked,true);
+  assert.equal($('downloadPdf').textContent,'Download PDF (2 sheets)');
+  assert.equal($('downloadCad').textContent,'Download AutoCAD ZIP (2 images)');assert.equal($('downloadCad').disabled,false);
+  $('downloadCad').click();await dialog.whenIdle();
+  assert.deepEqual(cadInput.selection,[{kind:'figure',code:'A'},{kind:'historical',id:item.id}]);assert.equal(cadDownloads.length,1);assert.match($('exportProgress').textContent,/Downloaded 2 images/i);dom.window.close();
+});
+
 test('historical planning failure keeps its visible row but clears persisted selection and blocks download',async()=>{
   const {createExportDialog}=await import('../src/export-selection.mjs'),{document,dom,$}=fixture(),p=project(),item=historicalItem();p.historical=[item];p.historicalSequenceCounters={'1972':1};p.exportPreferences={...p.exportPreferences,codes:[],selection:[{kind:'historical',id:item.id}]};
   const dialog=createExportDialog({document,getState:()=>({project:p,datasets:{},companyProfile:companyProfile(),providers:[TORONTO_IMAGERY_PROVIDER]}),save(){},setBusy(){},

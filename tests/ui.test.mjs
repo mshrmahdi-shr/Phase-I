@@ -27,7 +27,8 @@ test('index exposes the core Phase I workflow controls', () => {
   for (const id of ['address','searchAddress','drawSite','drawBuilding','finishDraw','figureList','manageHistorical','historicalDialog','historicalYear',
     'searchHistorical','manualHistoricalFile','manualWorldFile','manualCitation','manualPermission','historicalCropFrame','historicalApprovedList','historicalViewControls','cancelHistoricalView','uploadGeology','printA3','exportDxf',
     'exportProjectPackage','importProjectPackage','importProjectPackageFile','projectPackageDialog','projectPackageStatus','confirmProjectPackageImport','cancelProjectPackage',
-    'editCompanyProfile','exportCompanyTemplate','importCompanyTemplate','companyProfileDialog','printCompanyLogo','printCompanyName','printCompanyContact']) {
+    'editCompanyProfile','exportCompanyTemplate','importCompanyTemplate','companyProfileDialog','printCompanyLogo','printCompanyName','printCompanyContact',
+    'downloadCad','cadSelectionCount','cadCrs','cadReadiness']) {
     assert.match(html,new RegExp(`id=["']${id}["']`),`missing #${id}`);
   }
   assert.match(html,/Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels\./);
@@ -38,6 +39,14 @@ test('app wires the current historical provider registry and asset store into PD
   assert.match(source,/const HISTORICAL_PROVIDERS=Object\.freeze\(\[ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER\]\)/);
   assert.match(source,/getState:\(\)=>\(\{project,datasets:datasets\(\),companyProfile,providers:HISTORICAL_PROVIDERS,assetStore\}\)/);
   assert.match(source,/providers:HISTORICAL_PROVIDERS,getProject:/);
+});
+
+test('app wires the atomic CAD package through the shared export dialog and saved logo asset',()=>{
+  const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
+  assert.match(source,/import\s*\{exportCadPackage\}\s*from\s*['"]\.\/src\/cad-package\.mjs['"]/);
+  assert.match(source,/createExportDialog\([\s\S]*exportCadPackage\s*:\s*exportBrandedCadPackage/);
+  assert.match(source,/assetStore\.get\(branding\.companyProfile\.logoAssetId\)/);
+  assert.match(source,/exportCadPackage\(\{\.\.\.args,[\s\S]*companyLogo/);
 });
 
 test('app wires compensated project-package persistence and keeps JSON import/export explicitly legacy',()=>{
