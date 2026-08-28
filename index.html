@@ -128,6 +128,7 @@
       </div>
       <section id="historicalOfficialPanel" role="tabpanel">
         <div class="inline-input"><label>Acquisition year<input id="historicalYear" type="number" min="1850" max="2100" inputmode="numeric" placeholder="1972" /></label><button id="searchHistorical" type="button" class="primary">Search</button><button id="cancelHistoricalSearch" type="button" hidden>Cancel search</button></div>
+        <p class="historical-source-help">Government archives are searched automatically when available. For Google Earth historical imagery, open <a href="https://earth.google.com/web/" target="_blank" rel="noopener noreferrer" tabindex="-1">Google Earth</a>, choose the requested year in its time slider, save the permitted view, then use <strong>Manual upload</strong> to place and crop it. Google imagery is not fetched or embedded automatically because its usage terms do not provide a reproducible export endpoint.</p>
         <div id="historicalSearchProgress" class="helper" role="status" aria-live="polite"></div>
         <div id="historicalProviderErrors"></div>
         <section class="historical-results-section"><h3>Exact year</h3><div data-result-group="exact"></div></section>
@@ -235,3 +236,4 @@
   <script type="module" src="app.js"></script>
 </body>
 </html>
+
