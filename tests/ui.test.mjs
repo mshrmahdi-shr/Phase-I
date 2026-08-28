@@ -31,6 +31,7 @@ test('index exposes the core Phase I workflow controls', () => {
     'downloadCad','cadSelectionCount','cadCrs','cadReadiness']) {
     assert.match(html,new RegExp(`id=["']${id}["']`),`missing #${id}`);
   }
+  const document=new JSDOM(html).window.document;assert.match(document.getElementById('exportPdf').textContent,/PDF.*AutoCAD/i);
   assert.match(html,/Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels\./);
 });
 
