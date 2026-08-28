@@ -1,0 +1,24 @@
+{
+  "layers": [
+    {
+      "id": 1,
+      "name": "Digital Raster Acquisition Project East 2024 (Aerial)",
+      "fullExtent": {"xmin": -8731950.1038, "ymin": 5469646.7093, "xmax": -8269608.1364, "ymax": 5831504.0747, "spatialReference": {"wkid": 102100, "latestWkid": 3857}}
+    },
+    {
+      "id": 2,
+      "name": "South Central Ontario Orthophotography 2023 (Aerial)",
+      "fullExtent": {"xmin": -8946216.025, "ymin": 5355313.3961, "xmax": -8523695.5524, "ymax": 5736497.5079, "spatialReference": {"wkid": 102100, "latestWkid": 3857}}
+    },
+    {
+      "id": 5,
+      "name": "MTO_Northern_Airports_2023_Aerial",
+      "fullExtent": {"xmin": -10499284.728, "ymin": 6490853.3524, "xmax": -9085531.243, "ymax": 7569646.2618, "spatialReference": {"wkid": 102100, "latestWkid": 3857}}
+    },
+    {
+      "id": 11,
+      "name": "Forest Resource Inventory T2 (T2) 2018-2027 (Aerial)",
+      "fullExtent": {"xmin": -10133767.2427, "ymin": 5609518.9314, "xmax": -8720350.6001, "ymax": 6581901.0068, "spatialReference": {"wkid": 102100, "latestWkid": 3857}}
+    }
+  ]
+}

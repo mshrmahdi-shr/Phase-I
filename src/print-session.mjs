@@ -17,7 +17,7 @@ export function createPrintSession({document,map,validate,fit,render,waitForTile
       render();
       const legend=byId('printLegend');
       if(legend&&(legend.scrollHeight>legend.clientHeight+2||legend.scrollWidth>legend.clientWidth+2))throw new Error(`Figure ${byId('printFigure')?.textContent||''}: the legend does not fit this sheet. Choose a smaller extent or a dataset with fewer units.`);
-      for(const [selector,label] of [['.tb-project','project name/address'],['.tb-title','figure title'],['.tb-details','project details'],['.tb-source','source credits']]){
+      for(const [selector,label] of [['.tb-brand','company name/contact details'],['.tb-project','project name/address'],['.tb-title','figure title'],['.tb-details','project details'],['.tb-source','source credits']]){
         const cell=document.querySelector(selector);
         if(cell&&[cell,...cell.querySelectorAll('span,div')].some(node=>node.scrollHeight>node.clientHeight+2||node.scrollWidth>node.clientWidth+2)){
           throw new Error(`Figure ${byId('printFigure')?.textContent||''}: ${label} does not fit at a readable size. Shorten this field.`);

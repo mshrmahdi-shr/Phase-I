@@ -4,6 +4,9 @@ import {validLocation} from './core.mjs';
 export const BEDROCK_SOURCE = Object.freeze({
   id:'MRD126-REV1', name:'1:250 000 Scale Bedrock Geology of Ontario — With Lowlands',
   credits:'Ontario Geological Survey 2011. Miscellaneous Release—Data 126-Revision 1.',
+  sourceUrl:'https://www.geologyontario.mndm.gov.on.ca/mndmaccess/mndm_dir.asp?type=pub&id=MRD126-REV1',
+  license:'https://www.ontario.ca/page/open-government-licence-ontario',
+  redistributionEvidence:'official-open-government-licence',
   compilationScale:250000,
 });
 

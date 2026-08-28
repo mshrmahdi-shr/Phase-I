@@ -4,138 +4,146 @@ import {sheetGeometry} from './sheet-layout.mjs';
 import {sourceForFigure} from './map-sources.mjs';
 import {containsBounds,siteFeature} from './geology.mjs';
 import {validateBedrockRing} from './bedrock.mjs';
+import {historicalCode,historicalSheetGeometry,orderedHistoricalItems} from './historical-layout.mjs';
+import {validateImageryProvider,validateProviderUrl} from './imagery/provider-registry.mjs';
+import {ONTARIO_IMAGERY_PROVIDER} from './imagery/providers/ontario.mjs';
+import {TORONTO_IMAGERY_PROVIDER} from './imagery/providers/toronto.mjs';
+import {OTTAWA_IMAGERY_PROVIDER} from './imagery/providers/ottawa.mjs';
+import {createCadExportController} from './cad-ui.mjs';
+import {snapshotCompanyProfile} from './company-profile.mjs';
+import {decodeManualImage} from './imagery/manual-image.mjs';
 
-// Saved summaries are deliberately excluded: only currently loaded geometry counts.
-export function exportRows({project,datasets={}}){
+const DEFAULT_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
+const PDF_PLAN_CONCURRENCY=2;
+const BRANDING_FIELDS=Object.freeze(['companyLogo','companyProfile']),COMPANY_LOGO_FIELDS=Object.freeze(['blob','metadata']),COMPANY_LOGO_METADATA_FIELDS=Object.freeze(['createdAt','height','id','kind','mime','sha256','size','width']),SHA256=/^[a-f0-9]{64}$/,ISO_TIMESTAMP=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function selectionKey(selection){return selection?.kind==='figure'?`figure:${selection.code}`:selection?.kind==='historical'?`historical:${selection.id}`:'';}
+function cropSpan(bounds){return `${bounds.west.toFixed(5)}, ${bounds.south.toFixed(5)} to ${bounds.east.toFixed(5)}, ${bounds.north.toFixed(5)}`;}
+function providerMap(providers){const result=new Map();for(const provider of providers||DEFAULT_PROVIDERS){try{validateImageryProvider(provider);if(!result.has(provider.id))result.set(provider.id,provider);}catch{}}return result;}
+function covers(coverage,bounds){return bounds.west>=coverage.west&&bounds.east<=coverage.east&&bounds.south>=coverage.south&&bounds.north<=coverage.north;}
+
+function figureRows({project,datasets,companyProfile}){
   return Object.entries(figureDefaults()).map(([code,defaults])=>{
-    const kind=code==='D'?'surficial':code==='E'?'bedrock':null,dataset=datasets[kind];
-    const reasons=[];let geometry,loaded=false,hit=null;
+    const kind=code==='D'?'surficial':code==='E'?'bedrock':null,dataset=datasets[kind],reasons=[];let geometry,loaded=false,hit=null;
     try{geometry=sheetGeometry(project,code,150);}catch(error){reasons.push(error.message);}
     if(kind&&dataset?.features?.length){
       try{
         for(const feature of dataset.features)for(const ring of [feature.polygon,...(feature.holes||[])]){
-          validateBedrockRing(ring);
-          if(ring.length<4||ring[0][0]!==ring.at(-1)[0]||ring[0][1]!==ring.at(-1)[1])throw Error('Geology polygons must be closed.');
+          validateBedrockRing(ring);if(ring.length<4||ring[0][0]!==ring.at(-1)[0]||ring[0][1]!==ring.at(-1)[1])throw Error('Geology polygons must be closed.');
         }
-        const source=typeof dataset.source==='string'?dataset.source:dataset.source?.name;
-        loaded=Boolean(source?.trim());
-        if(!loaded)reasons.push('Reload a labelled geology source.');
-        if(geometry&&!containsBounds(dataset.coverage,geometry.bounds)){
-          loaded=false;reasons.push('The geology data does not cover the final sheet extent. Reload this source.');
-        }
-        hit=siteFeature(dataset.features,project.location);
+        const source=typeof dataset.source==='string'?dataset.source:dataset.source?.name;loaded=Boolean(source?.trim());if(!loaded)reasons.push('Reload a labelled geology source.');
+        if(geometry&&!containsBounds(dataset.coverage,geometry.bounds)){loaded=false;reasons.push('The geology data does not cover the final sheet extent. Reload this source.');}hit=siteFeature(dataset.features,project.location);
       }catch(error){reasons.push(`Invalid ${kind} geometry: ${error.message}`);}
     }
-    reasons.push(...validatePrintRequirements({project,figureCode:code,geologyLoaded:loaded,geologySiteUnit:hit?.name}).map(e=>e.message));
+    reasons.push(...validatePrintRequirements({project,companyProfile,figureCode:code,geologyLoaded:loaded,geologySiteUnit:hit?.name}).map(error=>error.message));
     if(project.buildingBoundary?.length&&!validBoundary(project.buildingBoundary))reasons.push('Correct the invalid building boundary.');
     if(code!=='B'&&project.siteBoundary?.length&&!validBoundary(project.siteBoundary))reasons.push('Correct the invalid site boundary.');
-    return {code,title:project.figures?.[code]?.title||defaults.title,source:sourceForFigure(code),ready:reasons.length===0,reasons};
+    const selection={kind:'figure',code};return {kind:'figure',key:selectionKey(selection),code,title:project.figures?.[code]?.title||defaults.title,source:sourceForFigure(code),selection,ready:reasons.length===0,reasons};
   });
 }
 
-export function selectedReadyCodes(rows,codes=[]){
-  return rows.filter(row=>row.ready&&codes.includes(row.code)).map(row=>row.code);
+function historicalRows({project,providers,historicalAssetStates}){
+  const registered=providerMap(providers);
+  return orderedHistoricalItems(project).map(item=>{
+    const reasons=[],code=historicalCode(item);try{historicalSheetGeometry(project,item,150);}catch(error){reasons.push(error.message);}
+    if(item.policy!=='exportable')reasons.push(`Saved policy is ${item.policy}; only exportable historical imagery can be embedded.`);
+    if(item.mode==='official'){
+      const provider=registered.get(item.providerId);if(!provider)reasons.push('The saved official provider is no longer registered.');else{
+        if(provider.policy!=='exportable')reasons.push('The current provider policy no longer permits export.');let siteCovered=false;try{siteCovered=provider.covers(project.location)===true;}catch{}
+        if(!siteCovered||!covers(provider.coverage,item.bounds))reasons.push('The current provider coverage no longer includes SITE and the approved crop.');if(item.licenseUrl!==provider.licenseUrl)reasons.push('The saved licence no longer matches the current provider policy.');
+        for(const [url,label] of [[item.sourceUrl,'source'],[item.licenseUrl,'licence'],[item.officialExport?.url,'export']])try{validateProviderUrl(url,provider,{label:`Historical ${label} URL`});}catch(error){reasons.push(error.message);}
+        if(item.officialExport?.kind!=='arcgis-export'||item.officialExport.maxWidth<256||item.officialExport.maxHeight<256)reasons.push('The approved official export descriptor is unavailable or too small.');
+        if(typeof item.officialExport?.resultId!=='string'||!item.officialExport.coverage||!item.officialExport.preview)reasons.push('This approval predates strict official-source identity checks. Remove it, search again, and approve the source again.');
+        else{
+          if(!covers(item.officialExport.coverage,item.bounds))reasons.push('The approved crop is outside its saved official source footprint. Reopen and approve the source again.');
+          for(const [url,label,template] of [[item.officialExport.preview.url,'preview',false],[item.officialExport.preview.tileTemplate,'preview tile',true]])if(url!==null)try{validateProviderUrl(url,provider,{label:`Historical ${label} URL`,template});}catch(error){reasons.push(error.message);}
+        }
+      }
+    }else if(item.mode==='manual'){
+      if(!item.assetId||!item.placement)reasons.push('The approved manual image or affine placement is missing.');const state=historicalAssetStates?.get?.(item.id);if(state&&state.ready===false)reasons.push(state.reason||'The historical image asset is not ready.');
+    }else reasons.push('The historical imagery mode is unsupported.');
+    const selection={kind:'historical',id:item.id},sourceLabel=item.mode==='official'?(registered.get(item.providerId)?.label||item.providerId):item.attribution;
+    return {kind:'historical',key:selectionKey(selection),id:item.id,code,title:item.title,year:item.year,bounds:item.bounds,policy:item.policy,attribution:item.attribution,source:{label:sourceLabel},selection,ready:reasons.length===0,reasons};
+  });
 }
 
-export function downloadPdf(result,{document,signal}){
-  signal?.throwIfAborted();
-  const url=URL.createObjectURL(result.blob),link=document.createElement('a');
-  try{
-    link.href=url;link.download=result.filename;link.hidden=true;document.body.append(link);
-    signal?.throwIfAborted();link.click();
-  }finally{link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-}
+export function exportRows({project,datasets={},companyProfile,providers=DEFAULT_PROVIDERS,historicalAssetStates}={}){return [...figureRows({project,datasets,companyProfile}),...historicalRows({project,providers,historicalAssetStates})];}
+export function selectedReadySelection(rows,selection=[]){const keys=new Set((Array.isArray(selection)?selection:[]).map(selectionKey).filter(Boolean));return rows.filter(row=>row.ready&&keys.has(row.key)).map(row=>({...row.selection}));}
+export function selectedReadyCodes(rows,codes=[]){return rows.filter(row=>row.kind==='figure'&&row.ready&&codes.includes(row.code)).map(row=>row.code);}
 
-export function createExportDialog({document,getState,save,setBusy,exportPdf,download=downloadPdf}){
-  const byId=id=>document.getElementById(id),dialog=byId('exportDialog');
-  const sheetCount=count=>`${count} ${count===1?'sheet':'sheets'}`;
-  let controller=null,returnFocus=null,background=[];
-  function persist(codes){
-    const project=getState().project;
-    if(JSON.stringify(project.exportPreferences?.codes)!==JSON.stringify(codes)){
-      project.exportPreferences={...project.exportPreferences,codes};save();
+export function downloadPdf(result,{document,signal}){signal?.throwIfAborted();const url=URL.createObjectURL(result.blob),link=document.createElement('a');try{link.href=url;link.download=result.filename;link.hidden=true;document.body.append(link);signal?.throwIfAborted();link.click();}finally{link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}}
+
+export function createExportDialog({document,getState,save,setBusy,exportPdf,planPdf=null,download=downloadPdf,exportCadPackage=null,downloadCad,prepareCadBranding=null}){
+  const byId=id=>document.getElementById(id),dialog=byId('exportDialog'),sheetCount=count=>`${count} ${count===1?'sheet':'sheets'}`;
+  let controller=null,planning=null,planningController=null,brandingPlanning=null,brandingController=null,brandingState={status:'idle'},planStates=new Map(),planGeneration=0,returnFocus=null,background=[],cadController=null,cadOperationBusy=false;
+  function projectSelection(project){return Array.isArray(project.exportPreferences?.selection)?project.exportPreferences.selection:(project.exportPreferences?.codes||[]).map(code=>({kind:'figure',code}));}
+  function persist(selection){const project=getState().project,codes=selection.filter(value=>value.kind==='figure').map(value=>value.code),current=projectSelection(project);if(JSON.stringify(current)!==JSON.stringify(selection)||JSON.stringify(project.exportPreferences?.codes)!==JSON.stringify(codes)){project.exportPreferences={...project.exportPreferences,codes,selection:selection.map(value=>({...value}))};save();}}
+  function exactRecord(value,fields,label){
+    if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(`${label} must be a plain record. Upload the logo again.`);const prototype=Object.getPrototypeOf(value);if(prototype!==Object.prototype&&prototype!==null)throw new Error(`${label} must be a plain record. Upload the logo again.`);const keys=Reflect.ownKeys(value);
+    if(keys.some(key=>typeof key!=='string')||keys.length!==fields.length||fields.some(key=>!keys.includes(key)))throw new Error(`${label} must contain its exact saved fields. Upload the logo again.`);const result={};for(const key of fields){const descriptor=Object.getOwnPropertyDescriptor(value,key);if(!descriptor?.enumerable||!Object.hasOwn(descriptor,'value'))throw new Error(`${label}.${key} must be a saved data field. Upload the logo again.`);result[key]=descriptor.value;}return result;
+  }
+  async function checkedBranding(value,expected,signal){
+    const branding=exactRecord(value,BRANDING_FIELDS,'Company branding snapshot');let profile,expectedProfile;try{profile=snapshotCompanyProfile(branding.companyProfile);expectedProfile=snapshotCompanyProfile(expected);}catch(error){throw new Error(`Company Profile validation failed: ${error.message} Save Company Profile again.`,{cause:error});}
+    if(JSON.stringify(profile)!==JSON.stringify(expectedProfile))throw new Error('Company Profile changed during logo validation. Save Company Profile again.');const logo=exactRecord(branding.companyLogo,COMPANY_LOGO_FIELDS,'Company logo asset'),metadata=exactRecord(logo.metadata,COMPANY_LOGO_METADATA_FIELDS,'Company logo metadata');signal?.throwIfAborted();
+    if(metadata.id!==profile.logoAssetId||metadata.kind!=='company-logo'||metadata.mime!==profile.logoMime||metadata.width!==profile.logoWidth||metadata.height!==profile.logoHeight||!Number.isSafeInteger(metadata.size)||metadata.size<=0||!(logo.blob instanceof Blob)||logo.blob.size!==metadata.size||logo.blob.type!==metadata.mime||!SHA256.test(metadata.sha256)||typeof metadata.createdAt!=='string'||!ISO_TIMESTAMP.test(metadata.createdAt)||Number.isNaN(Date.parse(metadata.createdAt)))throw new Error('The saved company logo metadata does not match the profile. Upload the logo again.');
+    const bytes=new Uint8Array(await logo.blob.arrayBuffer());signal?.throwIfAborted();if(!globalThis.crypto?.subtle)throw new Error('Secure company logo hashing is unavailable. Use a current browser.');const digest=await globalThis.crypto.subtle.digest('SHA-256',bytes);signal?.throwIfAborted();const hash=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');if(hash!==metadata.sha256)throw new Error('The saved company logo hash does not match its bytes. Upload the logo again.');
+    const createBitmap=document.defaultView?.createImageBitmap;let decoded;try{decoded=await decodeManualImage(logo.blob,{signal,maxBytes:4*1024*1024,maxPixels:16_000_000,...(typeof createBitmap==='function'?{decodeBitmap:(blob,options)=>createBitmap.call(document.defaultView,blob,options)}:{})});}catch(error){if(error?.name==='AbortError')throw error;throw new Error(`The saved company logo could not be decoded: ${error.message} Upload the logo again.`,{cause:error});}signal?.throwIfAborted();if(decoded.mime!==metadata.mime||decoded.width!==metadata.width||decoded.height!==metadata.height)throw new Error('The saved company logo no longer matches its decoded dimensions. Upload the logo again.');
+    return Object.freeze({companyProfile:profile,companyLogo:Object.freeze({metadata:Object.freeze({...metadata}),blob:logo.blob})});
+  }
+  function beginBranding(state,generation){
+    if(!exportCadPackage)return Promise.resolve();brandingController?.abort();const pending=new AbortController();brandingController=pending;brandingState={status:'pending'};
+    brandingPlanning=Promise.resolve().then(()=>{if(typeof prepareCadBranding!=='function')throw new Error('Company logo readiness check is unavailable. Reopen Company Profile and save the logo again.');return prepareCadBranding(structuredClone(state.companyProfile),{signal:pending.signal});}).then(value=>checkedBranding(value,state.companyProfile,pending.signal)).then(value=>{if(generation!==planGeneration||pending.signal.aborted)return;brandingState={status:'ready',value};render();}).catch(error=>{if(generation!==planGeneration||pending.signal.aborted)return;brandingState={status:'error',error};render();}).finally(()=>{if(generation===planGeneration&&brandingController===pending){brandingController=null;brandingPlanning=null;}});return brandingPlanning;
+  }
+  function cadSnapshot(){
+    const state=getState(),rows=exportRows(state),saved=projectSelection(state.project),savedKeys=new Set(saved.map(selectionKey)),selected=selectedReadySelection(rows,saved),selectedKeys=new Set(selected.map(selectionKey)),blockers=[];
+    for(const row of rows)if(savedKeys.has(row.key)&&(!row.ready||planPdf&&planStates.get(row.key)?.status!=='ready'))blockers.push(`${row.code}: ${!row.ready?row.reasons.join(' '):planStates.get(row.key)?.status==='error'?planStates.get(row.key).error.message:'Wait for PDF layout validation to finish.'}`);
+    if(controller)blockers.push('Wait for the current PDF export to finish.');if(brandingState.status!=='ready')blockers.push(brandingState.status==='error'?brandingState.error.message:'Checking the saved company logo…');
+    const exact=rows.filter(row=>selectedKeys.has(row.key)&&(!planPdf||planStates.get(row.key)?.status==='ready')).map(row=>({...row.selection}));
+    return {...state,...(brandingState.status==='ready'?brandingState.value:{}),selection:exact,ready:!controller&&exact.length===selected.length&&exact.length>0&&blockers.length===0,blockers};
+  }
+  function rowDetail(row,planned,pending,blocked){if(!row.ready)return row.reasons.join(' ');if(blocked)return planned.error.message;if(pending)return 'Checking PDF layout…';if(row.kind==='historical')return `Ready · Year: ${row.year} · Source: ${row.source.label} · Attribution: ${row.attribution} · Crop: ${cropSpan(row.bounds)} · Licence: ${row.policy}`;const continuations=planned?.continuations||0;return continuations?`Figure ${row.code} will include ${continuations} legend continuation ${continuations===1?'sheet':'sheets'}.`:`Ready · ${row.source.label}`;}
+  function render(){
+    if(dialog.hidden||controller)return;const locked=cadOperationBusy,state=getState(),rows=exportRows(state),saved=projectSelection(state.project),savedKeys=new Set(saved.map(selectionKey));
+    const retained=rows.filter(row=>savedKeys.has(row.key)&&row.ready&&(!planPdf||planStates.get(row.key)?.status!=='error')).map(row=>row.selection);persist(retained);const retainedKeys=new Set(retained.map(selectionKey)),selected=rows.filter(row=>retainedKeys.has(row.key)&&row.ready&&(!planPdf||planStates.get(row.key)?.status==='ready'));const focused=document.activeElement?.id;
+    byId('exportRows').replaceChildren();for(const row of rows){
+      const label=document.createElement('label');label.className='export-row';label.dataset.exportKind=row.kind;if(row.id)label.dataset.historicalId=row.id;const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.id=row.kind==='figure'?`exportFigure${row.code}`:`exportHistorical${row.id.replaceAll('-','')}`;
+      const planned=planStates.get(row.key),pending=Boolean(planPdf&&row.ready&&planned?.status!=='ready'&&planned?.status!=='error'),blocked=Boolean(planPdf&&planned?.status==='error');checkbox.checked=retainedKeys.has(row.key)&&!blocked;checkbox.disabled=locked||!row.ready||pending||blocked;checkbox.value=row.key;
+      const text=document.createElement('span'),title=document.createElement('strong'),detail=document.createElement('span');title.textContent=row.kind==='figure'?`Figure ${row.code} — ${row.title}`:`${row.code} — ${row.title}`;detail.className='export-reason';detail.id=`exportReason${row.kind==='figure'?row.code:row.id.replaceAll('-','')}`;detail.textContent=rowDetail(row,planned,pending,blocked);if(planned?.continuations)detail.classList.add('export-continuation');checkbox.setAttribute('aria-describedby',detail.id);
+      checkbox.onchange=()=>{const keys=new Set(projectSelection(getState().project).map(selectionKey));checkbox.checked?keys.add(row.key):keys.delete(row.key);persist(selectedReadySelection(exportRows(getState()),rows.filter(candidate=>keys.has(candidate.key)).map(candidate=>candidate.selection)));return refresh();};text.append(title,detail);label.append(checkbox,text);byId('exportRows').append(label);
     }
+    const physicalCount=selected.reduce((sum,row)=>sum+1+(planStates.get(row.key)?.continuations||0),0);byId('downloadPdf').textContent=`Download PDF (${sheetCount(physicalCount)})`;byId('downloadPdf').disabled=locked||!selected.length||selected.length!==retained.length;byId('selectAllReady').disabled=locked;byId('clearExport').disabled=locked;cadController?.refresh();if(locked&&byId('downloadCad'))byId('downloadCad').disabled=true;if(focused?.startsWith('exportFigure')||focused?.startsWith('exportHistorical'))byId(focused)?.focus();
   }
   function refresh(){
-    if(dialog.hidden||controller)return;
-    const state=getState(),rows=exportRows(state),codes=selectedReadyCodes(rows,state.project.exportPreferences?.codes);
-    persist(codes);
-    const focused=document.activeElement?.id;
-    byId('exportRows').replaceChildren();
-    for(const row of rows){
-      const label=document.createElement('label');label.className='export-row';
-      const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.id=`exportFigure${row.code}`;
-      checkbox.checked=codes.includes(row.code);checkbox.disabled=!row.ready;checkbox.value=row.code;
-      const text=document.createElement('span'),title=document.createElement('strong'),detail=document.createElement('span');
-      title.textContent=`Figure ${row.code} — ${row.title}`;
-      detail.className='export-reason';detail.id=`exportReason${row.code}`;
-      detail.textContent=row.ready?`Ready · ${row.source.label}`:row.reasons.join(' ');
-      checkbox.setAttribute('aria-describedby',detail.id);
-      checkbox.onchange=()=>{
-        const selected=new Set(getState().project.exportPreferences?.codes||[]);
-        checkbox.checked?selected.add(row.code):selected.delete(row.code);
-        persist(selectedReadyCodes(exportRows(getState()),[...selected]));refresh();
-      };
-      text.append(title,detail);label.append(checkbox,text);byId('exportRows').append(label);
+    if(dialog.hidden||controller||cadOperationBusy)return Promise.all([planning||Promise.resolve(),brandingPlanning||Promise.resolve()]);planGeneration++;planningController?.abort();brandingController?.abort();planningController=null;planning=null;brandingPlanning=null;planStates=new Map();const state=getState(),generation=planGeneration,branding=beginBranding(state,generation);if(!planPdf){render();return branding;}const rows=exportRows(state).filter(row=>row.ready);if(!rows.length){render();return branding;}
+    const pending=new AbortController();planningController=pending;for(const row of rows)planStates.set(row.key,{status:'pending'});render();let cursor=0,failure=null;
+    async function worker(){
+      while(generation===planGeneration&&!pending.signal.aborted&&cursor<rows.length){
+        const row=rows[cursor++],plain=structuredClone({project:state.project,datasets:state.datasets||{},companyProfile:state.companyProfile,selection:[row.selection],codes:row.kind==='figure'?[row.code]:[]});
+        try{
+          const summary=await planPdf({...plain,providers:state.providers,assetStore:state.assetStore,dpi:plain.project.dpi||300,signal:pending.signal});if(generation!==planGeneration||pending.signal.aborted)return;
+          let continuations=0;if(row.kind==='figure'){continuations=summary?.continuationCounts?.[row.code];if(!Number.isInteger(continuations)||continuations<0)throw new Error(`Figure ${row.code}: PDF planning returned an invalid continuation count.`);}else if(!Number.isInteger(summary?.pageCount)||summary.pageCount<1)throw new Error(`${row.code}: PDF planning returned an invalid page count.`);
+          planStates.set(row.key,{status:'ready',continuations});render();
+        }catch(error){
+          if(generation!==planGeneration||pending.signal.aborted&&!failure)return;
+          if(!failure){failure={row,error};planStates.set(row.key,{status:'error',error});pending.abort(error);render();}return;
+        }
+      }
     }
-    byId('downloadPdf').textContent=`Download PDF (${sheetCount(codes.length)})`;
-    byId('downloadPdf').disabled=!codes.length;
-    if(focused?.startsWith('exportFigure'))byId(focused)?.focus();
+    const workers=Array.from({length:Math.min(PDF_PLAN_CONCURRENCY,rows.length)},worker);
+    planning=Promise.allSettled(workers).then(()=>{
+      if(generation!==planGeneration)return;
+      if(failure){for(const row of rows)if(planStates.get(row.key)?.status==='pending')planStates.set(row.key,{status:'error',error:new Error(`PDF planning stopped after ${failure.row.code} failed. Correct that blocker and retry.`)});render();if(!cadOperationBusy)byId('exportProgress').textContent='Some sheets are blocked. Correct their PDF layout or source errors to continue.';return;}
+      if(pending.signal.aborted)return;if(!cadOperationBusy)byId('exportProgress').textContent='PDF layout checked. Select the sheets to include.';
+    }).finally(()=>{if(generation===planGeneration){planning=null;planningController=null;}});return Promise.all([planning,branding]);
   }
-  function open(){
-    if(!dialog.hidden||controller)return;
-    returnFocus=document.activeElement;dialog.hidden=false;document.body.classList.add('export-open');
-    background=[...document.querySelectorAll('body > header, body > main, #printPreview')].map(node=>[node,node.inert]);
-    background.forEach(([node])=>node.inert=true);
-    byId('exportProgress').textContent='Select the sheets to include. Source images are checked during export.';
-    byId('cancelExport').textContent='Cancel';
-    byId('exportMeter').hidden=true;refresh();byId('selectAllReady').focus();
-  }
-  function close(){
-    if(controller){controller.abort();byId('exportProgress').textContent='Cancelling export…';return;}
-    if(dialog.hidden)return;
-    dialog.hidden=true;document.body.classList.remove('export-open');
-    background.forEach(([node,inert])=>node.inert=inert);background=[];returnFocus?.focus();
-  }
+  function open(){if(!dialog.hidden||controller)return;returnFocus=document.activeElement;dialog.hidden=false;document.body.classList.add('export-open');background=[...document.querySelectorAll('body > header, body > main, #printPreview')].map(node=>[node,node.inert]);background.forEach(([node])=>node.inert=true);byId('exportProgress').textContent='Select the sheets to include. Source images are checked during export.';byId('cancelExport').textContent='Cancel';byId('exportMeter').hidden=true;byId('selectAllReady').focus();return refresh();}
+  function close(){if(controller){controller.abort();byId('exportProgress').textContent='Cancelling export…';return;}if(cadOperationBusy){cadController.cancel();return;}if(dialog.hidden)return;planGeneration++;planningController?.abort();brandingController?.abort();planning=null;planningController=null;brandingPlanning=null;brandingController=null;brandingState={status:'idle'};planStates=new Map();dialog.hidden=true;document.body.classList.remove('export-open');background.forEach(([node,inert])=>node.inert=inert);background=[];returnFocus?.focus();}
   async function start(){
-    if(controller)return;
-    refresh();const state=getState(),codes=selectedReadyCodes(exportRows(state),state.project.exportPreferences?.codes);
-    if(!codes.length)return;
-    const snapshot=structuredClone({project:state.project,datasets:state.datasets||{},codes});
-    const pending=new AbortController();controller=pending;
-    const controls=[...dialog.querySelectorAll('button,input')].filter(node=>node.id!=='cancelExport');
-    const disabled=controls.map(node=>[node,node.disabled]);controls.forEach(node=>node.disabled=true);
-    byId('cancelExport').textContent='Cancel export';byId('exportProgress').textContent='Preparing selected sheets…';
-    byId('exportMeter').hidden=false;byId('exportMeter').removeAttribute('value');
-    try{
-      setBusy(true);
-      const result=await exportPdf({...snapshot,dpi:snapshot.project.dpi||300,signal:pending.signal,onProgress:event=>{
-        if(pending.signal.aborted)return;
-        if(event.phase==='sheet')byId('exportProgress').textContent=`Figure ${event.code} · sheet ${event.completed+1} of ${event.total}`;
-        if(event.phase==='imagery')byId('exportProgress').textContent=`Figure ${event.code} · ${event.completed} of ${event.total} source images loaded`;
-        if(event.phase==='complete')byId('exportProgress').textContent='All sheets composed. Preparing download…';
-        byId('exportMeter').max=event.total;byId('exportMeter').value=event.completed;
-      }});
-      pending.signal.throwIfAborted();download(result,{document,signal:pending.signal});
-      byId('exportProgress').textContent=`Downloaded ${sheetCount(result.pageCount)} in one PDF.`;
-    }catch(error){
-      byId('exportProgress').textContent=pending.signal.aborted||error.name==='AbortError'?'Export cancelled. No PDF downloaded.':`Export blocked: ${error.message}`;
-    }finally{
-      controller=null;setBusy(false);disabled.forEach(([node,value])=>node.disabled=value);
-      byId('cancelExport').textContent='Close';byId('exportMeter').hidden=true;refresh();
-    }
+    if(controller||cadOperationBusy)return;render();const state=getState(),selection=selectedReadySelection(exportRows(state),projectSelection(state.project));if(planPdf&&(planning||selection.some(value=>planStates.get(selectionKey(value))?.status!=='ready'))){byId('exportProgress').textContent='Wait for the current PDF layout check before downloading.';return;}if(!selection.length)return;
+    const codes=selection.filter(value=>value.kind==='figure').map(value=>value.code),snapshot=structuredClone({project:state.project,datasets:state.datasets||{},companyProfile:state.companyProfile,selection,codes}),pending=new AbortController();controller=pending;const controls=[...dialog.querySelectorAll('button,input')].filter(node=>node.id!=='cancelExport'),disabled=controls.map(node=>[node,node.disabled]);controls.forEach(node=>node.disabled=true);byId('cancelExport').textContent='Cancel export';byId('exportProgress').textContent='Preparing selected sheets…';byId('exportMeter').hidden=false;byId('exportMeter').removeAttribute('value');
+    try{setBusy(true);const result=await exportPdf({...snapshot,providers:state.providers,assetStore:state.assetStore,dpi:snapshot.project.dpi||300,signal:pending.signal,onProgress:event=>{if(pending.signal.aborted)return;if(event.phase==='sheet')byId('exportProgress').textContent=`${event.code} · sheet ${event.completed+1} of ${event.total}`;if(event.phase==='imagery')byId('exportProgress').textContent=`${event.code} · ${event.completed} of ${event.total} source images loaded`;if(event.phase==='complete')byId('exportProgress').textContent='All sheets composed. Preparing download…';byId('exportMeter').max=event.total;byId('exportMeter').value=event.completed;}});pending.signal.throwIfAborted();download(result,{document,signal:pending.signal});byId('exportProgress').textContent=`Downloaded ${sheetCount(result.pageCount)} in one PDF.`;}catch(error){byId('exportProgress').textContent=pending.signal.aborted||error.name==='AbortError'?'Export cancelled. No PDF downloaded.':`Export blocked: ${error.message}`;}finally{controller=null;setBusy(false);disabled.forEach(([node,value])=>node.disabled=value);byId('cancelExport').textContent='Close';byId('exportMeter').hidden=true;render();}
   }
-  byId('selectAllReady').onclick=()=>{persist(exportRows(getState()).filter(row=>row.ready).map(row=>row.code));refresh();};
-  byId('clearExport').onclick=()=>{persist([]);refresh();};
-  byId('cancelExport').onclick=close;byId('downloadPdf').onclick=start;
-  document.addEventListener('keydown',event=>{
-    if(dialog.hidden)return;
-    if(event.key==='Escape'){event.preventDefault();close();}
-    if(event.key==='Tab'){
-      const controls=[...dialog.querySelectorAll('button,input')].filter(node=>!node.disabled),first=controls[0],last=controls.at(-1);
-      if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
-      else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
-    }
-  });
-  return {open,close,refresh,start,get busy(){return Boolean(controller);}};
+  if(exportCadPackage)cadController=createCadExportController({document,getSnapshot:cadSnapshot,setBusy,exportPackage:exportCadPackage,onBusyChange:value=>{cadOperationBusy=value;if(!value)render();},...(downloadCad?{download:downloadCad}:{})});
+  byId('selectAllReady').onclick=()=>{const rows=exportRows(getState()).filter(row=>row.ready&&(!planPdf||planStates.get(row.key)?.status==='ready'));persist(rows.map(row=>row.selection));return refresh();};byId('clearExport').onclick=()=>{persist([]);return refresh();};byId('cancelExport').onclick=close;byId('downloadPdf').onclick=start;
+  document.addEventListener('keydown',event=>{if(dialog.hidden)return;if(event.key==='Escape'){event.preventDefault();close();}if(event.key==='Tab'){const controls=[...dialog.querySelectorAll('button,input')].filter(node=>!node.disabled),first=controls[0],last=controls.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}});return {open,close,refresh,start,whenIdle(){return cadController?.whenIdle()||Promise.resolve();},get busy(){return Boolean(controller)||Boolean(cadController?.busy);}};
 }

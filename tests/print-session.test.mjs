@@ -72,12 +72,12 @@ test('failed tiles block printing and closing during loading cannot later enable
   assert.equal(document.getElementById('confirmPrint').disabled,true);
 });
 
-test('native preview blocks overflowing project, title and source cells and still restores the editor',async()=>{
+test('native preview blocks and then accepts rendered title-block content, including company branding',async()=>{
   const {createPrintSession}=await import('../src/print-session.mjs');
-  for(const [selector,label,axis='Height'] of [['.tb-project','project'],['.tb-title','title'],['.tb-details','details'],['.tb-source','source'],['#printLegend','legend','Width']]){
+  for(const [selector,label,axis='Height'] of [['.tb-brand>div:last-child','company'],['.tb-project','project'],['.tb-title','title'],['.tb-details','details'],['.tb-source','source'],['#printLegend','legend','Width']]){
     const dom=new JSDOM(fs.readFileSync(new URL('../index.html',import.meta.url),'utf8'));
     const document=dom.window.document,cell=document.querySelector(selector);
-    Object.defineProperties(cell,{['scroll'+axis]:{value:150},['client'+axis]:{value:100}});
+    Object.defineProperties(cell,{['scroll'+axis]:{value:150,configurable:true},['client'+axis]:{value:100,configurable:true}});
     let restored=false;
     const map={getCenter:()=>[43,-79],getZoom:()=>15,invalidateSize(){},setView(){restored=true;}};
     const session=createPrintSession({document,map,validate:()=>true,fit(){},render(){},waitForTiles:async()=>{},onRestore(){}});
@@ -85,5 +85,8 @@ test('native preview blocks overflowing project, title and source cells and stil
     assert.equal(document.getElementById('confirmPrint').disabled,true);
     assert.match(document.getElementById('printStatus').textContent,new RegExp(`Figure A.*${label}`,'i'));
     session.close();assert.equal(restored,true);assert.equal(document.getElementById('map').parentElement.id,'mapHome');
+    Object.defineProperties(cell,{['scroll'+axis]:{value:100,configurable:true},['client'+axis]:{value:100,configurable:true}});
+    assert.equal(await session.open(),true,`${selector} after overflow resolves`);
+    assert.equal(document.getElementById('confirmPrint').disabled,false);session.close();dom.window.close();
   }
 });

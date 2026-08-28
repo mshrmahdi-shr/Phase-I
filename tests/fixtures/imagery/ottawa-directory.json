@@ -1,0 +1,20 @@
+{
+  "services": [
+    {"name": "Basemap_Imagery_1928", "type": "MapServer"},
+    {"name": "Basemap_Imagery_1958", "type": "MapServer"},
+    {"name": "Basemap_Imagery_2017_123", "type": "MapServer"},
+    {"name": "Basemap_Imagery_2019_Fall", "type": "MapServer"},
+    {"name": "ActiveTransportation", "type": "MapServer"}
+  ],
+  "metadata": {
+    "Basemap_Imagery_1928": {
+      "fullExtent": {"xmin": -8507199.6527, "ymin": 5606950.534, "xmax": -8367322.8302, "ymax": 5713437.4269, "spatialReference": {"wkid": 102100, "latestWkid": 3857}},
+      "copyrightText": ""
+    },
+    "Basemap_Imagery_1958": {
+      "fullExtent": {"xmin": -8507199.6527, "ymin": 5606950.534, "xmax": -8367322.8302, "ymax": 5713437.4269, "spatialReference": {"wkid": 102100, "latestWkid": 3857}},
+      "copyrightText": "",
+      "serviceDescription": "Basemap imagery flown in 1928"
+    }
+  }
+}

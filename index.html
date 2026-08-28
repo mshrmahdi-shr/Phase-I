@@ -12,7 +12,15 @@
 <body>
   <header class="topbar">
     <div><div class="eyebrow">PHASE I ESA</div><h1>Mapping & Figure Generator</h1></div>
-    <div class="top-actions"><button id="newProject" class="ghost">New Project</button><button id="saveProject" class="primary">Save</button></div>
+    <div class="top-actions">
+      <button id="editCompanyProfile" class="ghost">Edit Company Profile</button>
+      <button id="applyCompanyTemplate" class="ghost">Apply Current Template to Project</button>
+      <button id="exportCompanyTemplate" class="ghost">Export Company Template</button>
+      <button id="importCompanyTemplate" class="ghost">Import Company Template</button>
+      <button id="manageHistoricalHeader" class="ghost">Historical Imagery</button>
+      <input id="importCompanyTemplateFile" type="file" accept=".zip,.phasei-template.zip,application/zip" hidden />
+      <button id="newProject" class="ghost">New Project</button><button id="saveProject" class="primary">Save</button>
+    </div>
   </header>
 
   <main class="app-shell">
@@ -20,7 +28,7 @@
       <section>
         <div class="section-heading"><h2>Project</h2><span id="saveState" class="badge">Local</span></div>
         <label>Project name<input id="projectName" placeholder="Phase I ESA – 92 Orchard Road" /></label>
-        <div class="two-col"><label>Project no.<input id="projectNo" placeholder="26-15876" /></label><label>Date<input id="projectDate" type="date" /></label></div>
+        <div class="two-col"><label>Project no.<input id="projectNo" placeholder="AB-12345" /></label><label>Date<input id="projectDate" type="date" /></label></div>
         <label>Address<div class="inline-input"><input id="address" placeholder="92 Orchard Road, Ajax, ON" /><button id="searchAddress" class="primary">Find</button></div></label>
         <div id="searchStatus" class="helper">Uses OpenStreetMap/Nominatim for address lookup.</div>
         <div id="saveMessage" class="helper" role="status">Saved projects stay in this browser. Export Project for a backup.</div>
@@ -29,15 +37,15 @@
       <section>
         <div class="section-heading"><h2>Site geometry</h2><span id="drawState" class="badge">Idle</span></div>
         <div class="button-grid"><button id="setSite">Set SITE</button><button id="drawSite">Draw Site Boundary</button><button id="drawBuilding">Draw Building</button><button id="finishDraw">Finish Draw</button><button id="undoPoint">Undo Point</button><button id="clearGeometry" class="danger-soft">Clear Geometry</button></div>
-        <p class="helper">Choose a drawing tool, tap map corners, then press Finish Draw.</p>
+        <p class="helper">Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels.</p>
       </section>
 
       <section>
-        <div class="section-heading"><h2>Imagery</h2><span class="badge">High-res source</span></div>
-        <label>Current / historical aerial<input id="uploadAerial" type="file" accept="image/*,.tif,.tiff" /></label>
-        <div class="two-col"><label>Year<input id="aerialYear" type="number" min="1900" max="2100" placeholder="1960" /></label><label>Composition DPI<select id="dpi"><option>150</option><option selected>300</option><option value="600">600 (too large for A3)</option></select></label></div>
+        <div class="section-heading"><h2>Imagery</h2><span class="badge">Official + manual</span></div>
+        <button id="manageHistorical" class="primary wide">Find or add historical imagery</button>
+        <label>Composition DPI<select id="dpi"><option>150</option><option selected>300</option><option value="600">600 (too large for A3)</option></select></label>
         <button id="openEarth">Open site in Google Earth</button>
-        <div id="imageryStatus" class="helper">Upload the highest-resolution original available.</div>
+        <div id="imageryStatus" class="helper">Search approved official sources or add a validated local image.</div>
       </section>
 
       <section>
@@ -47,22 +55,26 @@
         <p class="helper">OGS MRD128-REV polygons load from this site's cached KML/KMZ, with the supplied official legend. Reload geology after reopening a project.</p>
         <label>Or import KML/KMZ<input id="uploadGeology" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" /></label>
         <label>Import dataset type<select id="geologyKind"><option value="surficial">Surficial geology</option><option value="bedrock">Bedrock geology</option></select></label>
+        <button id="editGeologyProvenance" type="button" hidden>Edit custom source details</button>
         <p class="helper">Official Bedrock: MRD126-REV1 With Lowlands, compiled at 1:250,000. Custom imports keep their own legend; use the official button to replace them.</p>
         <div id="geologyStatus" class="helper">Locate the property first, then load MRD128.</div>
       </section>
 
       <section>
         <div class="section-heading"><h2>Export</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
-        <button id="exportPdf" class="primary wide">Export PDF</button>
-        <div class="button-grid"><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button><button id="exportJson">Export Project</button><label class="file-button">Import Project<input id="importJson" type="file" accept="application/json,.json" /></label></div>
+        <button id="exportPdf" class="primary wide">Export PDF / AutoCAD</button>
+        <button id="exportProjectPackage" class="primary wide">Download Project Package</button>
+        <div class="button-grid"><button id="importProjectPackage" type="button">Import Project Package</button><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button></div>
+        <input id="importProjectPackageFile" type="file" accept="application/zip,.phasei-project.zip" hidden />
+        <div class="legacy-project-tools"><span class="helper">Legacy compatibility</span><div class="button-grid"><button id="exportJson">Export Legacy JSON</button><label for="importJson" class="file-button">Import Legacy JSON<input id="importJson" type="file" accept="application/json,.json" /></label></div></div>
         <div id="printValidation" class="validation-panel" role="alert" hidden></div>
-        <p class="helper">A3 opens a full-size preview before printing. DPI is a preference, not a guarantee of source resolution. DXF currently exports boundaries only; no raster package yet.</p>
+        <p class="helper">The recommended .phasei-project.zip backup includes the project branding snapshot, exact logo, and permitted local historical files. JSON is legacy metadata-only compatibility. A3 opens a full-size preview before printing. Export DXF creates a standalone boundary/title-block drawing; Export PDF / AutoCAD creates the complete raster package.</p>
       </section>
     </aside>
 
     <section class="workspace">
       <div class="map-toolbar"><div class="segmented"><button class="basemap active" data-map="street">Street</button><button class="basemap" data-map="satellite">Satellite</button><button class="basemap" data-map="toporama">Toporama</button></div><div class="coords" id="coords">No site selected</div></div>
-      <div id="mapHome" class="map-home"><div id="map"></div></div>
+      <div id="mapHome" class="map-home"><div id="map"></div><div id="historicalCropFrame" hidden aria-hidden="true"><span>A3 crop</span></div></div>
       <div class="map-note" id="mapSourceStatus" role="status"></div>
       <div class="map-note">Assigned output sources: A/D/E OpenStreetMap, B Esri imagery, C NRCan Toporama. Preview and PDF use those sources. Composition DPI does not increase source detail.</div>
     </section>
@@ -71,19 +83,133 @@
       <div class="section-heading"><h2>Figures</h2><span class="badge">A3</span></div>
       <div id="figureList"></div>
       <div class="legend-card"><div class="section-heading"><h3>Detected geology</h3><span class="badge" id="geoUnitBadge">—</span></div><div id="geoLegend" class="helper">Select Figure D/E and load the geology source.</div></div>
-      <div class="aerial-card"><div class="section-heading"><h3>Historical aerials</h3><span class="badge" id="aerialCount">0</span></div><div id="aerialList" class="helper">No historical imagery added.</div></div>
+      <div class="aerial-card"><div class="section-heading"><h3>Historical aerials</h3><span class="badge" id="aerialCount">0</span></div><div id="historicalApprovedList" class="helper">No historical imagery approved.</div></div>
     </aside>
   </main>
 
+  <div id="geologyProvenanceDialog" hidden role="dialog" aria-modal="true" aria-labelledby="geologyProvenanceHeading" aria-describedby="geologyProvenanceHelp">
+    <form id="geologyProvenanceForm" class="geology-provenance-panel" novalidate>
+      <h2 id="geologyProvenanceHeading">Review custom geology provenance</h2>
+      <p id="geologyProvenanceHelp" class="helper">Enter the source and terms you actually have. The app does not guess a licence or publication year. Complete evidence and confirmation are required for CAD; PDF can still use valid loaded geometry.</p>
+      <label>Source or dataset name<input id="geologySourceName" maxlength="200" required /></label>
+      <label>Source / organization credits<textarea id="geologySourceCredits" maxlength="500" required></textarea></label>
+      <label>Public source URL (optional)<input id="geologySourceUrl" type="url" maxlength="2048" placeholder="https://…" /></label>
+      <label>Licence / terms name or URL<textarea id="geologySourceLicense" maxlength="1000" required></textarea></label>
+      <label>Redistribution / use permission evidence<textarea id="geologyPermissionEvidence" maxlength="1000" required placeholder="Example: written client permission dated YYYY-MM-DD is on file"></textarea></label>
+      <div class="two-col"><label>Acquisition / publication year (optional)<input id="geologyAcquisitionYear" type="number" min="1850" max="2100" inputmode="numeric" /></label><label>Year verification<select id="geologyYearVerification"><option value="unknown">Unknown (leave year blank)</option><option value="unverified">Entered, not independently verified</option><option value="verified">Verified from source record</option></select></label></div>
+      <label class="permission-check"><input id="geologyRightsConfirmed" type="checkbox" /> I confirm I have rights or permission to use and redistribute this geology in the selected project outputs.</label>
+      <p id="geologyProvenanceStatus" class="helper" role="status"></p>
+      <div class="company-form-actions"><button id="cancelGeologyProvenance" type="button">Cancel</button><button id="saveGeologyProvenance" type="submit" class="primary">Save source details</button></div>
+    </form>
+  </div>
+
+  <div id="projectPackageDialog" hidden role="dialog" aria-modal="true" aria-labelledby="projectPackageHeading" aria-describedby="projectPackageHelp">
+    <section class="project-package-panel">
+      <div class="project-package-heading"><div><div class="eyebrow">RECOMMENDED BACKUP AND SHARE FORMAT</div><h2 id="projectPackageHeading">Project Package</h2></div></div>
+      <p id="projectPackageHelp">The recommended .phasei-project.zip backup/share package preserves the project, required company branding, and permitted local historical imagery. Import always inspects the complete package before anything is replaced.</p>
+      <div id="projectPackagePreview" class="project-package-preview" hidden>
+        <h3>Review imported package</h3>
+        <p id="projectPackageSummary"></p><p id="projectPackageCompanySummary"></p><p id="projectPackageAssetSummary"></p>
+        <p>Confirm only if this is the project and company profile you intend to restore. Existing verified shared files are reused; remote imagery remains subject to current provider policy.</p>
+      </div>
+      <div id="projectPackageStatus" class="helper" role="status" aria-live="polite"></div>
+      <progress id="projectPackageMeter" aria-label="Project package progress" hidden></progress>
+      <div class="project-package-actions"><button id="cancelProjectPackage" type="button">Close</button><button id="confirmProjectPackageImport" type="button" class="primary" disabled>Confirm package import</button></div>
+    </section>
+  </div>
+
+  <div id="historicalDialog" hidden role="dialog" aria-modal="true" aria-labelledby="historicalHeading" aria-describedby="historicalHelp">
+    <section class="historical-panel">
+      <div class="historical-heading"><div><div class="eyebrow">A3 HISTORICAL FIGURES</div><h2 id="historicalHeading">Historical Imagery</h2></div><button id="closeHistorical" type="button">Close</button></div>
+      <p id="historicalHelp">Search curated official metadata or place a local image. Only explicitly exportable sources can be added to the project.</p>
+      <div class="historical-modes" role="tablist" aria-label="Historical imagery source">
+        <button id="historicalOfficialMode" type="button" role="tab" aria-selected="true">Search official sources</button>
+        <button id="historicalManualMode" type="button" role="tab" aria-selected="false">Manual upload</button>
+      </div>
+      <section id="historicalOfficialPanel" role="tabpanel">
+        <div class="inline-input"><label>Acquisition year<input id="historicalYear" type="number" min="1850" max="2100" inputmode="numeric" placeholder="1972" /></label><button id="searchHistorical" type="button" class="primary">Search</button><button id="cancelHistoricalSearch" type="button" hidden>Cancel search</button></div>
+        <div id="historicalSearchProgress" class="helper" role="status" aria-live="polite"></div>
+        <div id="historicalProviderErrors"></div>
+        <section class="historical-results-section"><h3>Exact year</h3><div data-result-group="exact"></div></section>
+        <section class="historical-results-section"><h3>Nearby years</h3><div data-result-group="nearby"></div></section>
+        <button id="showAllHistorical" type="button" hidden>Show all available years</button>
+        <section class="historical-results-section" data-result-group="remaining-section" hidden><h3>All other years</h3><div data-result-group="remaining" hidden></div></section>
+      </section>
+      <section id="historicalManualPanel" role="tabpanel" hidden>
+        <div class="two-col"><label>Acquisition year<input id="manualHistoricalYear" type="number" min="1850" max="2100" inputmode="numeric" /></label><label>World file CRS<select id="manualWorldCrs"><option value="EPSG:4326">WGS 84 (EPSG:4326)</option><option value="EPSG:3857">Web Mercator (EPSG:3857)</option><option value="EPSG:26915">NAD83 / UTM 15N</option><option value="EPSG:26916">NAD83 / UTM 16N</option><option value="EPSG:26917">NAD83 / UTM 17N</option><option value="EPSG:26918">NAD83 / UTM 18N</option></select></label></div>
+        <label>Image file (PNG, JPEG, or supported GeoTIFF)<input id="manualHistoricalFile" type="file" accept="image/png,image/jpeg,image/tiff,.png,.jpg,.jpeg,.tif,.tiff" /></label>
+        <label>Optional matching world file<input id="manualWorldFile" type="file" accept=".wld,.pgw,.jgw,.j2w,.tfw,.gfw" /></label>
+        <label>Source / citation <span aria-hidden="true">*</span><textarea id="manualCitation" rows="2" maxlength="1000" required></textarea></label>
+        <label>Official source URL (optional)<input id="manualSourceUrl" type="url" maxlength="8192" placeholder="https://…" /></label>
+        <label class="permission-check"><input id="manualPermission" type="checkbox" /> I confirm I have permission to reproduce this image in the project package.</label>
+        <button id="previewManualHistorical" type="button" class="primary">Place image and crop</button>
+        <fieldset id="manualPlacementControls" hidden><legend>Image placement</legend>
+          <div class="three-col"><label>Centre latitude<input id="manualCenterLat" type="number" step="any" /></label><label>Centre longitude<input id="manualCenterLng" type="number" step="any" /></label><label>Rotation °<input id="manualRotation" type="number" min="-180" max="180" step="0.1" /></label></div>
+          <div class="two-col"><label>Ground width (m)<input id="manualGroundWidth" type="number" min="0.01" step="0.1" /></label><label>Ground height (m)<input id="manualGroundHeight" type="number" min="0.01" step="0.1" /></label></div>
+          <div class="button-grid"><button id="applyManualPlacement" type="button">Apply placement</button><button id="drawManualExtent" type="button">Draw extent on map</button></div>
+        </fieldset>
+      </section>
+      <section id="historicalCropControls" class="historical-crop-controls" hidden aria-label="Historical crop editor">
+        <h3 id="historicalCropTitle">Crop editor</h3><p>The outlined landscape frame is the saved A3 map area. SITE and drawn boundaries remain on the shared map.</p>
+        <div class="historical-crop-actions"><button id="useHistoricalCrop" type="button">Use current crop</button><button id="resetHistoricalCrop" type="button">Reset to SITE</button><button id="cancelHistoricalCrop" type="button">Cancel</button><button id="commitHistorical" type="button" class="primary" disabled>Add to package</button></div>
+      </section>
+      <section id="historicalViewControls" class="historical-view-controls" hidden aria-label="Historical image view">
+        <p>The approved image is shown on the shared map at its saved crop and placement.</p><button id="cancelHistoricalView" type="button">Close view and restore map</button>
+      </section>
+      <div id="historicalStatus" class="helper" role="status" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <div id="companyProfileDialog" hidden role="dialog" aria-modal="true" aria-labelledby="companyProfileHeading" aria-describedby="companyProfileHelp">
+    <section class="company-profile-panel">
+      <div class="company-profile-heading"><div><div class="eyebrow">REQUIRED FOR OUTPUTS</div><h2 id="companyProfileHeading">Company Profile</h2></div><button id="closeCompanyProfile" type="button">Close</button></div>
+      <p id="companyProfileHelp">These reusable details and your decoded PNG or JPEG logo appear on every A3, PDF, and DXF output. Required fields are marked.</p>
+      <form id="companyProfileForm" novalidate>
+        <div class="company-fields">
+          <label>Company legal or display name <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span><input id="companyName" autocomplete="organization" required aria-describedby="companyNameError" /></label>
+          <span id="companyNameError" class="field-error" role="alert"></span>
+          <label>Address <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span><textarea id="companyAddress" rows="2" autocomplete="street-address" required aria-describedby="companyAddressError"></textarea></label>
+          <span id="companyAddressError" class="field-error" role="alert"></span>
+          <div class="two-col">
+            <div><label>Phone <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span><input id="companyPhone" type="tel" autocomplete="tel" required aria-describedby="companyPhoneError" /></label><span id="companyPhoneError" class="field-error" role="alert"></span></div>
+            <div><label>Email <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span><input id="companyEmail" type="email" autocomplete="email" required aria-describedby="companyEmailError" /></label><span id="companyEmailError" class="field-error" role="alert"></span></div>
+          </div>
+          <label>Website <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span><input id="companyWebsite" type="url" autocomplete="url" placeholder="https://example.com" required aria-describedby="companyWebsiteError" /></label>
+          <span id="companyWebsiteError" class="field-error" role="alert"></span>
+          <div class="two-col"><label>Prepared by default (optional)<input id="companyPreparedBy" autocomplete="name" /></label><label>Reviewed by default (optional)<input id="companyReviewedBy" autocomplete="name" /></label></div>
+        </div>
+        <fieldset class="company-logo-fields"><legend>Company logo <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></legend>
+          <label>PNG or JPEG, up to 4 MiB and 16 megapixels<input id="companyLogo" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" aria-describedby="logoError" /></label>
+          <span id="logoError" class="field-error" role="alert"></span>
+          <div class="logo-preview-box"><img id="companyLogoPreview" hidden alt="" /></div>
+          <div class="two-col"><label>Alignment<select id="companyLogoAlign" aria-describedby="logoPlacementError"><option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option></select></label><label>Scale<input id="companyLogoScale" type="number" min="0.5" max="1.5" step="0.05" value="1" aria-describedby="logoPlacementError" /></label></div>
+          <span id="logoPlacementError" class="field-error" role="alert"></span>
+        </fieldset>
+        <div id="companyImportPreview" class="company-import-preview" hidden>
+          <h3>Review imported company</h3><img id="companyImportLogo" alt="" /><p id="companyImportSummary"></p>
+          <p>This will replace the saved company profile only after you confirm.</p>
+          <div class="company-form-actions"><button id="cancelCompanyImport" type="button">Keep current profile</button><button id="confirmCompanyImport" type="button" class="primary">Confirm replacement</button></div>
+        </div>
+        <div id="companyProfileStatus" class="helper" role="status" aria-live="polite"></div>
+        <div class="company-form-actions"><button id="importCompanyTemplateInDialog" type="button">Import Company Template</button><button id="saveCompanyProfile" type="submit" class="primary">Save Company Profile</button></div>
+      </form>
+    </section>
+  </div>
+
   <div id="exportDialog" hidden role="dialog" aria-modal="true" aria-labelledby="exportHeading" aria-describedby="exportHelp">
     <section class="export-panel">
-      <h2 id="exportHeading">Export combined PDF</h2>
-      <p id="exportHelp">Select ready figures. Each selected figure becomes one A3 landscape sheet, in A–E order. Readiness checks project data; source-image failures block the complete download.</p>
+      <h2 id="exportHeading">Export PDF or AutoCAD package</h2>
+      <p id="exportHelp">Select ready figures and historical images once. The same checked rows are used for PDF and AutoCAD. PDF can use valid loaded custom geology; CAD additionally requires the saved source credits, licence/terms, permission evidence and rights confirmation shown below.</p>
       <div class="export-selection-actions"><button id="selectAllReady">Select all ready</button><button id="clearExport">Clear selection</button></div>
       <div id="exportRows"></div>
+      <section class="cad-export-summary" aria-labelledby="cadExportHeading">
+        <h3 id="cadExportHeading">Editable AutoCAD package</h3>
+        <div><span id="cadSelectionCount">0 images selected</span><span id="cadCrs">NAD83 / UTM unavailable</span></div>
+        <p id="cadReadiness">Select at least one ready image.</p>
+      </section>
       <div id="exportProgress" role="status" aria-live="polite"></div>
       <progress id="exportMeter" aria-label="Current export phase progress" hidden></progress>
-      <div class="export-footer"><button id="cancelExport">Cancel</button><button id="downloadPdf" class="primary" disabled>Download PDF (0 sheets)</button></div>
+      <div class="export-footer"><button id="cancelExport">Cancel</button><button id="downloadPdf" class="primary" disabled>Download PDF (0 sheets)</button><button id="downloadCad" class="primary cad-primary" disabled>Download AutoCAD ZIP (0 images)</button></div>
     </section>
   </div>
 
@@ -92,7 +218,7 @@
     <section id="printSheet" class="print-sheet">
     <div id="printMapHost" class="sheet-map"></div>
     <div class="sheet-titleblock">
-      <div class="tb-brand"><strong>PHASE I ESA</strong><span>ENVIRONMENTAL SITE ASSESSMENT</span></div>
+      <div class="tb-brand"><div class="tb-logo"><img id="printCompanyLogo" alt="Company logo" /></div><div><strong id="printCompanyName">—</strong><span id="printCompanyContact">—</span></div></div>
       <div class="tb-north"><b>NORTH</b><span>N</span><span class="print-north-arrow">▲</span></div>
       <div class="tb-legend"><b>LEGEND</b><div id="printLegend"></div></div>
       <div class="tb-project"><b>PROJECT NAME AND ADDRESS</b><span id="printProject">—</span><span id="printAddress">—</span></div>

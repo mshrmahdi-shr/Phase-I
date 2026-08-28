@@ -1,0 +1,15 @@
+{
+  "services": [
+    {"name": "basemap/cot_historic_aerial_1939", "type": "MapServer"},
+    {"name": "basemap/cot_ortho_2012_color_5cm", "type": "MapServer"},
+    {"name": "basemap/cot_ortho_2024_color_8cm", "type": "MapServer"},
+    {"name": "basemap/cot_ortho_Keele_Valley_Landfill_2019_10cm", "type": "MapServer"},
+    {"name": "basemap/cot_2020_NightTimeLight_20cm", "type": "MapServer"},
+    {"name": "basemap/cot_topo", "type": "MapServer"}
+  ],
+  "metadata": {
+    "basemap/cot_historic_aerial_1939": {},
+    "basemap/cot_ortho_2012_color_5cm": {},
+    "basemap/cot_ortho_2024_color_8cm": {}
+  }
+}

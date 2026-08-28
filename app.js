@@ -1,4 +1,4 @@
-import {createProject,restoreProject,closeRing,validBoundary,buildDxf} from './src/core.mjs';
+import {applyCompanyProfileToProject,createProject,requireProjectCompanyProfile,restoreProject,closeRing,validBoundary,buildDxf} from './src/core.mjs';
 import {parsePolys,resolveLinks,readKmz,relevantFeatures,relevantUnits,siteFeature,containsBounds} from './src/geology.mjs';
 import {createPreflight} from './print-preflight.mjs';
 import {createPrintSession,waitForMapTiles} from './src/print-session.mjs';
@@ -6,16 +6,39 @@ import {sourceForFigure} from './src/map-sources.mjs';
 import {sheetGeometry,metricScale,captureFigureView} from './src/sheet-layout.mjs';
 import {loadBedrockCache} from './src/bedrock-cache.mjs';
 import {createExportDialog} from './src/export-selection.mjs';
-import {exportCombinedPdf} from './src/pdf-export.mjs';
-const $=id=>document.getElementById(id), STORAGE='phase-i-esa-project-v2', MRD='./data/mrd128.kml';
-let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject()})();
-let active='A',draw=null,pts=[],siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,exportBusy=false;
+import {exportCombinedPdf,planPdfExport} from './src/pdf-export.mjs';
+import {exportCadPackage} from './src/cad-package.mjs';
+import {createAssetStore} from './src/asset-store.mjs';
+import {normalizeCompanyProfile,validateCompanyProfile} from './src/company-profile.mjs';
+import {createCompanyProfileDialog} from './src/company-ui.mjs';
+import {createProjectPackageUI} from './src/project-package-ui.mjs';
+import {createDrawingController} from './src/drawing-controller.mjs';
+import {createGeologyProvenanceController} from './src/geology-provenance-ui.mjs';
+import {createHistoricalImageryUI,migrateLegacyHistoricalImagery} from './src/historical-ui.mjs';
+import {ONTARIO_IMAGERY_PROVIDER} from './src/imagery/providers/ontario.mjs';
+import {TORONTO_IMAGERY_PROVIDER} from './src/imagery/providers/toronto.mjs';
+import {OTTAWA_IMAGERY_PROVIDER} from './src/imagery/providers/ottawa.mjs';
+const HISTORICAL_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
+const $=id=>document.getElementById(id), STORAGE='phase-i-esa-project-v2', COMPANY_STORAGE='phase-i-esa-company-profile-v1', MRD='./data/mrd128.kml';
+const DRAWING_BINDINGS=Symbol.for('phase-i-esa.drawing-bindings');
+document[DRAWING_BINDINGS]?.abort();
+const drawingBindings=new window.AbortController();document[DRAWING_BINDINGS]=drawingBindings;
+function loadCompanyProfile(){try{const saved=localStorage.getItem(COMPANY_STORAGE);return saved?normalizeCompanyProfile(JSON.parse(saved)):null;}catch{return null;}}
+function saveCompanyProfile(profile){const normalized=normalizeCompanyProfile(profile);localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized));return normalized;}
+let companyProfile=loadCompanyProfile();
+let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject({companyProfileSnapshot:companyProfile})})();
+let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,packageUI,geologyProvenance,exportBusy=false,printBranding=null,packagePersistenceToken=null;
+const assetStore=createAssetStore();
+const companyDialog=createCompanyProfileDialog({document,assetStore,loadProfile:loadCompanyProfile,saveProfile:saveCompanyProfile,Zip:JSZip,isAssetReferenced:id=>project.companyProfileSnapshot?.logoAssetId===id,onChanged:profile=>{
+  companyProfile=profile;preflight?.refresh();exportDialog?.refresh();if(!printSession?.isOpen)refreshPrint();
+}});
 let locationRevision=0;
 const geoCoverage={surficial:null,bedrock:null},geoReady={surficial:false,bedrock:false},geoRequest={surficial:0,bedrock:0};
 // Imports supersede dataset commits, but only an official request owns its load button.
 const officialLoading={surficial:0,bedrock:0};
 const geo={surficial:[],bedrock:[]}, geoSource={surficial:null,bedrock:null};
 const map=L.map('map',{zoomSnap:0,fadeAnimation:false,zoomAnimation:false}).setView([43.75,-79.3],11);
+map.getContainer().setAttribute('data-drawing-shortcuts','');
 const baseSources={street:sourceForFigure('A'),satellite:sourceForFigure('B'),toporama:sourceForFigure('C')};
 const baseLayers=Object.fromEntries(Object.entries(baseSources).map(([kind,source])=>[kind,source.createLayer(L)]));
 let basemapKind='street';const sourceErrors=new Set();baseLayers.street.addTo(map);
@@ -45,9 +68,42 @@ function save(){
   status('saveMessage','Saved in this browser. Export Project for a backup.');
   preflight?.refresh();exportDialog?.refresh();return true;
 }
+function persistHistoricalProject(next){
+  const scoped=restoreProject({...project,historical:next.historical,historicalSequenceCounters:next.historicalSequenceCounters,updatedAt:new Date().toISOString()});
+  try{localStorage.setItem(STORAGE,JSON.stringify(scoped));}
+  catch{status('saveMessage','Browser storage is unavailable or full. Export Project now to keep a backup.','error');return false;}
+  project=scoped;try{$('saveState').textContent='Saved';status('saveMessage','Saved in this browser. Export Project for a backup.');}catch{}return true;
+}
+function readPackageState(){return {project:structuredClone(project),companyProfile:companyProfile?structuredClone(companyProfile):null};}
+function normalizedPackageState(next,{requireProfile=true}={}){
+  if(!next||typeof next!=='object')throw new Error('Project package state is invalid.');
+  const nextProject=restoreProject(next.project),nextProfile=next.companyProfile===null?null:normalizeCompanyProfile(next.companyProfile);
+  if(nextProfile&&validateCompanyProfile(nextProfile).length||requireProfile&&!nextProfile)throw new Error('Project package company profile is incomplete.');
+  return {project:nextProject,companyProfile:nextProfile};
+}
+function restoreStorageValue(key,value){if(value===null)localStorage.removeItem(key);else localStorage.setItem(key,value);}
+function samePackageState(left,right){return JSON.stringify(left)===JSON.stringify(right);}
+function storageMatchesPackageState(expected){
+  return localStorage.getItem(STORAGE)===JSON.stringify(expected.project)&&localStorage.getItem(COMPANY_STORAGE)===(expected.companyProfile?JSON.stringify(expected.companyProfile):null);
+}
+async function persistPackageState(next,context={}){
+  if(!['commit','rollback'].includes(context.phase)||typeof context.transactionToken!=='string'||context.transactionToken.length<16||context.transactionToken.length>256)throw new Error('Project package persistence context is invalid.');
+  if(context.phase==='rollback'){
+    const expected=normalizedPackageState(context.expected);
+    if(packagePersistenceToken!==context.transactionToken||!samePackageState(readPackageState(),expected)||!storageMatchesPackageState(expected))throw new Error('Project package rollback conflict: later project or company edits were preserved.');
+  }
+  const normalized=normalizedPackageState(next,{requireProfile:context.phase!=='rollback'}),previousMemory=readPackageState(),previousProject=localStorage.getItem(STORAGE),previousCompany=localStorage.getItem(COMPANY_STORAGE),previousToken=packagePersistenceToken;
+  try{
+    localStorage.setItem(STORAGE,JSON.stringify(normalized.project));if(normalized.companyProfile)localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized.companyProfile));else localStorage.removeItem(COMPANY_STORAGE);project=normalized.project;companyProfile=normalized.companyProfile;packagePersistenceToken=context.phase==='commit'?context.transactionToken:null;return true;
+  }catch(error){
+    project=previousMemory.project;companyProfile=previousMemory.companyProfile;packagePersistenceToken=previousToken;const failures=[];
+    for(const [key,value] of [[STORAGE,previousProject],[COMPANY_STORAGE,previousCompany]])try{restoreStorageValue(key,value);}catch(restoreError){failures.push(restoreError);}
+    if(failures.length)throw new AggregateError([error,...failures],'Project/profile metadata persistence and local rollback failed.',{cause:error});throw error;
+  }
+}
 function status(id,t,k=''){$(id).textContent=t;$(id).dataset.kind=k}
 function loadingButton(id,value){const button=$(id);button.dataset.loading=String(value);button.disabled=value||exportBusy;}
-function sync(){for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).value=project[k]||'';$('dpi').value=project.dpi||300;$('dpiBadge').textContent=`${project.dpi||300} DPI`;if(project.location){map.setView([project.location.lat,project.location.lng],16);setMarker(project.location)};redraw();renderFigures();renderAerials();refreshPrint();updateLegend();updateScale();updateMapSourceStatus()}
+function sync(){for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).value=project[k]||'';$('dpi').value=project.dpi||300;$('dpiBadge').textContent=`${project.dpi||300} DPI`;if(project.location){map.setView([project.location.lat,project.location.lng],16);setMarker(project.location)};redraw();renderFigures();historicalUI?.refresh();refreshPrint();updateLegend();updateScale();updateMapSourceStatus()}
 for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).oninput=e=>{project[k]=e.target.value;save();refreshPrint()};$('dpi').onchange=e=>{project.dpi=+e.target.value;$('dpiBadge').textContent=`${project.dpi} DPI`;save()};
 $('searchAddress').onclick=async()=>{
   const q=$('address').value.trim();if(!q)return;
@@ -69,7 +125,7 @@ function siteChanged(location){
   const moved=!project.location||project.location.lat!==location.lat||project.location.lng!==location.lng;
   project.location=location;
   if(moved)for(const figure of Object.values(project.figures))delete figure.bounds;
-  locationRevision++;setMarker(location);detect();renderFigures();save();refreshPrint();
+  locationRevision++;setMarker(location);detect();renderFigures();save();historicalUI?.refresh();refreshPrint();
 }
 function setMarker(p){
   siteMarker?.remove();
@@ -78,25 +134,26 @@ function setMarker(p){
   siteMarker.on('dragend',()=>{const q=siteMarker.getLatLng();siteChanged({lat:q.lat,lng:q.lng});});
   $('coords').textContent=`${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`;
 }
-function stopDrawing(){draw=null;pts=[];draft?.remove();draft=null;$('drawState').textContent='Idle';map.getContainer().style.cursor='';map.doubleClickZoom.enable();}
-function begin(mode){if(exportBusy)return;stopDrawing();draw=mode;$('drawState').textContent=mode==='marker'?'Tap site':mode==='site'?'Drawing site':'Drawing building';map.getContainer().style.cursor='crosshair';map.doubleClickZoom.disable();$('map').scrollIntoView({behavior:'smooth',block:'center'});}
-function drawDraft(){draft?.remove();draft=pts.length?L.polyline(pts.map(([x,y])=>[y,x]),{color:'#fbbf24',dashArray:'7 5'}).addTo(map):null;}
-$('setSite').onclick=()=>begin('marker');$('drawSite').onclick=()=>begin('site');$('drawBuilding').onclick=()=>begin('building');
-$('undoPoint').onclick=()=>{pts.pop();drawDraft();};
-$('clearGeometry').onclick=()=>{stopDrawing();project.siteBoundary=[];project.buildingBoundary=[];redraw();save();};
-map.on('click',e=>{
-  if(!draw||exportBusy)return;
-  if(draw==='marker'){siteChanged({lat:e.latlng.lat,lng:e.latlng.lng});stopDrawing();return;}
-  pts.push([e.latlng.lng,e.latlng.lat]);drawDraft();
+function deactivateDrawing(){map.getContainer().style.cursor='';map.doubleClickZoom.enable();}
+const drawingController=createDrawingController({closeRing,validBoundary,
+  onDraft:points=>{draft?.remove();draft=points.length?L.polyline(points.map(([x,y])=>[y,x]),{color:'#fbbf24',dashArray:'7 5'}).addTo(map):null;},
+  onCommit:(mode,ring)=>{if(mode==='site')project.siteBoundary=ring;else project.buildingBoundary=ring;deactivateDrawing();redraw();save();},
+  onCancel:()=>deactivateDrawing(),onStatus:message=>$('drawState').textContent=message
 });
-$('finishDraw').onclick=()=>{
-  if(!draw)return;
-  if(draw==='marker'){stopDrawing();return;}
-  const ring=closeRing(pts);
-  if(!validBoundary(ring)){$('drawState').textContent='Use 3+ corners; no crossing edges';return;}
-  if(draw==='site')project.siteBoundary=ring;else project.buildingBoundary=ring;
-  stopDrawing();redraw();save();
-};
+function beginDrawing(mode){if(exportBusy)return;drawingController.begin(mode);map.getContainer().style.cursor='crosshair';map.doubleClickZoom.disable();$('map').scrollIntoView({behavior:'smooth',block:'center'});}
+$('setSite').onclick=()=>beginDrawing('marker');$('drawSite').onclick=()=>beginDrawing('site');$('drawBuilding').onclick=()=>beginDrawing('building');
+$('undoPoint').onclick=()=>drawingController.undo();
+$('finishDraw').onclick=()=>drawingController.finish();
+$('clearGeometry').onclick=()=>{drawingController.cancel();project.siteBoundary=[];project.buildingBoundary=[];redraw();save();};
+map.on('click',e=>{
+  const mode=drawingController.state().mode;
+  if(!mode||exportBusy)return;
+  if(mode==='marker'){siteChanged({lat:e.latlng.lat,lng:e.latlng.lng});drawingController.cancel();return;}
+  drawingController.add([e.latlng.lng,e.latlng.lat]);
+});
+document.addEventListener('keydown',event=>drawingController.handleKey(event),{signal:drawingBindings.signal});
+map.getContainer().addEventListener('contextmenu',event=>drawingController.handleContextMenu(event),{signal:drawingBindings.signal});
+window.addEventListener('pagehide',event=>{if(event.persisted)return;packageUI?.destroy();historicalUI?.destroy();geologyProvenance?.destroy();drawingBindings.abort();if(document[DRAWING_BINDINGS]===drawingBindings)delete document[DRAWING_BINDINGS];},{signal:drawingBindings.signal});
 function redraw(){siteLayer?.remove();buildingLayer?.remove();if(project.siteBoundary?.length)siteLayer=L.polygon(project.siteBoundary.map(([x,y])=>[y,x]),{color:'#ef4444',weight:4,fill:false}).addTo(map);if(project.buildingBoundary?.length)buildingLayer=L.polygon(project.buildingBoundary.map(([x,y])=>[y,x]),{color:'#111827',weight:3,dashArray:'6 4',fillColor:'#fff',fillOpacity:.1}).addTo(map)}
 function renderFigures(){const h=$('figureList');h.innerHTML='';for(const [c,f] of Object.entries(project.figures)){const d=document.createElement('div');d.className='figure-row'+(c===active?' active':'');d.innerHTML=`<div class="figure-top"><div><div class="figure-code">FIGURE ${c}</div><div class="figure-title">${esc(f.title)}</div></div><span class="badge" title="${f.bounds?'Saved A3 map span':'Default A3 map span'}">${fmt(f.extentMeters)}</span></div><div class="figure-actions"><button title="${f.bounds?'Restore the saved A3 map position and zoom':'Show the current A3 map extent'}">${f.bounds?'View saved':'View'}</button><button title="Save the current map position and zoom for A3/PDF">${f.bounds?'Update A3 view':'Use for A3'}</button></div>`;d.children[1].children[0].onclick=()=>selectFig(c,true);d.children[1].children[1].onclick=()=>useForA3(c);h.appendChild(d)}}
 function fmt(m){return m>=1000?`${m/1000} km`:`${m} m`;}
@@ -108,9 +165,9 @@ function requiredGeologyBounds(kind='surficial',includeView=false){
 }
 function selectFig(code,fit){
   if(exportBusy)return;
-  active=code;stopDrawing();renderFigures();
+  active=code;drawingController.cancel();renderFigures();
   setBasemap(assignedBasemap());
-  if(fit)zoom(code);renderGeo();detect();refreshPrint();preflight.refresh();
+  if(fit)zoom(code);renderGeo();detect();refreshPrint();preflight.refresh();refreshGeologyProvenanceAction();
   const kind=geologyKind();
   if(kind&&project.location){
     const custom=geoSource[kind]?.id==='custom'||project.geology[kind]?.source?.id==='custom';
@@ -150,7 +207,7 @@ function setBasemap(kind){
 }
 for(const b of document.querySelectorAll('.basemap'))b.onclick=()=>setBasemap(b.dataset.map);
 
-$('uploadAerial').onchange=async e=>{const f=e.target.files?.[0];if(!f||exportBusy)return;const y=+$('aerialYear').value||new Date().getFullYear(),u=await new Promise((ok,no)=>{const r=new FileReader;r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f)});if(exportBusy){status('imageryStatus','Reimport the aerial after PDF export finishes.');return;}project.historical=project.historical||[];project.historical.push({id:crypto.randomUUID(),year:y,name:f.name,size:f.size,dataUrl:u});save();renderAerials();status('imageryStatus',`Added ${f.name} for ${y}`,'ok')};function renderAerials(){const a=project.historical||[];$('aerialCount').textContent=a.length;$('aerialList').innerHTML=a.length?a.map(x=>`<div class="aerial-item"><b>${esc(x.year)}</b> — ${esc(x.name)}</div>`).join(''):'No historical imagery added.'}$('openEarth').onclick=()=>project.location?window.open(`https://earth.google.com/web/@${project.location.lat},${project.location.lng},500a,1000d,35y,0h,0t,0r`,'_blank'):alert('Set the site location first.');
+$('openEarth').onclick=()=>project.location?window.open(`https://earth.google.com/web/@${project.location.lat},${project.location.lng},500a,1000d,35y,0h,0t,0r`,'_blank','noopener,noreferrer'):alert('Set the site location first.');
 $('loadMrd128').onclick=()=>loadMRD(true);
 async function loadMRD(user=true){
   if(exportBusy)return;
@@ -167,7 +224,7 @@ async function loadMRD(user=true){
     if(exportBusy){status('geologyStatus','Reload MRD128 after PDF export finishes.');return;}
     if(revision!==locationRevision){status('geologyStatus','SITE changed while loading. Load MRD128 again for the final location.','error');return;}
     if(!result.features.length)throw Error('No cached geology polygons cover this location.');
-    commitDataset(result.features,'surficial',{id:'MRD128-REV',name:'MRD128 / MRD128-REV, Surficial Geology of Southern Ontario',credits:'Ontario Geological Survey'},result.docs,bounds);
+    commitDataset(result.features,'surficial',{id:'MRD128-REV',name:'MRD128 / MRD128-REV, Surficial Geology of Southern Ontario',credits:'Ontario Geological Survey',sourceUrl:'https://www.geologyontario.mndm.gov.on.ca/mndmaccess/mndm_dir.asp?type=pub&id=MRD128-REV',license:'https://www.ontario.ca/page/open-government-licence-ontario',redistributionEvidence:'official-open-government-licence'},result.docs,bounds);
   }catch(e){if(ticket===geoRequest.surficial)status('geologyStatus',`MRD128 load failed: ${e.message} Check the published cache or import a polygon KML/KMZ.`,'error');}
   finally{if(ticket===officialLoading.surficial){officialLoading.surficial=0;loadingButton('loadMrd128',false);preflight.refresh();exportDialog?.refresh();}}
 }
@@ -190,21 +247,19 @@ async function loadOfficialBedrock(user=true){
   }catch(error){if(ticket===geoRequest.bedrock)status('geologyStatus',`MRD126 Bedrock load failed: ${error.message} Check the published cache or import a polygon KML/KMZ.`,'error');}
   finally{if(ticket===officialLoading.bedrock){officialLoading.bedrock=0;loadingButton('loadBedrock',false);preflight.refresh();exportDialog?.refresh();}}
 }
-$('uploadGeology').onchange=async e=>{
-  const file=e.target.files?.[0];if(!file||exportBusy)return;
-  const kind=$('geologyKind').value,ticket=++geoRequest[kind];geoReady[kind]=false;exportDialog?.refresh();
-  try{
-    const text=/\.kmz$/i.test(file.name)?await readKmz(file,JSZip):await file.text();
-    const features=parsePolys(text,kind);
-    if(!features.length)throw Error('This file contains no polygons. Import a self-contained polygon KML/KMZ, not a NetworkLink index.');
-    if(ticket===geoRequest[kind]&&!exportBusy)commitDataset(features,kind,{id:'custom',name:`Custom import: ${file.name}`},1,null);
-  }catch(error){status('geologyStatus',`Import failed: ${error.message}`,'error');}
-  finally{preflight.refresh();exportDialog?.refresh();}
-};
+geologyProvenance=createGeologyProvenanceController({document,parsePolys,readKmz,Zip:JSZip,onCommit:async({mode,kind,source,features,docs,coverage,requestToken})=>{
+  if(exportBusy)throw new Error('Finish the current export before changing geology provenance.');
+  if(mode==='import'){if(requestToken!==geoRequest[kind])throw new Error('A newer geology request replaced this import. Reopen the final file.');commitDataset(features,kind,source,docs,coverage);return;}
+  if(project.geology[kind]?.source?.id!=='custom')throw new Error('The saved custom geology source is no longer current.');const previousProject=project,previousRuntime=geoSource[kind];project={...project,geology:{...project.geology,[kind]:{...project.geology[kind],name:source.name,source}}};if(geoSource[kind]?.id==='custom')geoSource[kind]=source;if(!save()){project=previousProject;geoSource[kind]=previousRuntime;throw new Error('The corrected provenance could not be saved.');}refreshGeologyProvenanceAction();status('geologyStatus',`Updated ${kind} custom source details.`,'ok');
+}});
+$('uploadGeology').onchange=async e=>{const file=e.target.files?.[0];if(!file||exportBusy)return;const kind=$('geologyKind').value,ticket=++geoRequest[kind];try{const committed=await geologyProvenance.importFile(file,kind,{requestToken:ticket});if(!committed)status('geologyStatus','Custom geology import cancelled; the current dataset was not changed.');}catch(error){status('geologyStatus',`Import failed: ${error.message}`,'error');}finally{e.target.value='';preflight.refresh();exportDialog?.refresh();refreshGeologyProvenanceAction();}};
+$('editGeologyProvenance').onclick=async()=>{if(exportBusy)return;const kind=geologyKind()||$('geologyKind').value,source=geoSource[kind]||project.geology[kind]?.source;try{await geologyProvenance.editSource(kind,source);}catch(error){status('geologyStatus',error.message,'error');}};
+$('geologyKind').onchange=refreshGeologyProvenanceAction;
+function refreshGeologyProvenanceAction(){const kind=geologyKind()||$('geologyKind').value,source=geoSource[kind]||project.geology[kind]?.source;$('editGeologyProvenance').hidden=source?.id!=='custom';}
 function commitDataset(features,kind,source,docs,coverage){
   geo[kind]=features;geoSource[kind]=source;geoCoverage[kind]=coverage;geoReady[kind]=true;
   project.geology[kind]={name:source.name,source,count:features.length,docs};renderGeo();detect();save();refreshPrint();
-  status('geologyStatus',`Loaded ${features.length.toLocaleString()} ${kind} polygon(s) from ${source.name}`,'ok');
+  refreshGeologyProvenanceAction();status('geologyStatus',`Loaded ${features.length.toLocaleString()} ${kind} polygon(s) from ${source.name}`,'ok');
 }
 function geologyKind(){return active==='D'?'surficial':active==='E'?'bedrock':null;}
 function renderGeo(){
@@ -238,22 +293,34 @@ function updateLegend(){
 map.on('moveend resize',()=>{renderGeo();updateScale();if(printSession?.isOpen)refreshPrint();});
 
 $('saveProject').onclick=save;
+$('applyCompanyTemplate').onclick=async()=>{
+  if(exportBusy)return false;
+  if(!companyProfile){status('saveMessage','Complete and save the reusable Company Profile before assigning project branding.','error');await companyDialog.open();return false;}
+  if(!confirm(`Apply the current reusable company template (${companyProfile.companyName}) to this project? Existing project outputs will use this company and logo after you confirm.`))return false;
+  const previous=project;
+  try{
+    project=applyCompanyProfileToProject(project,companyProfile);
+    if(!save())throw new Error('The updated project branding could not be saved in browser storage.');
+    status('saveMessage',`Project branding updated explicitly to ${companyProfile.companyName}.`,'ok');refreshPrint();return true;
+  }catch(error){project=previous;sync();status('saveMessage',`Project branding was not changed: ${error.message}`,'error');return false;}
+};
 $('newProject').onclick=()=>{if(confirm('Start a new local project? Export your current project first if you need a backup.')){localStorage.removeItem(STORAGE);localStorage.removeItem('phase-i-esa-project-v1');location.reload();}};
-$('exportJson').onclick=()=>dl(`${safe(project.name||'phase-i-project')}.json`,JSON.stringify(project,null,2),'application/json');
-$('importJson').onchange=async e=>{const file=e.target.files?.[0];if(!file||exportBusy)return;try{const imported=restoreProject(JSON.parse(await file.text()));if(exportBusy){status('saveMessage','Reimport the project after PDF export finishes.');return;}project=imported;if(save())location.reload();}catch(error){status('saveMessage',`Project import failed: ${error.message}`,'error');}};
-$('exportDxf').onclick=()=>dl(`${safe(project.name||'phase-i')}.dxf`,buildDxf(project),'application/dxf');
+$('exportJson').onclick=()=>{dl(`${safe(project.name||'phase-i-project')}.legacy.json`,JSON.stringify(project,null,2),'application/json');status('saveMessage','Legacy JSON exported. It does not include the company logo or local historical image files; use Project Package for a complete backup.');};
+$('importJson').onchange=async e=>{const file=e.target.files?.[0];if(!file||exportBusy)return;try{const imported=restoreProject(JSON.parse(await file.text()));if(exportBusy){status('saveMessage','Reimport the Legacy JSON after export finishes.');return;}project=imported;if(save())location.reload();}catch(error){status('saveMessage',`Legacy JSON project import failed: ${error.message}`,'error');}finally{e.target.value='';}};
+$('exportDxf').onclick=async()=>{try{const branding=await companyDialog.outputSnapshot(projectOutputProfile());dl(`${safe(project.name||'phase-i')}.dxf`,buildDxf(project,{companyProfile:branding.companyProfile}),'application/dxf');}catch(error){status('saveMessage',`DXF blocked: ${error.message}`,'error');await companyDialog.refresh();if(!project.companyProfileSnapshot)$('applyCompanyTemplate').focus();else await companyDialog.open();}};
+function projectOutputProfile(){return requireProjectCompanyProfile(project);}
 function printState(){
   const kind=geologyKind(),hit=kind?siteFeature(geo[kind],project.location):null;
   let covered=true;try{if(kind&&project.location)covered=containsBounds(geoCoverage[kind],requiredGeologyBounds(kind));}catch{covered=false;}
-  return {project,figureCode:active,geologyLoaded:kind?geoReady[kind]&&covered&&geo[kind].length>0:true,geologySiteUnit:hit?.unitCode||hit?.name||null};
+  return {project,companyProfile:printBranding?.companyProfile||project.companyProfileSnapshot,figureCode:active,geologyLoaded:kind?geoReady[kind]&&covered&&geo[kind].length>0:true,geologySiteUnit:hit?.unitCode||hit?.name||null};
 }
 preflight=createPreflight({document,getState:printState});
 printSession=createPrintSession({document,map,validate:()=>preflight.check(),fit:()=>zoom(active,true),render:()=>{renderGeo();refreshPrint();updateScale();},waitForTiles:()=>waitForMapTiles($('map')),onRestore:()=>{renderGeo();updateScale();}});
-$('printA3').onclick=()=>{if(exportBusy)return;stopDrawing();setBasemap(assignedBasemap());return printSession.open();};
-$('closePrint').onclick=()=>printSession.close();
+$('printA3').onclick=async()=>{if(exportBusy)return false;drawingController.cancel();setBasemap(assignedBasemap());try{printBranding=await companyDialog.outputSnapshot(projectOutputProfile());renderCompanyBrand(printBranding);return await printSession.open();}catch(error){printBranding=null;status('saveMessage',`A3 output blocked: ${error.message}`,'error');await companyDialog.refresh();preflight.check();if(!project.companyProfileSnapshot)$('applyCompanyTemplate').focus();else await companyDialog.open();return false;}};
+$('closePrint').onclick=()=>{printSession.close();printBranding=null;};
 $('confirmPrint').onclick=()=>{if(!$('confirmPrint').disabled&&preflight.check())window.print();};
-window.addEventListener('afterprint',()=>printSession.close());
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('exportDialog').hidden)printSession.close();});
+window.addEventListener('afterprint',()=>{printSession.close();printBranding=null;},{signal:drawingBindings.signal});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('exportDialog').hidden&&$('companyProfileDialog').hidden){printSession.close();printBranding=null;}},{signal:drawingBindings.signal});
 function datasets(){return Object.fromEntries(['surficial','bedrock'].map(kind=>[kind,{features:geoReady[kind]?geo[kind]:[],source:geoSource[kind],coverage:geoCoverage[kind]}]));}
 let busyControls=[],busyHandlers=[];
 function setExportBusy(value){
@@ -268,8 +335,12 @@ function setExportBusy(value){
     busyHandlers.forEach(([handler,enabled])=>{if(enabled)handler.enable();});busyHandlers=[];
   }
 }
-exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets()}),save,setBusy:setExportBusy,exportPdf:exportCombinedPdf});
-$('exportPdf').onclick=()=>{if(!printSession.isOpen)exportDialog.open();};
+async function exportBrandedPdf(args){const branding=await companyDialog.outputSnapshot(args.companyProfile);return exportCombinedPdf({...args,...branding});}
+async function prepareCadBranding(expected,{signal}={}){
+  signal?.throwIfAborted();const branding=await companyDialog.outputSnapshot(expected);signal?.throwIfAborted();return Object.freeze({companyProfile:branding.companyProfile,companyLogo:branding.companyLogo});
+}
+exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile:project.companyProfileSnapshot,providers:HISTORICAL_PROVIDERS,assetStore}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport,prepareCadBranding,exportCadPackage});
+$('exportPdf').onclick=()=>{if(!printSession.isOpen)return exportDialog.open();};
 function refreshPrint(){
   const f=project.figures[active];
   $('printProject').textContent=project.name||'—';$('printAddress').textContent=project.address||'—';
@@ -282,5 +353,30 @@ function refreshPrint(){
   $('printSource').textContent=[source?[source.name,source.credits].filter(Boolean).join('. '):'',base,active==='B'?'Imagery acquisition date not verified.':''].filter(Boolean).join(' | ');
 }
 
+function renderCompanyBrand({companyProfile:profile,companyLogoDataUrl}){
+  $('printCompanyLogo').src=companyLogoDataUrl;$('printCompanyLogo').alt=`${profile.companyName} logo`;
+  $('printCompanyName').textContent=profile.companyName;
+  $('printCompanyContact').textContent=[profile.address,profile.phone,profile.email,profile.website].filter(Boolean).join(' · ');
+  $('printCompanyLogo').closest('.tb-brand').dataset.logoAlign=profile.logoPlacement.align;$('printCompanyLogo').style.transform=`scale(${profile.logoPlacement.scale})`;
+}
+
 function dl(n,t,ty){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:ty}));a.download=n;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}function safe(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}function esc(s=''){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
-sync();
+
+try{
+  const migration=await migrateLegacyHistoricalImagery({project,assetStore,saveProject:persistHistoricalProject});
+  if(!migration.migrated)project=migration.project;else status('imageryStatus','Legacy historical imagery was validated and moved to IndexedDB. Export Project for a fresh backup.','ok');
+}catch(error){status('imageryStatus',error.message,'error');status('saveMessage','Legacy imagery was not changed. Export Project now to preserve the original data before retrying.','error');}
+historicalUI=createHistoricalImageryUI({document,map,L,assetStore,providers:HISTORICAL_PROVIDERS,getProject:()=>project,
+  saveProject:persistHistoricalProject,isAssetReferencedOutsideHistorical:id=>companyProfile?.logoAssetId===id||project.companyProfileSnapshot?.logoAssetId===id,onChanged:()=>{preflight?.refresh();exportDialog?.refresh();}});
+async function initializePackageState(next,context={}){
+  const normalized=normalizedPackageState(next,{requireProfile:context.phase!=='rollback'});project=normalized.project;companyProfile=normalized.companyProfile;drawingController.cancel();printSession?.close();printBranding=null;locationRevision++;
+  for(const kind of ['surficial','bedrock']){geoRequest[kind]++;geo[kind].length=0;geoSource[kind]=null;geoCoverage[kind]=null;geoReady[kind]=false;}
+  geoLayer?.remove();geoLayer=null;siteMarker?.remove();siteMarker=null;siteLayer?.remove();siteLayer=null;buildingLayer?.remove();buildingLayer=null;active='A';$('coords').textContent='No site selected';
+  sync();await companyDialog.refresh();await historicalUI.refresh();preflight?.refresh();exportDialog?.refresh();return true;
+}
+packageUI=createProjectPackageUI({document,assetStore,Zip:JSZip,getState:readPackageState,readState:readPackageState,persistState:persistPackageState,initialize:initializePackageState,
+  isAssetReferenced:(id,state)=>state?.companyProfile?.logoAssetId===id||state?.project?.companyProfileSnapshot?.logoAssetId===id||state?.project?.historical?.some(item=>item.assetId===id),setBusy:setExportBusy,
+  onCommitted:()=>{status('saveMessage','Project package imported and saved in this browser. Remote official imagery will be revalidated before export.','ok');preflight?.refresh();exportDialog?.refresh();}});
+const openHistorical=()=>{if(exportBusy)return;drawingController.cancel();historicalUI.open();};
+$('manageHistorical').onclick=openHistorical;$('manageHistoricalHeader').onclick=openHistorical;
+sync();await companyDialog.refresh();if(!companyProfile)await companyDialog.open();else if(!project.companyProfileSnapshot)status('saveMessage','This legacy project has no assigned branding. Review the reusable Company Profile, then choose Apply Current Template to Project before creating outputs.','error');
