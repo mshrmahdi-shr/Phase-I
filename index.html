@@ -12,7 +12,7 @@
 <body>
   <header class="topbar">
     <div><div class="eyebrow">PHASE I ESA</div><h1>Mapping & Figure Generator</h1></div>
-    <div class="top-actions">
+      <div class="top-actions">
       <button id="editCompanyProfile" class="ghost">Edit Company Profile</button>
       <button id="applyCompanyTemplate" class="ghost">Apply Current Template to Project</button>
       <button id="exportCompanyTemplate" class="ghost">Export Company Template</button>
@@ -20,8 +20,9 @@
       <button id="manageHistoricalHeader" class="ghost">Historical Imagery</button>
       <input id="importCompanyTemplateFile" type="file" accept=".zip,.phasei-template.zip,application/zip" hidden />
       <button id="newProject" class="ghost">New Project</button><button id="saveProject" class="primary">Save</button>
-    </div>
-  </header>
+      </div>
+      <div id="workflowIssues" class="workflow-issues" role="alert" aria-live="assertive" hidden></div>
+    </header>
 
   <main class="app-shell">
     <aside class="panel project-panel">
