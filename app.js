@@ -375,7 +375,7 @@ function renderCompanyBrand({companyProfile:profile,companyLogoDataUrl}){
   $('printCompanyLogo').closest('.tb-brand').dataset.logoAlign=profile.logoPlacement.align;$('printCompanyLogo').style.transform=`scale(${profile.logoPlacement.scale})`;
 }
 
-function dl(n,t,ty){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([t],{type:ty}));a.href=url;a.download=n;a.hidden=true;document.body.append(a);a.click();a.hidden=false;a.textContent=Download ;a.style.cssText='position:fixed;right:1rem;bottom:1rem;z-index:10000;padding:.7rem 1rem;background:#078dcc;color:#fff;border-radius:.4rem;font:600 14px system-ui;';setTimeout(()=>{a.remove();URL.revokeObjectURL(url)},30000)}function safe(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}function esc(s=''){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+function dl(n,t,ty){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([t],{type:ty}));a.href=url;a.download=n;a.hidden=true;document.body.append(a);a.click();a.hidden=false;a.textContent='Download '+n;a.style.cssText='position:fixed;right:1rem;bottom:1rem;z-index:10000;padding:.7rem 1rem;background:#078dcc;color:#fff;border-radius:.4rem;font:600 14px system-ui;';setTimeout(()=>{a.remove();URL.revokeObjectURL(url)},30000)}function safe(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}function esc(s=''){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
 
 try{
   const migration=await migrateLegacyHistoricalImagery({project,assetStore,saveProject:persistHistoricalProject});
