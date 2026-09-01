@@ -312,10 +312,10 @@ export function validBoundary(ring){
   return true;
 }
 
-function dxfPolyline(layer, points){
+function dxfPolyline(layer, points, handles){
   if(!points?.length) return '';
   const ring=closeRing(points);
-  let s=`0\nLWPOLYLINE\n8\n${layer}\n90\n${ring.length}\n70\n1\n`;
+  let s=`0\nLWPOLYLINE\n5\n${handles.take()}\n100\nAcDbEntity\n8\n${layer}\n100\nAcDbPolyline\n90\n${ring.length}\n70\n1\n`;
   for(const [x,y] of ring) s+=`10\n${x}\n20\n${y}\n`;
   return s;
 }
@@ -342,13 +342,13 @@ function dxfTextChunks(value,maxEncodedLength=240){
   return chunks;
 }
 
-function dxfTextBlock(layer,value,x,y,extent,preferredHeight){
+function dxfTextBlock(layer,value,x,y,extent,preferredHeight,handles){
   const chunks=dxfTextChunks(value);if(!chunks.length)return {content:'',nextY:y};
   const widest=Math.max(...chunks.map(chunk=>chunk.width));
   const height=Math.max(extent*.001,Math.min(extent*preferredHeight,extent*1.2/(Math.max(widest,1)*.65)));
   const rowStep=Math.max(height*1.5,extent*.025);
   return {
-    content:chunks.map((chunk,index)=>`0\nTEXT\n8\n${layer}\n10\n${x}\n20\n${y-index*rowStep}\n40\n${height}\n1\n${chunk.encoded}\n`).join(''),
+    content:chunks.map((chunk,index)=>`0\nTEXT\n5\n${handles.take()}\n100\nAcDbEntity\n8\n${layer}\n100\nAcDbText\n10\n${x}\n20\n${y-index*rowStep}\n30\n0\n40\n${height}\n1\n${chunk.encoded}\n7\nSTANDARD\n`).join(''),
     nextY:y-chunks.length*rowStep
   };
 }
@@ -391,15 +391,16 @@ export function buildDxf({siteBoundary=[],buildingBoundary=[],name='',projectNo=
   if(company.companyName.length>160||contacts.some(value=>value.length>220)||contacts.join(' | ').length>500){
     throw new Error('Company contact text is too long to fit the DXF title block.');
   }
+  const handles={next:16,take(){return (this.next++).toString(16).toUpperCase();},peek(){return this.next.toString(16).toUpperCase();}};
   const frame=dxfDrawingFrame(siteBoundary,buildingBoundary,location);let cursor=frame.minY-frame.extent*.06,text='';
   for(const [layer,value,height] of [
     ['COMPANY_TEXT',company.companyName,.04],['COMPANY_TEXT',contacts.join(' | '),.018],
     ['TITLE_BLOCK',title,.03],['TITLE_BLOCK',projectNo,.022]
   ]){
-    const block=dxfTextBlock(layer,value,frame.minX,cursor,frame.extent,height);text+=block.content;cursor=block.nextY-frame.extent*.01;
+    const block=dxfTextBlock(layer,value,frame.minX,cursor,frame.extent,height,handles);text+=block.content;cursor=block.nextY-frame.extent*.01;
   }
-  const header='0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1021\n9\n$DWGCODEPAGE\n3\nANSI_1252\n0\nENDSEC\n';
-  return `${header}0\nSECTION\n2\nENTITIES\n${dxfPolyline('SITE_BOUNDARY',siteBoundary)}${dxfPolyline('BUILDING_BOUNDARY',buildingBoundary)}${text}0\nENDSEC\n0\nEOF\n`;
+  const header=`0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1021\n9\n$DWGCODEPAGE\n3\nANSI_1252\n9\n$HANDSEED\n5\n${handles.peek()}\n0\nENDSEC\n`;
+  return `${header}0\nSECTION\n2\nENTITIES\n${dxfPolyline('SITE_BOUNDARY',siteBoundary,handles)}${dxfPolyline('BUILDING_BOUNDARY',buildingBoundary,handles)}${text}0\nENDSEC\n0\nEOF\n`;
 }
 
 const MRD128_LEGEND = {

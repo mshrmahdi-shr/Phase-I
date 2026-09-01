@@ -12,7 +12,7 @@
 <body>
   <header class="topbar">
     <div><div class="eyebrow">PHASE I ESA</div><h1>Mapping & Figure Generator</h1></div>
-    <div class="top-actions">
+      <div class="top-actions">
       <button id="editCompanyProfile" class="ghost">Edit Company Profile</button>
       <button id="applyCompanyTemplate" class="ghost">Apply Current Template to Project</button>
       <button id="exportCompanyTemplate" class="ghost">Export Company Template</button>
@@ -20,8 +20,9 @@
       <button id="manageHistoricalHeader" class="ghost">Historical Imagery</button>
       <input id="importCompanyTemplateFile" type="file" accept=".zip,.phasei-template.zip,application/zip" hidden />
       <button id="newProject" class="ghost">New Project</button><button id="saveProject" class="primary">Save</button>
-    </div>
-  </header>
+      </div>
+      <div id="workflowIssues" class="workflow-issues" role="alert" aria-live="assertive" hidden></div>
+    </header>
 
   <main class="app-shell">
     <aside class="panel project-panel">
@@ -37,6 +38,7 @@
       <section>
         <div class="section-heading"><h2>Site geometry</h2><span id="drawState" class="badge">Idle</span></div>
         <div class="button-grid"><button id="setSite">Set SITE</button><button id="drawSite">Draw Site Boundary</button><button id="drawBuilding">Draw Building</button><button id="finishDraw">Finish Draw</button><button id="undoPoint">Undo Point</button><button id="clearGeometry" class="danger-soft">Clear Geometry</button></div>
+        <p class="helper">Find tries to add an editable boundary from the address source automatically. Review and adjust it when needed; if no boundary is published, draw one manually.</p>
         <p class="helper">Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels.</p>
       </section>
 
@@ -62,7 +64,8 @@
 
       <section>
         <div class="section-heading"><h2>Export</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
-        <button id="exportPdf" class="primary wide">Export PDF / AutoCAD</button>
+        <button id="exportPdf" class="primary wide" aria-describedby="exportButtonHelp" title="Open the export checklist to see exactly what is missing">Export PDF / AutoCAD</button>
+        <p id="exportButtonHelp" class="helper export-button-help">If export is unavailable, open the checklist: disabled rows show the exact missing item and the top warning lists all active problems.</p>
         <button id="exportProjectPackage" class="primary wide">Download Project Package</button>
         <div class="button-grid"><button id="importProjectPackage" type="button">Import Project Package</button><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button></div>
         <input id="importProjectPackageFile" type="file" accept="application/zip,.phasei-project.zip" hidden />

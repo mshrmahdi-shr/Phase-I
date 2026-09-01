@@ -34,7 +34,7 @@ function readiness(snapshot){
   }
   if(snapshot?.companyProfile==null){
     blockers.push('Project branding is not assigned. Click Apply Current Template to this project, then export again.');
-  }else try{for(const error of validateCompanyProfile(snapshot.companyProfile))blockers.push(`${error.message} Open Company Profile and save it before exporting.`);}catch(error){blockers.push(`Company Profile is incomplete: ${error.message} Open Company Profile and save it before exporting.`);}
+  }else try{for(const error of validateCompanyProfile(snapshot.companyProfile))blockers.push(`${error.message} Open Company Profile, save it, then apply the template to this project before exporting.`);}catch(error){blockers.push(`Company Profile data is invalid or from an older saved version. Open Company Profile, upload the logo again, save it, then apply the template to this project. (${error.message})`);}
   let crs=null;try{crs=utmZoneForLocation(snapshot?.project?.location);}catch(error){blockers.push(`CAD coordinate system unavailable: ${error.message}`);}
   if(snapshot?.ready===false&&!blockers.length)blockers.push('The selected export rows are not ready. Correct the highlighted rows and try again.');
   return {selection,crs,blockers:[...new Set(blockers)],ready:snapshot?.ready!==false&&selection.length>0&&blockers.length===0};

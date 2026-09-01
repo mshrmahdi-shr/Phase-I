@@ -101,6 +101,9 @@ test('buildCadDxf emits a deterministic complete R2007 drawing with metre units,
   const layerEnd=tablePairs.findIndex((pair,index)=>index>layerStart&&pair.code==='0'&&pair.value==='ENDTAB');
   const layerNames=tablePairs.slice(layerStart,layerEnd).filter(pair=>pair.code==='2').map(pair=>pair.value).slice(1);
   assert.deepEqual(layerNames,['0',...REQUIRED_LAYERS]);
+  const layerRecords=tablePairs.slice(layerStart,layerEnd).filter(pair=>pair.code==='0'&&pair.value==='LAYER');
+  assert.equal(layerRecords.length,REQUIRED_LAYERS.length+1);
+  assert.equal(tablePairs.slice(layerStart,layerEnd).filter(pair=>pair.code==='390'&&pair.value==='0').length,REQUIRED_LAYERS.length+1);
   const viewportStart=tablePairs.findIndex(pair=>pair.code==='0'&&pair.value==='VPORT'),viewportEnd=tablePairs.findIndex((pair,index)=>index>viewportStart&&pair.code==='0');
   assert.equal(tablePairs.slice(viewportStart,viewportEnd).filter(pair=>pair.code==='70').length,1,'the VPORT symbol record has one flags group');
   const assigned=[];for(const [name,content] of parsed)if(name!=='HEADER')for(const pair of content)if(pair.code==='5')assigned.push(pair.value);

@@ -49,6 +49,15 @@ test('CAD readiness explains how to assign missing project branding',()=>{
   h.controller.destroy();h.dom.window.close();
 });
 
+test('CAD readiness translates malformed saved profile data into repair steps',()=>{
+  const h=fixture(),byId=id=>h.document.getElementById(id);
+  h.snapshot=snapshot({companyProfile:{companyName:'Acme',logoPlacement:[]}});
+  h.controller.refresh();
+  assert.equal(byId('downloadCad').disabled,true);
+  assert.match(byId('cadReadiness').textContent,/invalid or from an older saved version.*upload the logo again.*apply the template/i);
+  h.controller.destroy();h.dom.window.close();
+});
+
 test('CAD readiness requires the persisted rights confirmation even when text evidence exists',()=>{
   const h=fixture(),byId=id=>h.document.getElementById(id),source={id:'custom',name:'uploaded.kml',credits:'Example Engineer',sourceUrl:null,license:'Written project licence',redistributionEvidence:'Permission email on file',acquisitionYear:null,acquisitionYearVerification:'unknown',permissionConfirmed:false};
   h.snapshot=snapshot({selection:[{kind:'figure',code:'E'}],datasets:{bedrock:{source}}});h.controller.refresh();assert.equal(byId('downloadCad').disabled,true);assert.match(byId('cadReadiness').textContent,/confirm|permission|rights/i);h.controller.destroy();h.dom.window.close();
@@ -101,3 +110,4 @@ test('browser ZIP download defers successful revoke but immediately cleans abort
   URL.createObjectURL=()=> 'blob:click-error';dom.window.HTMLAnchorElement.prototype.click=()=>{throw new Error('click failed');};assert.throws(()=>downloadCadPackage({blob:new Blob(['zip'],{type:'application/zip'}),filename:'bad.zip'},{document}),/click failed/);assert.deepEqual(revoked,['blob:success','blob:cancelled','blob:click-error']);
   dom.window.HTMLAnchorElement.prototype.click=original.click;URL.createObjectURL=()=> 'blob:scheduler-error';downloadCadPackage({blob:new Blob(['zip'],{type:'application/zip'}),filename:'safe.zip'},{document,scheduleRevoke:()=>{throw new Error('timer unavailable');}});assert.deepEqual(revoked,['blob:success','blob:cancelled','blob:click-error','blob:scheduler-error']);
 });
+

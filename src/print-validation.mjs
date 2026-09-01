@@ -25,7 +25,7 @@ export function validatePrintRequirements({project={},companyProfile={},figureCo
       errors.push({code:'company-contact-fit',message:'Shorten the company contact details so they fit the output title block.'});
     }
   }catch(error){
-    errors.push({code:'company-logo',message:`Correct the Company Profile logo: ${error.message}`});
+    errors.push({code:'company-profile-invalid',message:`Company Profile data is invalid or from an older saved version. Open Company Profile, upload the logo again, save it, then apply the template to this project. (${error.message})`});
   }
 
   if(figureCode==='B'&&!validBoundary(project.siteBoundary)){

@@ -101,7 +101,9 @@ async function persistPackageState(next,context={}){
     if(failures.length)throw new AggregateError([error,...failures],'Project/profile metadata persistence and local rollback failed.',{cause:error});throw error;
   }
 }
-function status(id,t,k=''){$(id).textContent=t;$(id).dataset.kind=k}
+const workflowErrors=new Map(),workflowLabels={searchStatus:'Address search',saveMessage:'Project save',imageryStatus:'Imagery',geologyStatus:'Geology',geologyProvenanceStatus:'Geology source',historicalStatus:'Historical imagery',companyProfileStatus:'Company profile',projectPackageStatus:'Project package',mapSourceStatus:'Map source',exportProgress:'Export'};
+function renderWorkflowIssues(){const panel=$('workflowIssues');if(!panel)return;panel.replaceChildren();if(!workflowErrors.size){panel.hidden=true;return;}const title=document.createElement('strong');title.textContent='Problems requiring attention';const list=document.createElement('ul');for(const [id,message] of workflowErrors){const item=document.createElement('li');item.textContent=`${workflowLabels[id]||id}: ${message}`;list.append(item);}panel.append(title,list);panel.hidden=false;}
+function status(id,t,k=''){const node=$(id);if(!node)return;node.textContent=t;node.dataset.kind=k;if(k==='error'&&t)workflowErrors.set(id,t);else if(k!=='error')workflowErrors.delete(id);renderWorkflowIssues();}
 function loadingButton(id,value){const button=$(id);button.dataset.loading=String(value);button.disabled=value||exportBusy;}
 function sync(){for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).value=project[k]||'';$('dpi').value=project.dpi||300;$('dpiBadge').textContent=`${project.dpi||300} DPI`;if(project.location){map.setView([project.location.lat,project.location.lng],16);setMarker(project.location)};redraw();renderFigures();historicalUI?.refresh();refreshPrint();updateLegend();updateScale();updateMapSourceStatus()}
 for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).oninput=e=>{project[k]=e.target.value;save();refreshPrint()};$('dpi').onchange=e=>{project.dpi=+e.target.value;$('dpiBadge').textContent=`${project.dpi} DPI`;save()};
@@ -110,13 +112,12 @@ $('searchAddress').onclick=async()=>{
   loadingButton('searchAddress',true);status('searchStatus','Searching…');
   const revision=locationRevision;
   try{
-    const r=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(q)}`,{headers:{'Accept-Language':'en'},signal:AbortSignal.timeout(15000)});
+    const r=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&polygon_geojson=1&limit=1&q=${encodeURIComponent(q)}`,{headers:{'Accept-Language':'en'},signal:AbortSignal.timeout(15000)});
     if(!r.ok)throw Error('Address service is unavailable. Try again later or use Set SITE.');
     const a=await r.json();if(!a.length)throw Error('Address not found. Try a more complete address or use Set SITE.');
     if(exportBusy||revision!==locationRevision)return;
     project.address=a[0].display_name;$('address').value=project.address;
-    siteChanged({lat:+a[0].lat,lng:+a[0].lon});zoom(active);
-    status('searchStatus',`Located: ${project.address}`,'ok');
+    siteChanged({lat:+a[0].lat,lng:+a[0].lon});const suggested=geocoderBoundary(a[0]);if(!project.siteBoundary?.length&&suggested){project.siteBoundary=suggested;redraw();save();status('searchStatus',`Located: ${project.address}. An editable boundary was added from the address source; review it before export.`,'ok');}else status('searchStatus',`Located: ${project.address}`,'ok');zoom(active);
   }catch(e){status('searchStatus',e.name==='TimeoutError'?'Address search timed out. Try again or use Set SITE.':e.message,'error');}
   finally{loadingButton('searchAddress',false);}
 };
@@ -127,6 +128,7 @@ function siteChanged(location){
   if(moved)for(const figure of Object.values(project.figures))delete figure.bounds;
   locationRevision++;setMarker(location);detect();renderFigures();save();historicalUI?.refresh();refreshPrint();
 }
+function geocoderBoundary(result){const geometry=result?.geojson;if(!geometry||!['Polygon','MultiPolygon'].includes(geometry.type))return null;const candidates=geometry.type==='Polygon'?[geometry.coordinates?.[0]]:(geometry.coordinates||[]).map(polygon=>polygon?.[0]);const rings=candidates.filter(ring=>Array.isArray(ring)&&ring.length>=4).map(ring=>ring.map(point=>[Number(point?.[0]),Number(point?.[1])])).filter(ring=>ring.every(point=>Number.isFinite(point[0])&&Number.isFinite(point[1])));if(!rings.length)return null;const ring=rings.sort((a,b)=>b.length-a.length)[0],closed=closeRing(ring);return validBoundary(closed)?closed:null;}
 function setMarker(p){
   siteMarker?.remove();
   const icon=L.divIcon({className:'',html:'<div class="site-marker"></div>',iconSize:[18,18],iconAnchor:[9,9]});
