@@ -44,3 +44,4 @@ export function validatePrintRequirements({project={},companyProfile={},figureCo
 
   return errors;
 }
+
