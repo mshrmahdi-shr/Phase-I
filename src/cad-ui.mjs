@@ -13,6 +13,7 @@ const PHASE_LABELS=Object.freeze({
 
 function abortError(){return new DOMException('Export cancelled.','AbortError');}
 function throwIfAborted(signal){if(signal?.aborted)throw abortError();}
+const defaultScheduleRevoke=callback=>setTimeout(callback,0);
 function imageLabel(count){return `${count} ${count===1?'image':'images'}`;}
 function cloneData(value,label){try{return structuredClone(value);}catch(error){throw new Error(`${label} could not be safely copied: ${error.message}`,{cause:error});}}
 function checkedElements(document){
@@ -48,11 +49,11 @@ function exportInput(source,selection){
 }
 
 /** Download a completed atomic package. The URL is owned and revoked by this call on every path. */
-export function downloadCadPackage(result,{document,signal,scheduleRevoke=callback=>setTimeout(callback,0)}={}){
+export function downloadCadPackage(result,{document,signal,scheduleRevoke=defaultScheduleRevoke}={}){
   throwIfAborted(signal);if(!result||!(result.blob instanceof Blob)||result.blob.type!=='application/zip')throw new Error('The completed CAD package is not a ZIP Blob.');if(typeof result.filename!=='string'||!result.filename.trim())throw new Error('The completed CAD package filename is missing.');
   if(typeof scheduleRevoke!=='function')throw new Error('CAD download cleanup scheduler is unavailable.');const url=URL.createObjectURL(result.blob),link=document.createElement('a');let clicked=false;
-  try{link.href=url;link.download=result.filename;link.hidden=true;document.body.append(link);throwIfAborted(signal);link.click();clicked=true;}
-  finally{link.remove();if(clicked){try{scheduleRevoke(()=>URL.revokeObjectURL(url));}catch{URL.revokeObjectURL(url);}}else URL.revokeObjectURL(url);}
+  try{link.href=url;link.download=result.filename;link.hidden=true;document.body.append(link);throwIfAborted(signal);link.click();clicked=true;if(scheduleRevoke===defaultScheduleRevoke){link.hidden=false;link.textContent=`Download ${result.filename}`;link.style.cssText='position:fixed;right:1rem;bottom:1rem;z-index:10000;padding:.7rem 1rem;background:#078dcc;color:#fff;border-radius:.4rem;font:600 14px system-ui;';setTimeout(()=>link.remove(),30000);}}
+  finally{if(clicked){if(scheduleRevoke!==defaultScheduleRevoke)link.remove();try{scheduleRevoke(()=>URL.revokeObjectURL(url));}catch{URL.revokeObjectURL(url);}}else{link.remove();URL.revokeObjectURL(url);}}
 }
 
 /** Controls the CAD action inside the shared PDF/CAD selection dialog. */
