@@ -214,3 +214,44 @@ test('concurrent official streams charge the shared aggregate budget before comp
   const outcome=await composeHistoricalImage({project:p,item,geometry,providers:[TORONTO_IMAGERY_PROVIDER],currentOfficialResult:current,fetchImpl}).then(()=>null,error=>error);
   assert.equal(requestIndex,5);assert.match(outcome?.message||'',/64 MB|total byte|memory limit/i,`decode count was ${decodeCalls}`);assert.equal(decodeCalls,1,'the fifth 13 MB response is rejected while three earlier 13 MB streams remain resident');
 });
+
+const naplBounds=a3Bounds({lng:-104.6,lat:50.46},600),naplCoverage={west:-104.76,south:50.42,east:-104.56,north:50.5};
+const naplService='https://datacube.services.geo.ca/ows/aerial';
+function naplExportUrl(){const url=new URL(naplService);url.searchParams.set('LAYERS','regina');url.searchParams.set('TIME','1947-07-01T12:00:00Z');return url.href;}
+function naplOfficialResult(overrides={}){return {id:'napl:regina-1947',providerId:'napl',title:'NAPL Regina, Saskatchewan aerial imagery 1947',year:1947,resolutionMeters:null,coverage:{...naplCoverage},
+  preview:{kind:'wms-export',url:naplExportUrl()},export:{kind:'wms-export',url:naplExportUrl(),maxWidth:1024,maxHeight:900},
+  policy:'exportable',sourceUrl:'https://datacube.services.geo.ca/web/napl-regina.xml?request=GetCapabilities&service=WMS&version=1.3.0&layers=regina',licenseUrl:'https://open.canada.ca/en/open-government-licence-canada',attribution:'Natural Resources Canada — National Air Photo Library',...overrides};}
+function naplProject(item){return {...createProject(),location:{lat:50.46,lng:-104.6},historical:[item],historicalSequenceCounters:{'1947':1},
+  siteBoundary:[[-104.61,50.45],[-104.59,50.45],[-104.59,50.47],[-104.61,50.47],[-104.61,50.45]],buildingBoundary:[]};}
+function naplHistorical(overrides={}){return {id:'2c9f5e1a-1234-4a5b-8c9d-abc123456789',year:1947,sequence:1,title:'NAPL Regina, Saskatchewan aerial imagery 1947',mode:'official',providerId:'napl',
+  sourceUrl:naplOfficialResult().sourceUrl,licenseUrl:naplOfficialResult().licenseUrl,attribution:naplOfficialResult().attribution,policy:'exportable',resolutionMeters:null,bounds:{...naplBounds},placement:null,assetId:null,
+  officialExport:{kind:'wms-export',url:naplExportUrl(),layer:null,maxWidth:1024,maxHeight:900,resultId:'napl:regina-1947',coverage:{...naplCoverage},preview:{kind:'wms-export',url:naplExportUrl(),layer:null,tileTemplate:null}},createdAt:'2026-08-27T12:00:00.000Z',updatedAt:'2026-08-27T12:00:00.000Z',...overrides};}
+
+test('WMS-backed official (NAPL) plans tile a valid GetMap request inside the current provider root',async()=>{
+  const {NAPL_IMAGERY_PROVIDER}=await import('../src/imagery/providers/napl.mjs');
+  const {historicalSheetGeometry}=await import('../src/historical-layout.mjs');
+  const {historicalImageryPlan}=await import('../src/map-compositor.mjs');
+  const item=naplHistorical(),p=naplProject(item),geometry=historicalSheetGeometry(p,item,150);
+  const plan=historicalImageryPlan({project:p,item,geometry,providers:[NAPL_IMAGERY_PROVIDER],currentResult:naplOfficialResult()});
+  assert.ok(plan.length>=1&&plan.length<=64);
+  let pixels=0;
+  for(const request of plan){
+    const url=new URL(request.url);assert.equal(url.origin,'https://datacube.services.geo.ca');assert.equal(url.pathname,'/ows/aerial');
+    assert.equal(url.searchParams.get('SERVICE'),'WMS');assert.equal(url.searchParams.get('REQUEST'),'GetMap');
+    assert.equal(url.searchParams.get('LAYERS'),'regina');assert.equal(url.searchParams.get('TIME'),'1947-07-01T12:00:00Z');
+    assert.equal(url.searchParams.get('CRS'),'EPSG:3857');
+    assert.equal(Number(url.searchParams.get('WIDTH')),request.expectedWidth);assert.equal(Number(url.searchParams.get('HEIGHT')),request.expectedHeight);
+    pixels+=Number(url.searchParams.get('WIDTH'))*Number(url.searchParams.get('HEIGHT'));
+  }
+  assert.equal(pixels,geometry.raster.width*geometry.raster.height,'requests cover exactly the final raster viewport once');
+  assert.throws(()=>historicalImageryPlan({project:p,item:{...item,officialExport:{...item.officialExport,url:naplService}},geometry,providers:[NAPL_IMAGERY_PROVIDER],currentResult:naplOfficialResult()}),/official provider|root|approved/i);
+  assert.throws(()=>historicalImageryPlan({project:p,item:{...item,officialExport:{...item.officialExport,url:'https://evil.test/ows/aerial?LAYERS=regina&TIME=1947-07-01T12:00:00Z'}},geometry,providers:[NAPL_IMAGERY_PROVIDER],currentResult:naplOfficialResult()}),/official provider|root|approved/i);
+});
+
+test('an unrecognized official export kind is rejected even when the item is otherwise self-consistent',async()=>{
+  const {NAPL_IMAGERY_PROVIDER}=await import('../src/imagery/providers/napl.mjs');
+  const {historicalSheetGeometry}=await import('../src/historical-layout.mjs');
+  const {historicalImageryPlan}=await import('../src/map-compositor.mjs');
+  const item=naplHistorical({officialExport:{...naplHistorical().officialExport,kind:'wcs-export'}}),p=naplProject(item),geometry=historicalSheetGeometry(p,item,150);
+  assert.throws(()=>historicalImageryPlan({project:p,item,geometry,providers:[NAPL_IMAGERY_PROVIDER],currentResult:naplOfficialResult()}),/kind is unsupported|approved/i);
+});

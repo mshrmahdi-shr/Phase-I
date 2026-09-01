@@ -18,7 +18,8 @@ import {createHistoricalImageryUI,migrateLegacyHistoricalImagery} from './src/hi
 import {ONTARIO_IMAGERY_PROVIDER} from './src/imagery/providers/ontario.mjs';
 import {TORONTO_IMAGERY_PROVIDER} from './src/imagery/providers/toronto.mjs';
 import {OTTAWA_IMAGERY_PROVIDER} from './src/imagery/providers/ottawa.mjs';
-const HISTORICAL_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
+import {NAPL_IMAGERY_PROVIDER} from './src/imagery/providers/napl.mjs';
+const HISTORICAL_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER,NAPL_IMAGERY_PROVIDER]);
 const $=id=>document.getElementById(id), STORAGE='phase-i-esa-project-v2', COMPANY_STORAGE='phase-i-esa-company-profile-v1', MRD='./data/mrd128.kml';
 const DRAWING_BINDINGS=Symbol.for('phase-i-esa.drawing-bindings');
 document[DRAWING_BINDINGS]?.abort();
@@ -102,8 +103,19 @@ async function persistPackageState(next,context={}){
   }
 }
 const workflowErrors=new Map(),workflowLabels={searchStatus:'Address search',saveMessage:'Project save',imageryStatus:'Imagery',geologyStatus:'Geology',geologyProvenanceStatus:'Geology source',historicalStatus:'Historical imagery',companyProfileStatus:'Company profile',projectPackageStatus:'Project package',mapSourceStatus:'Map source',exportProgress:'Export'};
-function renderWorkflowIssues(){const panel=$('workflowIssues');if(!panel)return;panel.replaceChildren();if(!workflowErrors.size){panel.hidden=true;return;}const title=document.createElement('strong');title.textContent='Problems requiring attention';const list=document.createElement('ul');for(const [id,message] of workflowErrors){const item=document.createElement('li');item.textContent=`${workflowLabels[id]||id}: ${message}`;list.append(item);}panel.append(title,list);panel.hidden=false;}
-function status(id,t,k=''){const node=$(id);if(!node)return;node.textContent=t;node.dataset.kind=k;if(k==='error'&&t)workflowErrors.set(id,t);else if(k!=='error')workflowErrors.delete(id);renderWorkflowIssues();}
+let errorCenterDismissed=false;
+function renderWorkflowIssues(newError){
+  const panel=$('errorCenter');if(!panel)return;
+  if(!workflowErrors.size){panel.hidden=true;errorCenterDismissed=false;return;}
+  if(newError)errorCenterDismissed=false;
+  if(errorCenterDismissed){panel.hidden=true;return;}
+  const list=$('errorCenterList');list.replaceChildren();
+  for(const [id,message] of workflowErrors){const item=document.createElement('li');item.textContent=`${workflowLabels[id]||id}: ${message}`;list.append(item);}
+  $('errorCenterTitle').textContent=workflowErrors.size===1?'Problem requiring attention':`${workflowErrors.size} problems requiring attention`;
+  panel.hidden=false;
+}
+function status(id,t,k=''){const node=$(id);if(!node)return;node.textContent=t;node.dataset.kind=k;if(k==='error'&&t)workflowErrors.set(id,t);else if(k!=='error')workflowErrors.delete(id);renderWorkflowIssues(k==='error'&&Boolean(t));}
+$('dismissErrorCenter').onclick=()=>{errorCenterDismissed=true;$('errorCenter').hidden=true;};
 function loadingButton(id,value){const button=$(id);button.dataset.loading=String(value);button.disabled=value||exportBusy;}
 function sync(){for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).value=project[k]||'';$('dpi').value=project.dpi||300;$('dpiBadge').textContent=`${project.dpi||300} DPI`;if(project.location){map.setView([project.location.lat,project.location.lng],16);setMarker(project.location)};redraw();renderFigures();historicalUI?.refresh();refreshPrint();updateLegend();updateScale();updateMapSourceStatus()}
 for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).oninput=e=>{project[k]=e.target.value;save();refreshPrint()};$('dpi').onchange=e=>{project.dpi=+e.target.value;$('dpiBadge').textContent=`${project.dpi} DPI`;save()};
@@ -145,7 +157,8 @@ const drawingController=createDrawingController({closeRing,validBoundary,
 function beginDrawing(mode){if(exportBusy)return;drawingController.begin(mode);map.getContainer().style.cursor='crosshair';map.doubleClickZoom.disable();$('map').scrollIntoView({behavior:'smooth',block:'center'});}
 $('setSite').onclick=()=>beginDrawing('marker');$('drawSite').onclick=()=>beginDrawing('site');$('drawBuilding').onclick=()=>beginDrawing('building');
 $('undoPoint').onclick=()=>drawingController.undo();
-$('finishDraw').onclick=()=>drawingController.finish();
+function reportDrawResult(result){if(result&&result.ok===false)status('drawState',result.message,'error');return result;}
+$('finishDraw').onclick=()=>reportDrawResult(drawingController.finish());
 $('clearGeometry').onclick=()=>{drawingController.cancel();project.siteBoundary=[];project.buildingBoundary=[];redraw();save();};
 map.on('click',e=>{
   const mode=drawingController.state().mode;
@@ -153,8 +166,8 @@ map.on('click',e=>{
   if(mode==='marker'){siteChanged({lat:e.latlng.lat,lng:e.latlng.lng});drawingController.cancel();return;}
   drawingController.add([e.latlng.lng,e.latlng.lat]);
 });
-document.addEventListener('keydown',event=>drawingController.handleKey(event),{signal:drawingBindings.signal});
-map.getContainer().addEventListener('contextmenu',event=>drawingController.handleContextMenu(event),{signal:drawingBindings.signal});
+document.addEventListener('keydown',event=>reportDrawResult(drawingController.handleKey(event)),{signal:drawingBindings.signal});
+map.getContainer().addEventListener('contextmenu',event=>reportDrawResult(drawingController.handleContextMenu(event)),{signal:drawingBindings.signal});
 window.addEventListener('pagehide',event=>{if(event.persisted)return;packageUI?.destroy();historicalUI?.destroy();geologyProvenance?.destroy();drawingBindings.abort();if(document[DRAWING_BINDINGS]===drawingBindings)delete document[DRAWING_BINDINGS];},{signal:drawingBindings.signal});
 function redraw(){siteLayer?.remove();buildingLayer?.remove();if(project.siteBoundary?.length)siteLayer=L.polygon(project.siteBoundary.map(([x,y])=>[y,x]),{color:'#ef4444',weight:4,fill:false}).addTo(map);if(project.buildingBoundary?.length)buildingLayer=L.polygon(project.buildingBoundary.map(([x,y])=>[y,x]),{color:'#111827',weight:3,dashArray:'6 4',fillColor:'#fff',fillOpacity:.1}).addTo(map)}
 function renderFigures(){const h=$('figureList');h.innerHTML='';for(const [c,f] of Object.entries(project.figures)){const d=document.createElement('div');d.className='figure-row'+(c===active?' active':'');d.innerHTML=`<div class="figure-top"><div><div class="figure-code">FIGURE ${c}</div><div class="figure-title">${esc(f.title)}</div></div><span class="badge" title="${f.bounds?'Saved A3 map span':'Default A3 map span'}">${fmt(f.extentMeters)}</span></div><div class="figure-actions"><button title="${f.bounds?'Restore the saved A3 map position and zoom':'Show the current A3 map extent'}">${f.bounds?'View saved':'View'}</button><button title="Save the current map position and zoom for A3/PDF">${f.bounds?'Update A3 view':'Use for A3'}</button></div>`;d.children[1].children[0].onclick=()=>selectFig(c,true);d.children[1].children[1].onclick=()=>useForA3(c);h.appendChild(d)}}
@@ -209,7 +222,7 @@ function setBasemap(kind){
 }
 for(const b of document.querySelectorAll('.basemap'))b.onclick=()=>setBasemap(b.dataset.map);
 
-$('openEarth').onclick=()=>project.location?window.open(`https://earth.google.com/web/@${project.location.lat},${project.location.lng},500a,1000d,35y,0h,0t,0r`,'_blank','noopener,noreferrer'):alert('Set the site location first.');
+$('openEarth').onclick=()=>project.location?window.open(`https://earth.google.com/web/@${project.location.lat},${project.location.lng},500a,1000d,35y,0h,0t,0r`,'_blank','noopener,noreferrer'):status('imageryStatus','Set the site location first.','error');
 $('loadMrd128').onclick=()=>loadMRD(true);
 async function loadMRD(user=true){
   if(exportBusy)return;

@@ -53,9 +53,12 @@ function fakeMap(document){
   function displayedBounds(value){const sw=projectWebMercator([value.west,value.south]),ne=projectWebMercator([value.east,value.north]),center=[(sw[0]+ne[0])/2,(sw[1]+ne[1])/2],scale=Math.max((ne[0]-sw[0])/900,(ne[1]-sw[1])/636),displaySw=unprojectWebMercator([center[0]-scale*450,center[1]-scale*318]),displayNe=unprojectWebMercator([center[0]+scale*450,center[1]+scale*318]);return {west:displaySw[0],south:displaySw[1],east:displayNe[0],north:displayNe[1]};}
   let bounds=displayedBounds(BOUNDS),center={lat:SITE.lat,lng:SITE.lng},zoom=16;const listeners=new Map(),layers=new Set();
   const container=document.getElementById('map');Object.defineProperties(container,{clientWidth:{value:900,configurable:true},clientHeight:{value:636,configurable:true}});
+  container.getBoundingClientRect=()=>({left:0,top:0,right:900,bottom:636,width:900,height:636});
+  const overlayPane=document.createElement('div');container.appendChild(overlayPane);
   return {
-    layers,listeners,getContainer:()=>container,getBounds:()=>boundsObject(bounds),getCenter:()=>({...center}),getZoom:()=>zoom,getSize:()=>({x:900,y:636}),
+    layers,listeners,getContainer:()=>container,getPanes:()=>({overlayPane}),getBounds:()=>boundsObject(bounds),getCenter:()=>({...center}),getZoom:()=>zoom,getSize:()=>({x:900,y:636}),
     containerPointToLatLng:([x,y])=>{const sw=projectWebMercator([bounds.west,bounds.south]),ne=projectWebMercator([bounds.east,bounds.north]);const point=unprojectWebMercator([sw[0]+(ne[0]-sw[0])*x/900,ne[1]-(ne[1]-sw[1])*y/636]);return {lat:point[1],lng:point[0]};},
+    latLngToContainerPoint:({lat,lng})=>{const sw=projectWebMercator([bounds.west,bounds.south]),ne=projectWebMercator([bounds.east,bounds.north]),p=projectWebMercator([lng,lat]);return {x:(p[0]-sw[0])/(ne[0]-sw[0])*900,y:(ne[1]-p[1])/(ne[1]-sw[1])*636};},
     fitBounds(value){const pair=Array.isArray(value)?value:[[value.south,value.west],[value.north,value.east]];bounds=displayedBounds({south:pair[0][0],west:pair[0][1],north:pair[1][0],east:pair[1][1]});center={lat:(bounds.north+bounds.south)/2,lng:(bounds.east+bounds.west)/2};return this;},
     setView(value,nextZoom){center={lat:value.lat??value[0],lng:value.lng??value[1]};zoom=nextZoom;return this;},
     on(name,fn){for(const event of name.split(' ')){if(!listeners.has(event))listeners.set(event,new Set());listeners.get(event).add(fn);}return this;},
@@ -362,4 +365,43 @@ test('an imagery asset referenced by another subsystem is preserved after its la
   const store=memoryStore(),asset=storedAsset();await store.put(asset);const project=Object.assign(createProject(),{location:{...SITE},historical:[manualItem({assetId:asset.metadata.id})],historicalSequenceCounters:{'1960':1}});
   const h=harness({project,store,isAssetReferencedOutsideHistorical:id=>id===asset.metadata.id});await h.controller.refresh();h.document.querySelector('[data-action="delete"]').click();await h.controller.whenIdle();
   assert.equal(h.project.historical.length,0);assert.ok(await store.get(asset.metadata.id));h.controller.destroy();h.dom.window.close();
+});
+
+test('drag-to-rotate map handle updates placement live, commits on release, supports keyboard nudge, and cleans up on close',async()=>{
+  let redraws=0;
+  const overlayFactory=()=>({addTo(){return this;},remove(){},ready:Promise.resolve(),redraw(){redraws++;return this;}});
+  const h=harness({overlayFactory});h.controller.open();h.document.getElementById('historicalManualMode').click();
+  const image={name:'scan.png',size:4,type:'image/png',arrayBuffer:async()=>new Uint8Array([1,2,3,4]).buffer};
+  Object.defineProperty(h.document.getElementById('manualHistoricalFile'),'files',{value:[image],configurable:true});
+  h.document.getElementById('manualHistoricalYear').value='1960';h.document.getElementById('manualCitation').value='Archive';h.document.getElementById('manualPermission').checked=true;
+  h.document.getElementById('previewManualHistorical').click();await h.controller.whenIdle();
+
+  const handle=h.document.querySelector('.historical-rotate-handle');assert.ok(handle,'a rotate handle is created once placement is ready');
+  assert.equal(handle.parentNode,h.map.getPanes().overlayPane);
+  assert.notEqual(handle.style.left,'','the handle is positioned over the placed image on creation');
+  assert.equal(Number(h.document.getElementById('manualRotation').value),0);
+  h.document.getElementById('useHistoricalCrop').click();assert.equal(h.document.getElementById('commitHistorical').disabled,false,'a crop has been chosen and is ready to commit');
+
+  handle.dispatchEvent(new h.dom.window.MouseEvent('pointerdown',{clientX:450,clientY:200,bubbles:true,cancelable:true}));
+  h.document.dispatchEvent(new h.dom.window.MouseEvent('pointermove',{clientX:520,clientY:260,bubbles:true,cancelable:true}));
+  const midRotation=Number(h.document.getElementById('manualRotation').value);
+  assert.notEqual(midRotation,0,'dragging the handle updates rotation live before release');
+  assert.ok(redraws>0,'live dragging redraws the overlay in place instead of recreating it');
+  assert.equal(h.document.getElementById('commitHistorical').disabled,false,'nothing is finalized until the drag is released');
+
+  h.document.dispatchEvent(new h.dom.window.MouseEvent('pointerup',{clientX:520,clientY:260,bubbles:true,cancelable:true}));
+  const finalRotation=Number(h.document.getElementById('manualRotation').value);
+  assert.equal(finalRotation,midRotation,'release commits the last dragged rotation');
+  assert.equal(h.document.getElementById('commitHistorical').disabled,true,'rotating invalidates any previously chosen crop');
+  assert.match(h.document.getElementById('historicalStatus').textContent,/rotation updated/i);
+
+  handle.dispatchEvent(new h.dom.window.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));
+  const nudged=Number(h.document.getElementById('manualRotation').value);
+  assert.ok(Math.abs(nudged-(finalRotation+1))<1e-6,'arrow-key nudges rotate by one degree');
+  handle.dispatchEvent(new h.dom.window.KeyboardEvent('keydown',{key:'ArrowLeft',shiftKey:true,bubbles:true,cancelable:true}));
+  assert.ok(Math.abs(Number(h.document.getElementById('manualRotation').value)-(finalRotation-9))<1e-6,'shift+arrow nudges rotate by ten degrees');
+
+  h.document.getElementById('cancelHistoricalCrop').click();
+  assert.equal(h.document.querySelectorAll('.historical-rotate-handle').length,0,'closing the session removes the rotate handle');
+  h.controller.destroy();h.dom.window.close();
 });

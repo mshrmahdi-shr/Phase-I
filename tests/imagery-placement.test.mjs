@@ -6,6 +6,18 @@ const overlayModule=()=>import('../src/imagery/canvas-overlay.mjs');
 const near=(actual,expected,epsilon=1e-8)=>assert.ok(Math.abs(actual-expected)<=epsilon,`${actual} != ${expected}`);
 const nearPoint=(actual,expected,epsilon=1e-8)=>{near(actual[0],expected[0],epsilon);near(actual[1],expected[1],epsilon);};
 
+test('rotationFromPoint derives clockwise-from-north degrees for the drag-to-rotate map handle',async()=>{
+  const {rotationFromPoint}=await placementModule(),center=[500,1000];
+  near(rotationFromPoint(center,[500,1100]),0,1e-9);
+  near(rotationFromPoint(center,[600,1000]),90,1e-9);
+  near(rotationFromPoint(center,[500,900]),-180,1e-9);
+  near(rotationFromPoint(center,[400,1000]),-90,1e-9);
+  near(rotationFromPoint(center,[500.5,1000+Math.sqrt(3)/2]),30,1e-6);
+  assert.throws(()=>rotationFromPoint(center,[500,1000]),/differ from the placement centre/);
+  assert.throws(()=>rotationFromPoint([NaN,0],[1,1]),/finite/);
+  assert.throws(()=>rotationFromPoint(center,[1,NaN]),/finite/);
+});
+
 test('extent placement stores a projected centre, exact ground dimensions, and source raster dimensions',async()=>{
   const {placementFromExtent,placementCorners,placementCanvasTransform,validatePlacement}=await placementModule();
   const placement=placementFromExtent({bounds:{west:-.001,south:-.001,east:.001,north:.001},width:4,height:2});

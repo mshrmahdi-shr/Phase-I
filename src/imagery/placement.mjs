@@ -21,7 +21,7 @@ export function unprojectWebMercator(point){
   return [x/EARTH_RADIUS/DEGREES,(2*Math.atan(Math.exp(y/EARTH_RADIUS))-Math.PI/2)/DEGREES];
 }
 
-function normalizedRotation(value){
+export function normalizedRotation(value){
   finite(value,'Placement rotation');
   const normalized=((value+180)%360+360)%360-180;
   return Object.is(normalized,-0)?0:normalized;
@@ -75,6 +75,15 @@ export function placementCanvasTransform(placement){
 }
 
 export function geographicPlacementCorners(placement){return placementCorners(placement).map(unprojectWebMercator);}
+
+/** Returns the rotationDegrees for which the placement's top-centre edge points from centre toward the given projected [x, y] point. Used to drive a drag-to-rotate map handle. */
+export function rotationFromPoint(center,point){
+  if(!Array.isArray(center)||center.length!==2||!Array.isArray(point)||point.length!==2)fail('Rotation handle points must be projected [x, y] pairs.');
+  const dx=finite(point[0],'Rotation handle x')-finite(center[0],'Rotation handle centre x');
+  const dy=finite(point[1],'Rotation handle y')-finite(center[1],'Rotation handle centre y');
+  if(dx===0&&dy===0)fail('Rotation handle point must differ from the placement centre.');
+  return normalizedRotation(Math.atan2(dx,dy)/DEGREES);
+}
 
 function inverseNad83Utm([easting,northing],zone){
   finite(easting,'UTM easting');finite(northing,'UTM northing');

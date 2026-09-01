@@ -147,7 +147,7 @@ test('emits RFC 4180 CSV with CRLF, doubled quotes, embedded newlines, and formu
 test('writes a source record and beginner guide with explicit vector/raster limitations and numbered CAD steps',async()=>{
   const {buildCadManifest}=await manifestModule(),{sourcesText,readmeText}=buildCadManifest(input());
   for(const expected of ['PROJECT','COMPANY','COORDINATE REFERENCE SYSTEM','SOURCES AND LICENCES','AB-12345','Acme Environmental','EPSG:26917','NAD83 / UTM zone 17N','City of Toronto Archives','Reproduction permission on file','manual-permission-confirmed'])assert.match(sourcesText,new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
-  for(const [number,expected] of [[1,/Extract All/i],[2,/open Project\.dxf/i],[3,/SCRIPT/i],[4,/Attach-Images\.scr/i],[5,/relink.*images folder/i],[6,/edit|move|scale|rotate|clip|replace/i]])assert.match(readmeText,new RegExp(`(?:^|\\n)${number}\\. .*${expected.source}`,'i'));
+  for(const [number,expected] of [[1,/Extract All/i],[2,/open Project\.dxf/i],[3,/SCRIPT|relink.*images folder|Attach-Images\.scr/i],[4,/edit|move|scale|rotate|clip|replace/i]])assert.match(readmeText,new RegExp(`(?:^|\\n)${number}\\. .*${expected.source}`,'i'));
   assert.match(readmeText,/boundaries, frames, labels, title block, company text, logo frame, and notes are editable vector entities/i);
   assert.match(readmeText,/map imagery and company logo.*external raster/i);
   assert.match(readmeText,/raster pixels are not editable CAD vectors/i);

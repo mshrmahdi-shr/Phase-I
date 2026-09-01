@@ -21,8 +21,15 @@
       <input id="importCompanyTemplateFile" type="file" accept=".zip,.phasei-template.zip,application/zip" hidden />
       <button id="newProject" class="ghost">New Project</button><button id="saveProject" class="primary">Save</button>
       </div>
-      <div id="workflowIssues" class="workflow-issues" role="alert" aria-live="assertive" hidden></div>
     </header>
+
+    <div id="errorCenter" role="alertdialog" aria-modal="false" aria-labelledby="errorCenterTitle" hidden>
+      <div class="error-center-box">
+        <strong id="errorCenterTitle">Problem</strong>
+        <ul id="errorCenterList"></ul>
+        <button id="dismissErrorCenter" type="button">Dismiss</button>
+      </div>
+    </div>
 
   <main class="app-shell">
     <aside class="panel project-panel">
@@ -148,6 +155,7 @@
         <label class="permission-check"><input id="manualPermission" type="checkbox" /> I confirm I have permission to reproduce this image in the project package.</label>
         <button id="previewManualHistorical" type="button" class="primary">Place image and crop</button>
         <fieldset id="manualPlacementControls" hidden><legend>Image placement</legend>
+          <p class="historical-source-help">A blue rotate handle appears above the image on the map — drag it to rotate, or focus it and press the arrow keys. Draw extent or the fields below set position and size.</p>
           <div class="three-col"><label>Centre latitude<input id="manualCenterLat" type="number" step="any" /></label><label>Centre longitude<input id="manualCenterLng" type="number" step="any" /></label><label>Rotation °<input id="manualRotation" type="number" min="-180" max="180" step="0.1" /></label></div>
           <div class="two-col"><label>Ground width (m)<input id="manualGroundWidth" type="number" min="0.01" step="0.1" /></label><label>Ground height (m)<input id="manualGroundHeight" type="number" min="0.01" step="0.1" /></label></div>
           <div class="button-grid"><button id="applyManualPlacement" type="button">Apply placement</button><button id="drawManualExtent" type="button">Draw extent on map</button></div>

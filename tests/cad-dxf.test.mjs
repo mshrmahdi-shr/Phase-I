@@ -30,16 +30,22 @@ const historicalSelection={kind:'historical',id:historicalId};
 const figureCorners=[[629800,4835200],[630400,4835200],[630400,4834800],[629800,4834800]];
 const historicalCorners=[[629950,4835100],[630250,4835100],[630250,4834900],[629950,4834900]];
 
+function imageFrame(selection,corners,overrides={}){
+  const key=selection?.kind==='figure'?`figure-${selection.code}`:`historical-${selection?.id}`;
+  return {selection,corners,pixelWidth:800,pixelHeight:600,imagePath:`images/${key}.png`,...overrides};
+}
+
 function input(overrides={}){
-  const p=overrides.project||project();
+  const p=overrides.project||project(),companyProfile=overrides.companyProfile||company();
   return {
-    project:p,companyProfile:overrides.companyProfile||company(),
+    project:p,companyProfile,
     selection:overrides.selection||[historicalSelection,figureSelection],
     imageFrames:overrides.imageFrames||[
-      {selection:figureSelection,corners:figureCorners},
-      {selection:historicalSelection,corners:historicalCorners}
+      imageFrame(figureSelection,figureCorners),
+      imageFrame(historicalSelection,historicalCorners)
     ],
-    projector:overrides.projector||createProjector(p.location)
+    projector:overrides.projector||createProjector(p.location),
+    companyLogoImage:overrides.companyLogoImage||{path:'company/logo.png',width:companyProfile.logoWidth,height:companyProfile.logoHeight}
   };
 }
 
@@ -93,7 +99,7 @@ test('buildCadDxf emits a deterministic complete R2007 drawing with metre units,
   const permuted=buildCadDxf({...args,selection:[...args.selection].reverse(),imageFrames:[...args.imageFrames].reverse()});
   assert.equal(first,buildCadDxf(args));assert.equal(first,permuted,'canonical selection order is independent of input array order');
   assert.doesNotMatch(first,/[\u0080-\uFFFF]/);assert.doesNotMatch(first,/NaN|Infinity/);assert.equal(first.endsWith('0\nEOF\n'),true);
-  const parsed=sections(first);assert.deepEqual([...parsed.keys()],['HEADER','TABLES','BLOCKS','ENTITIES','OBJECTS']);
+  const parsed=sections(first);assert.deepEqual([...parsed.keys()],['HEADER','CLASSES','TABLES','BLOCKS','ENTITIES','OBJECTS']);
   const header=parsed.get('HEADER'),headerValue=name=>header[header.findIndex(pair=>pair.code==='9'&&pair.value===name)+1];
   assert.deepEqual(headerValue('$ACADVER'),{code:'1',value:'AC1021'});assert.deepEqual(headerValue('$DWGCODEPAGE'),{code:'3',value:'ANSI_1252'});
   assert.deepEqual(headerValue('$INSUNITS'),{code:'70',value:'6'});
@@ -103,12 +109,16 @@ test('buildCadDxf emits a deterministic complete R2007 drawing with metre units,
   assert.deepEqual(layerNames,['0',...REQUIRED_LAYERS]);
   const layerRecords=tablePairs.slice(layerStart,layerEnd).filter(pair=>pair.code==='0'&&pair.value==='LAYER');
   assert.equal(layerRecords.length,REQUIRED_LAYERS.length+1);
-  assert.equal(tablePairs.slice(layerStart,layerEnd).filter(pair=>pair.code==='390'&&pair.value==='0').length,REQUIRED_LAYERS.length+1);
+  const plotStyleHandles=tablePairs.slice(layerStart,layerEnd).filter(pair=>pair.code==='390').map(pair=>pair.value);
+  assert.equal(plotStyleHandles.length,REQUIRED_LAYERS.length+1);assert.equal(new Set(plotStyleHandles).size,1,'every layer references the same named plot style placeholder');
+  assert.notEqual(plotStyleHandles[0],'0','plot style must resolve to a real ACDBPLACEHOLDER object, not a null handle');
   const viewportStart=tablePairs.findIndex(pair=>pair.code==='0'&&pair.value==='VPORT'),viewportEnd=tablePairs.findIndex((pair,index)=>index>viewportStart&&pair.code==='0');
   assert.equal(tablePairs.slice(viewportStart,viewportEnd).filter(pair=>pair.code==='70').length,1,'the VPORT symbol record has one flags group');
   const assigned=[];for(const [name,content] of parsed)if(name!=='HEADER')for(const pair of content)if(pair.code==='5')assigned.push(pair.value);
   assert.ok(assigned.length>25);assert.equal(new Set(assigned).size,assigned.length);assert.ok(assigned.every(handle=>/^[1-9A-F][0-9A-F]*$/.test(handle)));
-  assert.deepEqual(assigned.map(handle=>Number.parseInt(handle,16)),[...assigned].map(handle=>Number.parseInt(handle,16)).sort((a,b)=>a-b));
+  // Handles are still allocated from one monotonic counter (guaranteeing uniqueness, asserted above), but are no
+  // longer required to appear in strictly ascending file order: IMAGE entities in ENTITIES forward-reference
+  // IMAGEDEF/IMAGEDEF_REACTOR handles that are only *defined* later, in OBJECTS.
   const owners=[...parsed.values()].flat().filter(pair=>pair.code==='330'&&pair.value!=='0').map(pair=>pair.value);
   assert.ok(owners.every(owner=>assigned.includes(owner)),'every non-root owner reference resolves to an assigned handle');
 });
@@ -133,7 +143,7 @@ test('projected SITE and boundary entities use closed metre polylines while imag
 });
 
 test('title and logo frames remain editable and wholly outside the map geometry while notes record the frozen CRS',async()=>{
-  const {buildCadDxf}=await import('../src/cad-dxf.mjs'),dxf=buildCadDxf(input()),all=entities(dxf);
+  const {buildCadDxf}=await import('../src/cad-dxf.mjs'),args=input(),dxf=buildCadDxf(args),all=entities(dxf),parsed=sections(dxf);
   const source=all.filter(entity=>['SITE_MARKER','SITE_BOUNDARY','BUILDING_BOUNDARY','IMAGE_FRAMES'].includes(layer(entity))).flatMap(xy),sourceBounds=bounds(source);
   const titleFrames=all.filter(entity=>entity.type==='LWPOLYLINE'&&layer(entity)==='TITLE_BLOCK'&&Number(value(entity,70))===1);
   assert.equal(titleFrames.length,1);const titleBounds=bounds(xy(titleFrames[0]));
@@ -145,7 +155,19 @@ test('title and logo frames remain editable and wholly outside the map geometry 
   const notes=all.filter(entity=>entity.type==='MTEXT'&&layer(entity)==='NOTES').map(textContent).join(' ');
   assert.match(titleText,/Phase I Environmental Site Assessment/);assert.match(titleText,/AB-12345/);assert.match(companyText,/Acme Engineering/);
   assert.match(notes,/NAD83 \/ UTM zone 17N/);assert.match(notes,/EPSG:26917/);assert.match(notes,/metres/i);assert.match(notes,/external raster/i);
-  assert.doesNotMatch(dxf,/\n0\nIMAGE(?:DEF)?\n/);assert.doesNotMatch(dxf,/logo-1/);
+  assert.doesNotMatch(dxf,/logo-1/,'the internal asset-store ID must never leak into the DXF, only the relative file path');
+  const images=all.filter(entity=>entity.type==='IMAGE');assert.equal(images.length,args.imageFrames.length+1,'one IMAGE entity per selected raster plus the company logo');
+  const logoImageEntity=images.find(entity=>layer(entity)==='COMPANY_LOGO_FRAME');assert.ok(logoImageEntity);
+  const objectPairs=parsed.get('OBJECTS');
+  const imageDefs=records(objectPairs,'','').filter(record=>record.type==='IMAGEDEF'),imageDefReactors=records(objectPairs,'','').filter(record=>record.type==='IMAGEDEF_REACTOR');
+  assert.equal(imageDefs.length,images.length);assert.equal(imageDefReactors.length,images.length);
+  assert.deepEqual(imageDefs.map(entity=>value(entity,1)).sort(),['company/logo.png','images/figure-A.png','images/historical-74f14168-4de6-4c5f-88f4-87db8ec731c2.png'].sort());
+  for(const image of images){
+    const defHandle=value(image,340),reactorHandle=value(image,360);assert.ok(defHandle);assert.ok(reactorHandle);
+    const def=imageDefs.find(entity=>value(entity,5)===defHandle);assert.ok(def,'IMAGE entity 340 resolves to a defined IMAGEDEF');
+    const reactor=imageDefReactors.find(entity=>value(entity,5)===reactorHandle);assert.ok(reactor,'IMAGE entity 360 resolves to a defined IMAGEDEF_REACTOR');
+    assert.equal(value(reactor,330),value(image,5),'IMAGEDEF_REACTOR owner references this IMAGE entity');
+  }
 });
 
 test('company logo frame applies left, center, and right alignment plus the full saved scale range inside its title cell',async()=>{
@@ -182,8 +204,8 @@ test('all untrusted text is ASCII encoded without group injection, MTEXT formatt
   const attack='Café مهندسی\n0\nSECTION {\\P} %%d ^M ~ 😀';
   const p=project({name:attack,projectNo:'P\\{42}',address:'Line one\r\nLine two',historical:[{id:historicalId,year:1972,sequence:1,title:attack,attribution:attack}]});
   const dxf=buildCadDxf(input({project:p,companyProfile:company({companyName:attack,address:attack})})),parsed=pairs(dxf),all=entities(dxf);
-  assert.doesNotMatch(dxf,/[\u0080-\uFFFF]/);assert.equal([...sections(dxf).keys()].length,5);
-  assert.equal(parsed.filter(pair=>pair.code==='0'&&pair.value==='SECTION').length,5);
+  assert.doesNotMatch(dxf,/[\u0080-\uFFFF]/);assert.equal([...sections(dxf).keys()].length,6);
+  assert.equal(parsed.filter(pair=>pair.code==='0'&&pair.value==='SECTION').length,6);
   assert.match(dxf,/\\U\+00E9/);assert.match(dxf,/\\U\+0645/);assert.match(dxf,/\\U\+D83D\\U\+DE00/);
   assert.match(dxf,/\\U\+007B/);assert.match(dxf,/\\U\+007D/);assert.match(dxf,/\\U\+005C/);assert.match(dxf,/\\U\+0025/);assert.match(dxf,/\\U\+005E/);assert.match(dxf,/\\U\+007E/);
   for(const entity of all.filter(entity=>entity.type==='MTEXT'))for(const pair of entity.pairs.filter(pair=>pair.code==='1'||pair.code==='3')){
@@ -195,19 +217,19 @@ test('selection and frame validation rejects duplicates, omissions, unknown item
   const {buildCadDxf}=await import('../src/cad-dxf.mjs'),base=input();
   const bad=[
     {...base,selection:[]},{...base,selection:[figureSelection,figureSelection]},
-    {...base,selection:[{kind:'figure',code:'Z'}],imageFrames:[{selection:{kind:'figure',code:'Z'},corners:figureCorners}]},
-    {...base,selection:[{kind:'historical',id:'missing'}],imageFrames:[{selection:{kind:'historical',id:'missing'},corners:figureCorners}]},
-    {...base,selection:[{kind:'0\nSECTION',code:'A'}],imageFrames:[{selection:{kind:'0\nSECTION',code:'A'},corners:figureCorners}]},
+    {...base,selection:[{kind:'figure',code:'Z'}],imageFrames:[imageFrame({kind:'figure',code:'Z'},figureCorners)]},
+    {...base,selection:[{kind:'historical',id:'missing'}],imageFrames:[imageFrame({kind:'historical',id:'missing'},figureCorners)]},
+    {...base,selection:[{kind:'0\nSECTION',code:'A'}],imageFrames:[imageFrame({kind:'0\nSECTION',code:'A'},figureCorners)]},
     {...base,imageFrames:[base.imageFrames[0]]},{...base,imageFrames:[...base.imageFrames,base.imageFrames[0]]},
-    {...base,imageFrames:[{selection:figureSelection,corners:figureCorners,layer:'0\nSECTION'},base.imageFrames[1]]},
-    {...base,imageFrames:[{selection:figureSelection,corners:figureCorners},base.imageFrames[0]]}
+    {...base,imageFrames:[imageFrame(figureSelection,figureCorners,{layer:'0\nSECTION'}),base.imageFrames[1]]},
+    {...base,imageFrames:[imageFrame(figureSelection,figureCorners),base.imageFrames[0]]}
   ];
   for(const value of bad)assert.throws(()=>buildCadDxf(value),/selection|frame|duplicate|missing|unknown|field|kind|code|record/i);
 });
 
 test('unselected legacy imagery does not block a valid selected figure drawing',async()=>{
   const {buildCadDxf}=await import('../src/cad-dxf.mjs'),p=project({historical:[{id:'legacy-1',year:1960,name:'legacy.png',size:8,dataUrl:'data:image/png;base64,AAAA'}]});
-  const dxf=buildCadDxf(input({project:p,selection:[figureSelection],imageFrames:[{selection:figureSelection,corners:figureCorners}]}));
+  const dxf=buildCadDxf(input({project:p,selection:[figureSelection],imageFrames:[imageFrame(figureSelection,figureCorners)]}));
   assert.match(dxf,/FIGURE A - SITE LOCATION MAP/);assert.doesNotMatch(dxf,/legacy-1|legacy\.png/);
 });
 
@@ -216,10 +238,10 @@ test('geometry validation rejects malformed boundaries, nonfinite or implausible
   const cases=[
     input({project:project({siteBoundary:[[-79.38,43.65],[-79.37,43.65],[-79.37,43.66],[-79.38,43.65,0]]})}),
     input({project:project({buildingBoundary:[[-79.38,43.65],[-79.37,43.66],[-79.38,43.66],[-79.37,43.65],[-79.38,43.65]]})}),
-    {...base,selection:oneSelection,imageFrames:[{selection:figureSelection,corners:[[NaN,4835000],...figureCorners.slice(1)]}]},
-    {...base,selection:oneSelection,imageFrames:[{selection:figureSelection,corners:[[99999,4835000],...figureCorners.slice(1)]}]},
-    {...base,selection:oneSelection,imageFrames:[{selection:figureSelection,corners:[[629800,4835200],[630400,4835200],[630400,4835200],[629800,4835200]]}]},
-    {...base,selection:oneSelection,imageFrames:[{selection:figureSelection,corners:[[100001,4835200],[899999,4835200],[899999,4834800],[100001,4834800]]}]},
+    {...base,selection:oneSelection,imageFrames:[imageFrame(figureSelection,[[NaN,4835000],...figureCorners.slice(1)])]},
+    {...base,selection:oneSelection,imageFrames:[imageFrame(figureSelection,[[99999,4835000],...figureCorners.slice(1)])]},
+    {...base,selection:oneSelection,imageFrames:[imageFrame(figureSelection,[[629800,4835200],[630400,4835200],[630400,4835200],[629800,4835200]])]},
+    {...base,selection:oneSelection,imageFrames:[imageFrame(figureSelection,[[100001,4835200],[899999,4835200],[899999,4834800],[100001,4834800]])]},
     input({projector:createProjector({lat:43.65,lng:-87})}),
     {...base,projector:{crs:base.projector.crs,forward(){return [Infinity,Infinity];}}}
   ];
@@ -240,14 +262,14 @@ test('projected boundary polygons are rejected when a finite projector collapses
 test('image and computed logo frames that collapse at DXF numeric precision fail before serialization',async()=>{
   const {buildCadDxf}=await import('../src/cad-dxf.mjs'),base=input(),delta=.0000004,oneSelection=[figureSelection];
   const subPrecision=[[630000,4835000],[630000+delta,4835000],[630000+delta,4835000+delta],[630000,4835000+delta]];
-  assert.throws(()=>buildCadDxf({...base,selection:oneSelection,imageFrames:[{selection:figureSelection,corners:subPrecision}]}),/frame|polyline|polygon|degenerate|collapse|area|precision|geometry/i);
+  assert.throws(()=>buildCadDxf({...base,selection:oneSelection,imageFrames:[imageFrame(figureSelection,subPrecision)]}),/frame|polyline|polygon|degenerate|collapse|area|precision|geometry/i);
   assert.throws(()=>buildCadDxf(input({companyProfile:company({logoWidth:Number.MAX_SAFE_INTEGER,logoHeight:1})})),/logo|frame|polyline|polygon|degenerate|collapse|area|geometry/i);
 });
 
 test('tiny projected polygons remain valid when all vertices survive canonical DXF precision',async()=>{
   const {buildCadDxf}=await import('../src/cad-dxf.mjs'),base=input(),delta=.00002,oneSelection=[figureSelection];
   const tinyFrame=[[630000,4835000],[630000+delta,4835000],[630000+delta,4835000+delta],[630000,4835000+delta]];
-  const dxf=buildCadDxf({...base,selection:oneSelection,imageFrames:[{selection:figureSelection,corners:tinyFrame}]}),all=entities(dxf);
+  const dxf=buildCadDxf({...base,selection:oneSelection,imageFrames:[imageFrame(figureSelection,tinyFrame)]}),all=entities(dxf);
   const frame=all.find(entity=>entity.type==='LWPOLYLINE'&&layer(entity)==='IMAGE_FRAMES'),vertices=xy(frame);
   assert.equal(new Set(vertices.map(point=>point.join(','))).size,4);assert.notEqual(twiceArea(vertices),0);
   for(const polygon of all.filter(entity=>entity.type==='LWPOLYLINE'&&Number(value(entity,70))===1)){
@@ -259,7 +281,7 @@ test('valid rotated affine image frames remain affine after canonical DXF serial
   const {buildCadDxf}=await import('../src/cad-dxf.mjs'),base=input(),oneSelection=[figureSelection];
   const upperLeft=[630000.123456789,4835000.123456789],upperRight=[630123.580245912,4835012.469135701],lowerLeft=[629994.444544444,4834901.358024666];
   const lowerRight=[upperRight[0]+lowerLeft[0]-upperLeft[0],upperRight[1]+lowerLeft[1]-upperLeft[1]];
-  const dxf=buildCadDxf({...base,selection:oneSelection,imageFrames:[{selection:figureSelection,corners:[upperLeft,upperRight,lowerRight,lowerLeft]}]}),all=entities(dxf);
+  const dxf=buildCadDxf({...base,selection:oneSelection,imageFrames:[imageFrame(figureSelection,[upperLeft,upperRight,lowerRight,lowerLeft])]}),all=entities(dxf);
   const frame=all.find(entity=>entity.type==='LWPOLYLINE'&&layer(entity)==='IMAGE_FRAMES'),vertices=xy(frame);
   assert.equal(new Set(vertices.map(point=>point.join(','))).size,4);assert.notEqual(twiceArea(vertices),0);
   assert.deepEqual(vertices[2],[vertices[1][0]+vertices[3][0]-vertices[0][0],vertices[1][1]+vertices[3][1]-vertices[0][1]].map(number=>Number(number.toPrecision(12))));

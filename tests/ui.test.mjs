@@ -37,7 +37,7 @@ test('index exposes the core Phase I workflow controls', () => {
 
 test('app wires the current historical provider registry and asset store into PDF planning',()=>{
   const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
-  assert.match(source,/const HISTORICAL_PROVIDERS=Object\.freeze\(\[ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER\]\)/);
+  assert.match(source,/const HISTORICAL_PROVIDERS=Object\.freeze\(\[ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER,NAPL_IMAGERY_PROVIDER\]\)/);
   assert.match(source,/getState:\(\)=>\(\{project,datasets:datasets\(\),companyProfile:project\.companyProfileSnapshot,providers:HISTORICAL_PROVIDERS,assetStore\}\)/);
   assert.match(source,/providers:HISTORICAL_PROVIDERS,getProject:/);
 });

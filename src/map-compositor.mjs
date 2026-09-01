@@ -1,6 +1,7 @@
 import {sourceForFigure} from './map-sources.mjs';
 import {mapPoint,MAX_RASTER_PIXELS,unprojectPoint} from './sheet-layout.mjs';
 import {arcGisExportUrl} from './imagery/arcgis-client.mjs';
+import {wmsGetMapUrl} from './imagery/wms-client.mjs';
 import {validateImageryProvider,validateImageryResult,validateProviderUrl} from './imagery/provider-registry.mjs';
 import {searchOfficialImagery} from './imagery/search.mjs';
 import {placementCanvasTransform,placementCorners,projectWebMercator,validatePlacement} from './imagery/placement.mjs';
@@ -8,9 +9,11 @@ import {historicalCode,historicalSheetGeometry} from './historical-layout.mjs';
 import {ONTARIO_IMAGERY_PROVIDER} from './imagery/providers/ontario.mjs';
 import {TORONTO_IMAGERY_PROVIDER} from './imagery/providers/toronto.mjs';
 import {OTTAWA_IMAGERY_PROVIDER} from './imagery/providers/ottawa.mjs';
+import {NAPL_IMAGERY_PROVIDER} from './imagery/providers/napl.mjs';
 
 const WORLD=2*Math.PI*6378137,MAX_TILES=36;
-const DEFAULT_HISTORICAL_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
+const DEFAULT_HISTORICAL_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER,NAPL_IMAGERY_PROVIDER]);
+const SUPPORTED_OFFICIAL_EXPORT_KINDS=new Set(['arcgis-export','wms-export']);
 const MAX_HISTORICAL_TILES=64,MAX_IMAGE_BYTES=16_000_000,MAX_TOTAL_IMAGE_BYTES=64_000_000,MAX_IMAGE_SEGMENTS=4096;
 const HISTORICAL_ASSET_FIELDS=['createdAt','height','id','kind','mime','sha256','size','width'];
 const HISTORICAL_ASSET_MIMES=new Set(['image/png','image/jpeg','image/tiff']);
@@ -151,7 +154,12 @@ function officialProvider(project,item,providers){
   if(item.licenseUrl!==provider.licenseUrl)throw new Error(`${code}: the saved licence no longer matches the current provider policy.`);
   validateProviderUrl(item.sourceUrl,provider,{label:`${code} source URL`});validateProviderUrl(item.licenseUrl,provider,{label:`${code} licence URL`});validateProviderUrl(item.officialExport.url,provider,{label:`${code} export URL`});
   const exportUrl=new URL(item.officialExport.url);
-  if(exportUrl.search||exportUrl.hash||!/\/MapServer\/export\/?$/.test(exportUrl.pathname)||item.officialExport.kind!=='arcgis-export')throw new Error(`${code}: the approved ArcGIS export descriptor is unsupported.`);
+  if(!SUPPORTED_OFFICIAL_EXPORT_KINDS.has(item.officialExport.kind))throw new Error(`${code}: the approved export descriptor kind is unsupported.`);
+  if(item.officialExport.kind==='arcgis-export'){
+    if(exportUrl.search||exportUrl.hash||!/\/MapServer\/export\/?$/.test(exportUrl.pathname))throw new Error(`${code}: the approved ArcGIS export descriptor is unsupported.`);
+  }else if(item.officialExport.kind==='wms-export'){
+    if(exportUrl.hash||!exportUrl.searchParams.get('LAYERS')||!exportUrl.searchParams.get('TIME'))throw new Error(`${code}: the approved WMS export descriptor is unsupported.`);
+  }
   for(const key of ['maxWidth','maxHeight'])if(!Number.isSafeInteger(item.officialExport[key])||item.officialExport[key]<256)throw new Error(`${code}: the current official export dimensions are unsafe.`);
   if(typeof item.officialExport.resultId!=='string'||!item.officialExport.coverage||!item.officialExport.preview)throw new Error(`${code}: the approved source predates strict identity validation. Reopen and approve the official image again.`);
   return provider;
@@ -191,8 +199,13 @@ export function historicalImageryPlan({project,item,geometry,providers,currentRe
       const tileWidth=Math.min(descriptor.maxWidth,width-x),west=geometry.projected.west+(geometry.projected.east-geometry.projected.west)*x/width,east=geometry.projected.west+(geometry.projected.east-geometry.projected.west)*(x+tileWidth)/width;
       const north=geometry.projected.north-(geometry.projected.north-geometry.projected.south)*y/height,south=geometry.projected.north-(geometry.projected.north-geometry.projected.south)*(y+tileHeight)/height;
       const [westLng,southLat]=unprojectPoint([west,south]),[eastLng,northLat]=unprojectPoint([east,north]),bounds={west:westLng,south:southLat,east:eastLng,north:northLat};
-      let url=arcGisExportUrl({serviceUrl,bounds,width:tileWidth,height:tileHeight,maxWidth:descriptor.maxWidth,maxHeight:descriptor.maxHeight});
-      if(descriptor.layer!==null&&descriptor.layer!==undefined){const parsed=new URL(url);parsed.searchParams.set('layers',`show:${descriptor.layer}`);url=parsed.href;}
+      let url;
+      if(descriptor.kind==='wms-export'){
+        url=wmsGetMapUrl({serviceUrl:descriptor.url,bounds,width:tileWidth,height:tileHeight,maxWidth:descriptor.maxWidth,maxHeight:descriptor.maxHeight});
+      }else{
+        url=arcGisExportUrl({serviceUrl,bounds,width:tileWidth,height:tileHeight,maxWidth:descriptor.maxWidth,maxHeight:descriptor.maxHeight});
+        if(descriptor.layer!==null&&descriptor.layer!==undefined){const parsed=new URL(url);parsed.searchParams.set('layers',`show:${descriptor.layer}`);url=parsed.href;}
+      }
       validateProviderUrl(url,provider,{label:`${historicalCode(item)} bounded export URL`});
       requests.push({url,x,y,width:tileWidth,height:tileHeight,expectedWidth:tileWidth,expectedHeight:tileHeight,bounds});x+=tileWidth;
     }

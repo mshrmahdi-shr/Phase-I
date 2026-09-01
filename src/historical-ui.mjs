@@ -1,14 +1,14 @@
 import {figureBounds,restoreProject,validHistoricalA3Bounds} from './core.mjs';
 import {decodeManualImage,parseWorldFile} from './imagery/manual-image.mjs';
 import {createCanvasImageOverlay} from './imagery/canvas-overlay.mjs';
-import {geographicPlacementCorners,placementCorners,placementFromExtent,placementFromGeoReference,projectWebMercator,unprojectWebMercator,validatePlacement} from './imagery/placement.mjs';
+import {geographicPlacementCorners,placementCorners,placementFromExtent,placementFromGeoReference,projectWebMercator,rotationFromPoint,unprojectWebMercator,validatePlacement} from './imagery/placement.mjs';
 import {groupImageryResults,searchOfficialImagery} from './imagery/search.mjs';
 import {validateAcquisitionYear,validateImageryProvider,validateImageryResult,validateProviderUrl} from './imagery/provider-registry.mjs';
 
 const A3_RATIO=420/297;
 const CROP_FILL=.9;
 const MIN_OFFICIAL_EXPORT_DIMENSION=256;
-const SUPPORTED_OFFICIAL_EXPORT_KINDS=new Set(['arcgis-export']);
+const SUPPORTED_OFFICIAL_EXPORT_KINDS=new Set(['arcgis-export','wms-export']);
 const HISTORICAL_ASSET_FIELDS=['createdAt','height','id','kind','mime','sha256','size','width'];
 const HISTORICAL_ASSET_MIMES=new Set(['image/png','image/jpeg','image/tiff']);
 const MAX_HISTORICAL_ASSET_BYTES=16_000_000,MAX_HISTORICAL_ASSET_PIXELS=16_000_000;
@@ -209,7 +209,7 @@ export function createHistoricalImageryUI({
   function removeExtentListener(){map.off?.('click',onExtentClick);extentPoints=[];$('drawManualExtent').dataset.active='false';}
   function removeActive({restore=false}={}){
     previewGeneration++;removeExtentListener();
-    if(active){active.controller?.abort(abortError());removeLayer(active.layer);removeLayer(active.overlay);if(restore)restoreMap(active.before);}
+    if(active){active.controller?.abort(abortError());removeLayer(active.layer);removeLayer(active.overlay);removeRotateHandle(active);if(restore)restoreMap(active.before);}
     active=null;$('historicalDialog').classList.remove('historical-cropping','historical-viewing');$('historicalCropControls').hidden=true;$('historicalViewControls').hidden=true;$('historicalCropFrame').hidden=true;$('manualPlacementControls').hidden=true;$('commitHistorical').disabled=true;$('commitHistorical').textContent='Add to package';
   }
   function resetBoundsFor(item){
@@ -342,7 +342,59 @@ export function createHistoricalImageryUI({
     const overlay=overlayFactory({L,map,image:session.image,placement,signal:session.controller.signal});session.overlay=overlay.addTo(map);
     try{await overlay.ready;}catch(error){removeLayer(overlay);if(session.overlay===overlay)session.overlay=null;throw error;}
     if(!ownsActive(session)||session.overlayGeneration!==generation||session.overlay!==overlay){removeLayer(overlay);return false;}
-    updatePlacementFields(placement);return true;
+    updatePlacementFields(placement);ensureRotateHandle(session);positionRotateHandle(session);return true;
+  }
+
+  function ensureRotateHandle(session){
+    if(session.rotateHandle||typeof document.createElement!=='function')return;
+    const element=document.createElement('button');element.type='button';element.className='historical-rotate-handle';
+    element.setAttribute('aria-label','Drag to rotate the placed image');element.title='Drag to rotate';
+    element.addEventListener('pointerdown',event=>beginRotateDrag(event,session),{signal:bindings.signal});
+    element.addEventListener('keydown',event=>{
+      if(event.key!=='ArrowLeft'&&event.key!=='ArrowRight')return;event.preventDefault();
+      const delta=(event.key==='ArrowRight'?1:-1)*(event.shiftKey?10:1);
+      try{commitRotation(session,session.placement.rotationDegrees+delta);}catch(error){showStatus(error.message,'error');}
+    },{signal:bindings.signal});
+    map.getPanes?.().overlayPane?.appendChild(element);session.rotateHandle=element;
+  }
+
+  function removeRotateHandle(session){session?.rotateHandle?.remove?.();if(session)session.rotateHandle=null;}
+
+  function rotateHandlePoint(placement){const corners=placementCorners(placement);return [(corners[0][0]+corners[1][0])/2,(corners[0][1]+corners[1][1])/2];}
+
+  function positionRotateHandle(session){
+    if(!session?.rotateHandle||typeof map.latLngToContainerPoint!=='function')return;
+    const [x,y]=unprojectWebMercator(rotateHandlePoint(session.placement)),point=map.latLngToContainerPoint({lat:y,lng:x});
+    if(!Number.isFinite(point?.x)||!Number.isFinite(point?.y))return;
+    Object.assign(session.rotateHandle.style,{position:'absolute',left:`${point.x}px`,top:`${point.y}px`,transform:'translate(-50%,-50%)'});
+  }
+
+  function commitRotation(session,rotationDegrees){
+    const previous=session.placement.rotationDegrees;session.placement.rotationDegrees=rotationDegrees;
+    try{validatePlacement(session.placement,{location:getProject().location});}
+    catch(error){session.placement.rotationDegrees=previous;session.overlay?.redraw?.();positionRotateHandle(session);updatePlacementFields(session.placement);throw error;}
+    session.overlay?.redraw?.();positionRotateHandle(session);updatePlacementFields(session.placement);
+    session.crop=null;$('commitHistorical').disabled=true;showStatus('Rotation updated. Choose Use current crop again.','ok');
+  }
+
+  function beginRotateDrag(event,session){
+    if(!ownsActive(session)||session.kind!=='manual')return;event.preventDefault();
+    const startRotation=session.placement.rotationDegrees,controller=new WindowAbortController(),rect=()=>map.getContainer().getBoundingClientRect();
+    session.rotateHandle.setPointerCapture?.(event.pointerId);
+    function toLatLng(clientEvent){const box=rect();return map.containerPointToLatLng([clientEvent.clientX-box.left,clientEvent.clientY-box.top]);}
+    function pointerMove(moveEvent){
+      const {lat,lng}=toLatLng(moveEvent);let point;try{point=projectWebMercator([lng,lat]);}catch{return;}
+      let rotationDegrees;try{rotationDegrees=rotationFromPoint(session.placement.center,point);}catch{return;}
+      session.placement.rotationDegrees=rotationDegrees;session.overlay?.redraw?.();positionRotateHandle(session);updatePlacementFields(session.placement);
+    }
+    function pointerUp(){
+      controller.abort();
+      try{commitRotation(session,session.placement.rotationDegrees);}
+      catch(error){showStatus(error.message,'error');}
+    }
+    document.addEventListener('pointermove',pointerMove,{signal:controller.signal});
+    document.addEventListener('pointerup',pointerUp,{signal:controller.signal});
+    document.addEventListener('pointercancel',()=>{session.placement.rotationDegrees=startRotation;session.overlay?.redraw?.();positionRotateHandle(session);updatePlacementFields(session.placement);pointerUp();},{signal:controller.signal});
   }
 
   async function previewManual(){
@@ -620,6 +672,8 @@ export function createHistoricalImageryUI({
     else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
   },{signal:bindings.signal});
   map.on?.('resize',syncCropFrame);
+  function syncRotateHandlePosition(){if(active?.rotateHandle)positionRotateHandle(active);}
+  map.on?.('move zoom resize',syncRotateHandlePosition);
 
-  return {open:()=>openDialog(true),close:closeDialog,refresh,whenIdle:()=>pending,destroy(){if(!alive)return;alive=false;open=false;searchController?.abort(abortError());mutationController?.abort(abortError());mutationGeneration++;searchGeneration++;refreshGeneration++;removeActive({restore:false});map.off?.('resize',syncCropFrame);bindings.abort();$('historicalDialog').hidden=true;document.body.classList.remove('historical-open');}};
+  return {open:()=>openDialog(true),close:closeDialog,refresh,whenIdle:()=>pending,destroy(){if(!alive)return;alive=false;open=false;searchController?.abort(abortError());mutationController?.abort(abortError());mutationGeneration++;searchGeneration++;refreshGeneration++;removeActive({restore:false});map.off?.('resize',syncCropFrame);map.off?.('move zoom resize',syncRotateHandlePosition);bindings.abort();$('historicalDialog').hidden=true;document.body.classList.remove('historical-open');}};
 }

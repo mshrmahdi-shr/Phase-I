@@ -185,17 +185,42 @@ function checkedFrameCorners(value,label){
   return canonicalPolyline([canonicalUpperLeft,canonicalUpperRight,canonicalLowerRight,canonicalLowerLeft],{label,closed:true,affine:true});
 }
 
+function checkedPixelDimension(value,label){
+  if(!Number.isInteger(value)||value<1||value>65536)fail(`${label} must be a raster pixel dimension.`);
+  return value;
+}
+
+function checkedImagePath(value,label){
+  if(typeof value!=='string'||!value.trim())fail(`${label} must be a nonempty relative file path.`);
+  if(value.length>240||/[\\:*?"<>|]/.test(value)||value.startsWith('/')||value.includes('..'))fail(`${label} must be a safe relative path.`);
+  return value;
+}
+
 function normalizedFrames(imageFrames,selections){
   if(!Array.isArray(imageFrames)||imageFrames.length!==selections.length)fail('Image frames must match the CAD selection one-for-one.');
   const selected=new Map(selections.map(item=>[item.key,item])),frames=new Map();
   for(const [index,value] of imageFrames.entries()){
-    const fields=exactRecord(value,['selection','corners'],`Image frame ${index+1}`),identity=selectionRecord(fields.selection,`Image frame ${index+1} selection`);
+    const fields=exactRecord(value,['selection','corners','pixelWidth','pixelHeight','imagePath'],`Image frame ${index+1}`),identity=selectionRecord(fields.selection,`Image frame ${index+1} selection`);
     if(!selected.has(identity.key))fail(`Image frame references a missing selection: ${identity.key}.`);
     if(frames.has(identity.key))fail(`Image frames contain duplicate selection ${identity.key}.`);
-    frames.set(identity.key,checkedFrameCorners(fields.corners,`Image frame ${identity.key}`));
+    frames.set(identity.key,{
+      corners:checkedFrameCorners(fields.corners,`Image frame ${identity.key}`),
+      pixelWidth:checkedPixelDimension(fields.pixelWidth,`Image frame ${identity.key} pixel width`),
+      pixelHeight:checkedPixelDimension(fields.pixelHeight,`Image frame ${identity.key} pixel height`),
+      imagePath:checkedImagePath(fields.imagePath,`Image frame ${identity.key} path`)
+    });
   }
   for(const item of selections)if(!frames.has(item.key))fail(`Image frame is missing for selection ${item.key}.`);
-  return selections.map(item=>({...item,corners:frames.get(item.key)}));
+  return selections.map(item=>({...item,...frames.get(item.key)}));
+}
+
+function normalizedLogoImage(value){
+  const fields=exactRecord(value,['path','width','height'],'Company logo image');
+  return {
+    imagePath:checkedImagePath(fields.path,'Company logo image path'),
+    pixelWidth:checkedPixelDimension(fields.width,'Company logo image width'),
+    pixelHeight:checkedPixelDimension(fields.height,'Company logo image height')
+  };
 }
 
 function normalizedCompany(companyProfile){
@@ -305,11 +330,11 @@ function symbolTable(writer,handles,name,records,writeRecord){
   writer.add(0,'ENDTAB');return recordHandles;
 }
 
-function buildTables(handles){
+function buildTables(handles,plotStyleNormalHandle){
   const writer=new PairWriter();
   symbolTable(writer,handles,'VPORT',['*ACTIVE'],(out,{record,handle,owner})=>out.add(0,'VPORT').add(5,handle).add(330,owner).add(100,'AcDbSymbolTableRecord').add(100,'AcDbViewportTableRecord').add(2,record).add(70,0).add(10,0).add(20,0).add(11,1).add(21,1).add(12,0).add(22,0).add(40,1000).add(41,1).add(42,50));
   symbolTable(writer,handles,'LTYPE',['CONTINUOUS'],(out,{record,handle,owner})=>out.add(0,'LTYPE').add(5,handle).add(330,owner).add(100,'AcDbSymbolTableRecord').add(100,'AcDbLinetypeTableRecord').add(2,record).add(70,0).add(3,'Solid line').add(72,65).add(73,0).add(40,0));
-  symbolTable(writer,handles,'LAYER',['0',...CAD_DXF_LAYERS],(out,{record,handle,owner})=>out.add(0,'LAYER').add(5,handle).add(330,owner).add(100,'AcDbSymbolTableRecord').add(100,'AcDbLayerTableRecord').add(2,record).add(70,0).add(62,LAYER_COLOURS[record]).add(6,'CONTINUOUS').add(370,-3).add(390,'0'));
+  symbolTable(writer,handles,'LAYER',['0',...CAD_DXF_LAYERS],(out,{record,handle,owner})=>out.add(0,'LAYER').add(5,handle).add(330,owner).add(100,'AcDbSymbolTableRecord').add(100,'AcDbLayerTableRecord').add(2,record).add(70,0).add(62,LAYER_COLOURS[record]).add(6,'CONTINUOUS').add(370,-3).add(390,plotStyleNormalHandle));
   symbolTable(writer,handles,'STYLE',['STANDARD'],(out,{record,handle,owner})=>out.add(0,'STYLE').add(5,handle).add(330,owner).add(100,'AcDbSymbolTableRecord').add(100,'AcDbTextStyleTableRecord').add(2,record).add(70,0).add(40,0).add(41,1).add(50,0).add(71,0).add(42,2.5).add(3,'txt').add(4,''));
   symbolTable(writer,handles,'APPID',['ACAD'],(out,{record,handle,owner})=>out.add(0,'APPID').add(5,handle).add(330,owner).add(100,'AcDbSymbolTableRecord').add(100,'AcDbRegAppTableRecord').add(2,record).add(70,0));
   let blockRecords;
@@ -325,7 +350,20 @@ function block(writer,handles,name,owner){
 function buildBlocks(handles,modelRecord,paperRecord){const writer=new PairWriter();block(writer,handles,'*Model_Space',modelRecord);block(writer,handles,'*Paper_Space',paperRecord);return writer;}
 
 function entityStart(writer,handles,owner,type,layerName,subclass){
-  writer.add(0,type).add(5,handles.take()).add(330,owner).add(100,'AcDbEntity').add(8,layerName).add(100,subclass);
+  const handle=handles.take();
+  writer.add(0,type).add(5,handle).add(330,owner).add(100,'AcDbEntity').add(8,layerName).add(100,subclass);
+  return handle;
+}
+
+function imageEntity(writer,handles,owner,layerName,{corners,pixelWidth,pixelHeight,imageDefHandle,imageDefReactorHandle}){
+  const [upperLeft,,lowerRight,lowerLeft]=corners,pixelScaleX=1/pixelWidth,pixelScaleY=1/pixelHeight;
+  const uVector=[(lowerRight[0]-lowerLeft[0])*pixelScaleX,(lowerRight[1]-lowerLeft[1])*pixelScaleX],vVector=[(upperLeft[0]-lowerLeft[0])*pixelScaleY,(upperLeft[1]-lowerLeft[1])*pixelScaleY];
+  const handle=entityStart(writer,handles,owner,'IMAGE',layerName,'AcDbRasterImage');
+  writer.add(90,0).add(10,lowerLeft[0]).add(20,lowerLeft[1]).add(30,0);
+  writer.add(11,uVector[0]).add(21,uVector[1]).add(31,0).add(12,vVector[0]).add(22,vVector[1]).add(32,0);
+  writer.add(13,pixelWidth).add(23,pixelHeight).add(340,imageDefHandle).add(70,3).add(280,0).add(281,50).add(282,50).add(283,0).add(360,imageDefReactorHandle);
+  writer.add(71,1).add(91,2).add(14,-0.5).add(24,-0.5).add(14,pixelWidth-0.5).add(24,pixelHeight-0.5);
+  return handle;
 }
 
 function pointEntity(writer,handles,owner,layerName,[x,y]){
@@ -345,19 +383,21 @@ function mtextEntity(writer,handles,owner,layerName,{point:[x,y],height,width,te
   const chunks=textChunks(text);for(const chunk of chunks.slice(0,-1))writer.add(3,chunk);writer.add(1,chunks.at(-1)).add(7,'STANDARD').add(50,0);
 }
 
-function entitiesModel(project,company,selections,frames,geometry,layout){
+function entitiesModel(project,company,selections,frames,geometry,layout,logoImage){
   const result=[];
   result.push({kind:'point',layer:'SITE_MARKER',point:geometry.marker});
   if(geometry.site.length)result.push({kind:'polyline',layer:'SITE_BOUNDARY',points:geometry.site,closed:true});
   if(geometry.building.length)result.push({kind:'polyline',layer:'BUILDING_BOUNDARY',points:geometry.building,closed:true});
   for(const frame of frames){
     result.push({kind:'polyline',layer:'IMAGE_FRAMES',points:frame.corners,closed:true,affine:true});
+    result.push({kind:'image',layer:'IMAGE_FRAMES',corners:frame.corners,pixelWidth:frame.pixelWidth,pixelHeight:frame.pixelHeight,imageKey:frame.key,imagePath:frame.imagePath});
     const frameBounds=projectedBounds(frame.corners),height=Math.max(2.5,Math.min(5,Math.min(frameBounds.east-frameBounds.west,frameBounds.north-frameBounds.south)*.025));
     result.push({kind:'mtext',layer:'IMAGE_LABELS',point:[frameBounds.west+height,frameBounds.north-height*1.5],height,width:Math.max(20,frameBounds.east-frameBounds.west-height*2),text:frame.label});
   }
   result.push({kind:'polyline',layer:'TITLE_BLOCK',points:layout.outer,closed:true,affine:true});
   result.push({kind:'polyline',layer:'TITLE_BLOCK',points:[[layout.x,layout.y+layout.height-48],[layout.x+layout.width,layout.y+layout.height-48]],closed:false});
   result.push({kind:'polyline',layer:'COMPANY_LOGO_FRAME',points:layout.logo,closed:true,affine:true});
+  if(logoImage)result.push({kind:'image',layer:'COMPANY_LOGO_FRAME',corners:[layout.logo[3],layout.logo[2],layout.logo[1],layout.logo[0]],pixelWidth:logoImage.pixelWidth,pixelHeight:logoImage.pixelHeight,imageKey:'company-logo',imagePath:logoImage.imagePath});
   const textX=layout.logoCell.x+layout.logoCell.width+6,textWidth=layout.width-(textX-layout.x)-6;
   result.push({kind:'mtext',layer:'COMPANY_TEXT',point:[textX,layout.y+layout.height-9],height:4,width:textWidth,text:company.companyName});
   result.push({kind:'mtext',layer:'COMPANY_TEXT',point:[textX,layout.y+layout.height-28],height:2.5,width:textWidth,text:[company.address,company.phone,company.email,company.website].join(' | ')});
@@ -370,19 +410,48 @@ function entitiesModel(project,company,selections,frames,geometry,layout){
   return result;
 }
 
-function buildEntities(handles,owner,model){
-  const writer=new PairWriter();
+function buildEntities(handles,owner,model,imageDefs){
+  const writer=new PairWriter(),imageEntityHandles=new Map();
   for(const entity of model){
     if(entity.kind==='point')pointEntity(writer,handles,owner,entity.layer,entity.point);
     else if(entity.kind==='polyline')polylineEntity(writer,handles,owner,entity.layer,entity.points,{closed:entity.closed,affine:entity.affine});
     else if(entity.kind==='mtext')mtextEntity(writer,handles,owner,entity.layer,entity);
+    else if(entity.kind==='image'){
+      const def=imageDefs.get(entity.imageKey);if(!def)fail('Missing IMAGEDEF allocation for a DXF image entity.');
+      const handle=imageEntity(writer,handles,owner,entity.layer,{corners:entity.corners,pixelWidth:entity.pixelWidth,pixelHeight:entity.pixelHeight,imageDefHandle:def.imageDefHandle,imageDefReactorHandle:def.imageDefReactorHandle});
+      imageEntityHandles.set(entity.imageKey,handle);
+    }
     else fail('Unknown internal DXF entity type.');
   }
-  return writer;
+  return {writer,imageEntityHandles};
 }
 
-function buildObjects(handles){
-  const writer=new PairWriter(),root=handles.take();writer.add(0,'DICTIONARY').add(5,root).add(330,'0').add(100,'AcDbDictionary').add(281,1);return writer;
+function namedDictionaryEntry(writer,name,handle){writer.add(3,name).add(350,handle);}
+
+function buildObjects(handles,{plotStyleDictHandle,plotStyleNormalHandle,imageDictHandle,imageVarsHandle,images}){
+  const writer=new PairWriter(),root=handles.take();
+  writer.add(0,'DICTIONARY').add(5,root).add(330,'0').add(100,'AcDbDictionary').add(281,1);
+  namedDictionaryEntry(writer,'ACAD_PLOTSTYLENAME',plotStyleDictHandle);
+  namedDictionaryEntry(writer,'ACAD_IMAGE_DICT',imageDictHandle);
+  namedDictionaryEntry(writer,'ACAD_IMAGE_VARS',imageVarsHandle);
+
+  writer.add(0,'ACDBDICTIONARYWDFLT').add(5,plotStyleDictHandle).add(330,root).add(100,'AcDbDictionary').add(281,1);
+  namedDictionaryEntry(writer,'Normal',plotStyleNormalHandle);
+  writer.add(100,'AcDbDictionaryWithDefault').add(340,plotStyleNormalHandle);
+  writer.add(0,'ACDBPLACEHOLDER').add(5,plotStyleNormalHandle).add(330,plotStyleDictHandle);
+
+  writer.add(0,'RASTERVARIABLES').add(5,imageVarsHandle).add(102,'{ACAD_REACTORS').add(330,root).add(102,'}').add(330,root).add(100,'AcDbRasterVariables').add(90,0).add(70,0).add(71,1).add(72,3);
+
+  writer.add(0,'DICTIONARY').add(5,imageDictHandle).add(330,root).add(100,'AcDbDictionary').add(281,1);
+  for(const image of images)namedDictionaryEntry(writer,image.name,image.imageDefHandle);
+
+  for(const image of images){
+    writer.add(0,'IMAGEDEF').add(5,image.imageDefHandle).add(102,'{ACAD_REACTORS').add(330,image.imageDefReactorHandle).add(102,'}').add(330,imageDictHandle);
+    writer.add(100,'AcDbRasterImageDef').add(90,0).add(1,image.imagePath).add(10,image.pixelWidth).add(20,image.pixelHeight).add(11,1).add(21,1).add(280,1).add(281,0);
+    if(!image.entityHandle)fail('An IMAGEDEF has no associated IMAGE entity.');
+    writer.add(0,'IMAGEDEF_REACTOR').add(5,image.imageDefReactorHandle).add(330,image.entityHandle).add(100,'AcDbRasterImageDefReactor').add(90,2).add(330,image.entityHandle);
+  }
+  return writer;
 }
 
 function modelBounds(model){
@@ -395,18 +464,52 @@ function buildHeader(handles,bounds,crs){
   const writer=new PairWriter();
   writer.add(9,'$ACADVER').add(1,'AC1021').add(9,'$DWGCODEPAGE').add(3,'ANSI_1252').add(9,'$HANDSEED').add(5,handles.peek());
   writer.add(9,'$INSBASE').add(10,0).add(20,0).add(30,0).add(9,'$EXTMIN').add(10,bounds.west).add(20,bounds.south).add(30,0).add(9,'$EXTMAX').add(10,bounds.east).add(20,bounds.north).add(30,0);
-  writer.add(9,'$INSUNITS').add(70,6).add(9,'$MEASUREMENT').add(70,1).add(9,'$LUNITS').add(70,2).add(9,'$LUPREC').add(70,4);
+  writer.add(9,'$INSUNITS').add(70,6).add(9,'$MEASUREMENT').add(70,1).add(9,'$LUNITS').add(70,2).add(9,'$LUPREC').add(70,4).add(9,'$PSTYLEMODE').add(290,1);
   writer.add(9,'$USERI1').add(70,crs.zone).add(9,'$USERR1').add(40,1);return writer;
 }
 
+const IMAGE_CLASSES=Object.freeze([
+  ['RASTERVARIABLES','AcDbRasterVariables',0,0],
+  ['IMAGE','AcDbRasterImage',2175,1],
+  ['IMAGEDEF','AcDbRasterImageDef',0,0],
+  ['IMAGEDEF_REACTOR','AcDbRasterImageDefReactor',1,0]
+]);
+
+function buildClasses(){
+  const writer=new PairWriter();
+  for(const [name,cpp,proxyFlags,entityFlag] of IMAGE_CLASSES)writer.add(0,'CLASS').add(1,name).add(2,cpp).add(3,'ISM').add(90,proxyFlags).add(91,0).add(280,0).add(281,entityFlag);
+  return writer;
+}
+
+function imageBaseName(path){const name=path.split('/').pop();if(!name)fail('Image path has no filename.');return name;}
+
 export function buildCadDxf(input){
-  const fields=exactRecord(input,['project','companyProfile','selection','imageFrames','projector'],'CAD DXF input');
+  const fields=exactRecord(input,['project','companyProfile','selection','imageFrames','projector','companyLogoImage'],'CAD DXF input');
   const project=normalizedProject(fields.project),company=normalizedCompany(fields.companyProfile),checked=checkedProjector(project.source,fields.projector);
-  const selections=normalizedSelections(project.source,fields.selection),frames=normalizedFrames(fields.imageFrames,selections);
+  const selections=normalizedSelections(project.source,fields.selection),frames=normalizedFrames(fields.imageFrames,selections),logoImage=normalizedLogoImage(fields.companyLogoImage);
   const geometry={...projectedGeometry(project,checked.projector,frames),crs:checked.crs},layout=titleLayout(geometry.bounds,selections.length,company);
-  const model=entitiesModel(project,company,selections,frames,geometry,layout),bounds=modelBounds(model),handles=new Handles();
-  const tables=buildTables(handles),blocks=buildBlocks(handles,tables.modelRecord,tables.paperRecord),entitySection=buildEntities(handles,tables.modelRecord,model),objects=buildObjects(handles),header=buildHeader(handles,bounds,checked.crs);
-  const output=new PairWriter().append(section('HEADER',header)).append(section('TABLES',tables.writer)).append(section('BLOCKS',blocks)).append(section('ENTITIES',entitySection)).append(section('OBJECTS',objects)).add(0,'EOF').toString();
+  const model=entitiesModel(project,company,selections,frames,geometry,layout,logoImage),bounds=modelBounds(model),handles=new Handles();
+
+  const plotStyleDictHandle=handles.take(),plotStyleNormalHandle=handles.take();
+  const tables=buildTables(handles,plotStyleNormalHandle),blocks=buildBlocks(handles,tables.modelRecord,tables.paperRecord);
+
+  const imageKeys=[...frames.map(frame=>frame.key),'company-logo'],imageMeta=new Map([
+    ...frames.map(frame=>[frame.key,{imagePath:frame.imagePath,pixelWidth:frame.pixelWidth,pixelHeight:frame.pixelHeight}]),
+    ['company-logo',{imagePath:logoImage.imagePath,pixelWidth:logoImage.pixelWidth,pixelHeight:logoImage.pixelHeight}]
+  ]);
+  const imageDictHandle=handles.take(),imageVarsHandle=handles.take(),imageDefs=new Map();
+  const names=new Set();
+  for(const key of imageKeys){
+    const meta=imageMeta.get(key),name=imageBaseName(meta.imagePath);
+    if(names.has(name))fail(`CAD package image filenames must be unique: ${name}.`);names.add(name);
+    imageDefs.set(key,{imageDefHandle:handles.take(),imageDefReactorHandle:handles.take(),name,...meta});
+  }
+
+  const {writer:entitySection,imageEntityHandles}=buildEntities(handles,tables.modelRecord,model,imageDefs);
+  const images=imageKeys.map(key=>{const def=imageDefs.get(key),entityHandle=imageEntityHandles.get(key);if(!entityHandle)fail('An image entity was not emitted for a declared raster.');return {...def,entityHandle};});
+  const objects=buildObjects(handles,{plotStyleDictHandle,plotStyleNormalHandle,imageDictHandle,imageVarsHandle,images});
+  const header=buildHeader(handles,bounds,checked.crs),classes=buildClasses();
+  const output=new PairWriter().append(section('HEADER',header)).append(section('CLASSES',classes)).append(section('TABLES',tables.writer)).append(section('BLOCKS',blocks)).append(section('ENTITIES',entitySection)).append(section('OBJECTS',objects)).add(0,'EOF').toString();
   if(/[^\x00-\x7f]/.test(output)||/\r/.test(output)||/(?:^|\n)(?:NaN|Infinity|-Infinity)(?:\n|$)/.test(output))fail('DXF serialization produced unsafe output.');
   return output;
 }
