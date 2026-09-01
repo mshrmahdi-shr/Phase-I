@@ -49,10 +49,10 @@ function exportInput(source,selection){
 }
 
 /** Download a completed atomic package. The URL is owned and revoked by this call on every path. */
-export function downloadCadPackage(result,{document,signal,scheduleRevoke=defaultScheduleRevoke}={}){
+export function downloadCadPackage(result,{document,signal,scheduleRevoke=defaultScheduleRevoke,fallbackContainer=null}={}){
   throwIfAborted(signal);if(!result||!(result.blob instanceof Blob)||result.blob.type!=='application/zip')throw new Error('The completed CAD package is not a ZIP Blob.');if(typeof result.filename!=='string'||!result.filename.trim())throw new Error('The completed CAD package filename is missing.');
   if(typeof scheduleRevoke!=='function')throw new Error('CAD download cleanup scheduler is unavailable.');const url=URL.createObjectURL(result.blob),link=document.createElement('a');let clicked=false;
-  try{link.href=url;link.download=result.filename;link.hidden=true;document.body.append(link);throwIfAborted(signal);link.click();clicked=true;if(scheduleRevoke===defaultScheduleRevoke){link.hidden=false;link.textContent=`Download ${result.filename}`;link.style.cssText='position:fixed;right:1rem;bottom:1rem;z-index:10000;padding:.7rem 1rem;background:#078dcc;color:#fff;border-radius:.4rem;font:600 14px system-ui;';setTimeout(()=>link.remove(),30000);}}
+  try{link.href=url;link.download=result.filename;link.hidden=true;(fallbackContainer||document.body).append(link);throwIfAborted(signal);link.click();clicked=true;if(scheduleRevoke===defaultScheduleRevoke){link.hidden=false;link.textContent=`Click here to download ${result.filename}`;link.style.cssText='display:block;width:100%;margin-top:8px;padding:.7rem 1rem;background:#078dcc;color:#fff;border:1px solid #38bdf8;border-radius:.4rem;font:600 14px system-ui;text-align:center;cursor:pointer;';setTimeout(()=>link.remove(),300000);}}
   finally{if(clicked){if(scheduleRevoke!==defaultScheduleRevoke)link.remove();try{scheduleRevoke(()=>URL.revokeObjectURL(url));}catch{URL.revokeObjectURL(url);}}else{link.remove();URL.revokeObjectURL(url);}}
 }
 
@@ -78,7 +78,7 @@ export function createCadExportController({document,getSnapshot,setBusy,exportPa
     let input;try{input=exportInput(state.source,state.selection);}catch(error){elements.progress.textContent=`CAD export blocked: ${error.message}`;return;}
     const pending=new AbortController();active=pending;onBusyChange(true);const controls=[...elements.dialog.querySelectorAll('button,input,select')].filter(node=>node!==elements.cancel),disabled=controls.map(node=>[node,node.disabled]);controls.forEach(node=>node.disabled=true);elements.cancel.disabled=false;elements.cancel.textContent='Cancel export';elements.meter.hidden=false;elements.meter.removeAttribute('value');elements.progress.textContent=PHASE_LABELS.preflight;
     try{
-      setBusy(true);const result=await exportPackage({...input,signal:pending.signal,onProgress:progress});throwIfAborted(pending.signal);download(result,{document,signal:pending.signal});throwIfAborted(pending.signal);elements.progress.textContent=`Downloaded ${imageLabel(result.imageCount)} with ${result.pageCount} PDF ${result.pageCount===1?'sheet':'sheets'} in one AutoCAD ZIP.`;
+      setBusy(true);const result=await exportPackage({...input,signal:pending.signal,onProgress:progress});throwIfAborted(pending.signal);download(result,{document,signal:pending.signal,fallbackContainer:elements.dialog.querySelector('.export-footer')});throwIfAborted(pending.signal);elements.progress.textContent=`Downloaded ${imageLabel(result.imageCount)} with ${result.pageCount} PDF ${result.pageCount===1?'sheet':'sheets'} in one AutoCAD ZIP.`;
     }catch(error){elements.progress.textContent=pending.signal.aborted||error?.name==='AbortError'?'AutoCAD export cancelled. No ZIP downloaded.':`Export blocked: ${error?.message||String(error)}`;}
     finally{active=null;let cleanupError=null;try{setBusy(false);}catch(error){cleanupError=error;}disabled.forEach(([node,value])=>node.disabled=value);elements.cancel.textContent='Close';elements.meter.hidden=true;refresh();onBusyChange(false);if(cleanupError)elements.progress.textContent=`Export finished, but editing controls could not be restored: ${cleanupError.message}`;}
   }
