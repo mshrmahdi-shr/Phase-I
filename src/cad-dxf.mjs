@@ -336,6 +336,9 @@ function buildTables(handles,plotStyleNormalHandle,bounds){
   symbolTable(writer,handles,'VPORT',['*ACTIVE'],(out,{record,handle,owner})=>out.add(0,'VPORT').add(5,handle).add(330,owner).add(100,'AcDbSymbolTableRecord').add(100,'AcDbViewportTableRecord').add(2,record).add(70,0).add(10,0).add(20,0).add(11,1).add(21,1).add(12,centreX).add(22,centreY).add(40,viewHeight).add(41,viewWidth/viewHeight).add(42,50));
   // AutoCAD LT requires the standard VIEW symbol table even when no named views exist.
   symbolTable(writer,handles,'VIEW',[],()=>{});
+  // Keep the remaining core symbol tables present for strict AutoCAD LT parsers.
+  symbolTable(writer,handles,'UCS',[],()=>{});
+  symbolTable(writer,handles,'DIMSTYLE',[],()=>{});
   symbolTable(writer,handles,'LTYPE',['CONTINUOUS'],(out,{record,handle,owner})=>out.add(0,'LTYPE').add(5,handle).add(330,owner).add(100,'AcDbSymbolTableRecord').add(100,'AcDbLinetypeTableRecord').add(2,record).add(70,0).add(3,'Solid line').add(72,65).add(73,0).add(40,0));
   symbolTable(writer,handles,'LAYER',['0',...CAD_DXF_LAYERS],(out,{record,handle,owner})=>out.add(0,'LAYER').add(5,handle).add(330,owner).add(100,'AcDbSymbolTableRecord').add(100,'AcDbLayerTableRecord').add(2,record).add(70,0).add(62,LAYER_COLOURS[record]).add(6,'CONTINUOUS').add(370,-3).add(390,plotStyleNormalHandle));
   symbolTable(writer,handles,'STYLE',['STANDARD'],(out,{record,handle,owner})=>out.add(0,'STYLE').add(5,handle).add(330,owner).add(100,'AcDbSymbolTableRecord').add(100,'AcDbTextStyleTableRecord').add(2,record).add(70,0).add(40,0).add(41,1).add(50,0).add(71,0).add(42,2.5).add(3,'txt').add(4,''));
