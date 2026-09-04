@@ -20,6 +20,7 @@ import {TORONTO_IMAGERY_PROVIDER} from './src/imagery/providers/toronto.mjs';
 import {OTTAWA_IMAGERY_PROVIDER} from './src/imagery/providers/ottawa.mjs';
 import {NAPL_IMAGERY_PROVIDER} from './src/imagery/providers/napl.mjs';
 import {ESRI_WAYBACK_PROVIDER} from './src/imagery/providers/wayback.mjs';
+import {createEsriKeyStore} from './src/esri-config.mjs';
 const HISTORICAL_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER,NAPL_IMAGERY_PROVIDER,ESRI_WAYBACK_PROVIDER]);
 const $=id=>document.getElementById(id), STORAGE='phase-i-esa-project-v2', COMPANY_STORAGE='phase-i-esa-company-profile-v1', MRD='./data/mrd128.kml';
 const DRAWING_BINDINGS=Symbol.for('phase-i-esa.drawing-bindings');
@@ -224,6 +225,10 @@ function setBasemap(kind){
 for(const b of document.querySelectorAll('.basemap'))b.onclick=()=>setBasemap(b.dataset.map);
 
 $('openEarth').onclick=()=>project.location?window.open(`https://earth.google.com/web/@${project.location.lat},${project.location.lng},500a,1000d,35y,0h,0t,0r`,'_blank','noopener,noreferrer'):status('imageryStatus','Set the site location first.','error');
+const esriKeyStore=createEsriKeyStore();
+function refreshEsriKeyStatus(){const configured=Boolean(esriKeyStore.load());status('esriKeyStatus',configured?'Esri API key is configured in this browser. It is not included in project packages or source files.':'Optional: enter an Esri API key for this browser only. It is never included in project exports.',configured?'ok':'');}
+$('saveEsriApiKey').onclick=()=>{try{esriKeyStore.save($('esriApiKey').value);$('esriApiKey').value='';refreshEsriKeyStatus();status('imageryStatus','Esri key saved locally. Reloading the map layers…','ok');setTimeout(()=>location.reload(),150);}catch(error){status('esriKeyStatus',error.message,'error');}};
+refreshEsriKeyStatus();
 $('loadMrd128').onclick=()=>loadMRD(true);
 async function loadMRD(user=true){
   if(exportBusy)return;

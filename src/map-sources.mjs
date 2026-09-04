@@ -1,3 +1,4 @@
+import {createEsriKeyStore,withEsriApiKey} from './esri-config.mjs';
 // One source definition is shared by the editor, prepared sheet and PDF renderer.
 const street={id:'osm',kind:'xyz',label:'OpenStreetMap',url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',credits:'© OpenStreetMap contributors',maxNativeZoom:19,maxZoom:24};
 const aerial={id:'esri-imagery',kind:'xyz',label:'Esri World Imagery',url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',credits:'Tiles © Esri; source: Esri World Imagery',maxNativeZoom:19,maxZoom:24};
@@ -7,6 +8,7 @@ export function sourceForFigure(code){
   const source=code==='B'?aerial:code==='C'?topo:street;
   return Object.freeze({...source,createLayer(L){
     const options={crossOrigin:true,attribution:source.credits,maxNativeZoom:source.maxNativeZoom,maxZoom:source.maxZoom};
-    return source.kind==='wms'?L.tileLayer.wms(source.url,{...options,layers:source.layer,version:source.version,format:'image/png',transparent:false,crs:L.CRS.EPSG3857}):L.tileLayer(source.url,options);
+    const tileUrl=source.id==='esri-imagery'?withEsriApiKey(source.url,createEsriKeyStore().load()):source.url;
+    return source.kind==='wms'?L.tileLayer.wms(tileUrl,{...options,layers:source.layer,version:source.version,format:'image/png',transparent:false,crs:L.CRS.EPSG3857}):L.tileLayer(tileUrl,options);
   }});
 }

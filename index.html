@@ -54,6 +54,9 @@
         <button id="manageHistorical" class="primary wide">Find or add historical imagery</button>
         <label>Composition DPI<select id="dpi"><option>150</option><option selected>300</option><option value="600">600 (too large for A3)</option></select></label>
         <button id="openEarth">Open site in Google Earth</button>
+        <label>Esri API key (this browser only)<input id="esriApiKey" type="password" autocomplete="off" placeholder="Paste only into this field" /></label>
+        <button id="saveEsriApiKey" type="button">Save Esri key and reload map</button>
+        <div id="esriKeyStatus" class="helper">Optional. The key is kept in this browser and is never included in project exports.</div>
         <div id="imageryStatus" class="helper">Search approved official sources or add a validated local image.</div>
       </section>
 
