@@ -180,7 +180,7 @@ test('historical source failure aborts sibling tiles and disposes the independen
   assert.ok(aborted>0);assert.equal(canvas.width,0);assert.equal(canvas.height,0);assert.equal(dom.window.document.body.children.length,0);
 });
 
-test('official historical responses enforce declared and streamed byte limits before Blob materialization',async t=>{
+test('official historical responses are allowed to exceed the former byte limits',async t=>{
   const {historicalSheetGeometry}=await import('../src/historical-layout.mjs'),{composeHistoricalImage}=await import('../src/map-compositor.mjs');
   const item=officialHistorical({officialExport:{...officialHistorical().officialExport,maxWidth:4096,maxHeight:4096}}),p=historicalProject(item),geometry=historicalSheetGeometry(p,item,150),current=officialResult({export:{...officialResult().export,maxWidth:4096,maxHeight:4096}});
   const dom=new JSDOM('<!doctype html><body></body>'),previous={document:globalThis.document,createImageBitmap:globalThis.createImageBitmap};globalThis.document=dom.window.document;
@@ -188,21 +188,22 @@ test('official historical responses enforce declared and streamed byte limits be
   dom.window.HTMLCanvasElement.prototype.toDataURL=()=> 'data:image/jpeg;base64,AAAA';globalThis.createImageBitmap=async()=>({width:geometry.raster.width,height:geometry.raster.height,close(){}});
   t.after(()=>{for(const [key,value] of Object.entries(previous)){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}dom.window.close();});
   let blobCalls=0,readerCalls=0;
-  const declared=async()=>({ok:true,status:200,headers:new Headers({'content-type':'image/png','content-length':'100000000'}),body:{getReader(){readerCalls++;throw Error('must not open reader');}},blob:async()=>{blobCalls++;return new Blob(['small'],{type:'image/png'});}});
-  await assert.rejects(composeHistoricalImage({project:p,item,geometry,providers:[TORONTO_IMAGERY_PROVIDER],currentOfficialResult:current,fetchImpl:declared}),/size|byte|16 MB|limit/i);
-  assert.equal(blobCalls,0,'oversized declared responses are rejected before body materialization');assert.equal(readerCalls,0,'oversized declared responses are rejected before opening the stream');
+  const declaredReader={async read(){return {done:true}},async cancel(){},releaseLock(){}};
+  const declared=async()=>({ok:true,status:200,headers:new Headers({'content-type':'image/png'}),body:{getReader(){readerCalls++;return declaredReader;}},blob:async()=>{blobCalls++;return new Blob(['small'],{type:'image/png'});}});
+  await composeHistoricalImage({project:p,item,geometry,providers:[TORONTO_IMAGERY_PROVIDER],currentOfficialResult:current,fetchImpl:declared});
+  assert.equal(blobCalls,0,'streaming remains the only body materialization path');assert.equal(readerCalls,1,'declared size no longer blocks the approved export');
 
   let reads=0,cancelled=0,released=0;const chunk=new Uint8Array(8_000_001),reader={async read(){reads++;return reads<=2?{done:false,value:chunk}:{done:true}},async cancel(){cancelled++;},releaseLock(){released++;}};
   const streamed=async()=>({ok:true,status:200,headers:new Headers({'content-type':'image/png'}),body:{getReader:()=>reader},blob:async()=>{blobCalls++;return new Blob(['small'],{type:'image/png'});}});
-  await assert.rejects(composeHistoricalImage({project:p,item,geometry,providers:[TORONTO_IMAGERY_PROVIDER],currentOfficialResult:current,fetchImpl:streamed}),/size|byte|16 MB|limit/i);
-  assert.equal(blobCalls,0,'streaming is the only body materialization path');assert.ok(cancelled>=1);assert.equal(released,1);
+  await composeHistoricalImage({project:p,item,geometry,providers:[TORONTO_IMAGERY_PROVIDER],currentOfficialResult:current,fetchImpl:streamed});
+  assert.equal(blobCalls,0,'streaming is the only body materialization path');assert.equal(cancelled,0);assert.equal(released,1);
 
   let readStarted,resolveRead,abortCancelled=0,abortReleased=0;const began=new Promise(resolve=>readStarted=resolve),abortReader={read(){readStarted();return new Promise(resolve=>resolveRead=resolve);},async cancel(){abortCancelled++;resolveRead?.({done:true});},releaseLock(){abortReleased++;}};
   const abortFetch=async()=>({ok:true,status:200,headers:new Headers({'content-type':'image/png'}),body:{getReader:()=>abortReader}}),abortController=new AbortController(),composing=composeHistoricalImage({project:p,item,geometry,providers:[TORONTO_IMAGERY_PROVIDER],currentOfficialResult:current,fetchImpl:abortFetch,signal:abortController.signal});
   await began;abortController.abort();await assert.rejects(composing,error=>error.name==='AbortError');assert.equal(abortCancelled,1);assert.equal(abortReleased,1);
 });
 
-test('concurrent official streams charge the shared aggregate budget before completed Blobs decode',async t=>{
+test('concurrent official streams complete without an aggregate byte budget',async t=>{
   const {historicalSheetGeometry}=await import('../src/historical-layout.mjs'),{composeHistoricalImage}=await import('../src/map-compositor.mjs');
   const item=officialHistorical({officialExport:{...officialHistorical().officialExport,maxWidth:500,maxHeight:4096}}),p=historicalProject(item),geometry=historicalSheetGeometry(p,item,150),current=officialResult({export:{...officialResult().export,maxWidth:500,maxHeight:4096}}),dom=new JSDOM('<!doctype html><body></body>'),previous={document:globalThis.document,createImageBitmap:globalThis.createImageBitmap};globalThis.document=dom.window.document;
   dom.window.HTMLCanvasElement.prototype.getContext=()=>({fillRect(){},drawImage(){},beginPath(){},moveTo(){},lineTo(){},closePath(){},fill(){},stroke(){},arc(){},setLineDash(){},strokeText(){},fillText(){}});dom.window.HTMLCanvasElement.prototype.toDataURL=()=> 'data:image/jpeg;base64,AAAA';
@@ -211,8 +212,8 @@ test('concurrent official streams charge the shared aggregate budget before comp
     const reader={async read(){read++;if(read===1)return {done:false,value:header};if(read===2)return {done:false,value:padding};if(index===0||index===4)return {done:true};return new Promise(resolve=>{release=resolve;pendingDone.push(resolve);});},async cancel(){release?.({done:true});},releaseLock(){}};
     return {ok:true,status:200,headers:new Headers({'content-type':'image/png'}),body:{getReader:()=>reader}};};
   t.after(()=>{for(const [key,value] of Object.entries(previous)){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}dom.window.close();});
-  const outcome=await composeHistoricalImage({project:p,item,geometry,providers:[TORONTO_IMAGERY_PROVIDER],currentOfficialResult:current,fetchImpl}).then(()=>null,error=>error);
-  assert.equal(requestIndex,5);assert.match(outcome?.message||'',/64 MB|total byte|memory limit/i,`decode count was ${decodeCalls}`);assert.equal(decodeCalls,1,'the fifth 13 MB response is rejected while three earlier 13 MB streams remain resident');
+  await composeHistoricalImage({project:p,item,geometry,providers:[TORONTO_IMAGERY_PROVIDER],currentOfficialResult:current,fetchImpl});
+  assert.equal(requestIndex,5);assert.equal(decodeCalls,5,'all five large responses are composed');
 });
 
 const naplBounds=a3Bounds({lng:-104.6,lat:50.46},600),naplCoverage={west:-104.76,south:50.42,east:-104.56,north:50.5};

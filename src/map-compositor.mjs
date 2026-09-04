@@ -14,7 +14,11 @@ import {NAPL_IMAGERY_PROVIDER} from './imagery/providers/napl.mjs';
 const WORLD=2*Math.PI*6378137,MAX_TILES=36;
 const DEFAULT_HISTORICAL_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER,NAPL_IMAGERY_PROVIDER]);
 const SUPPORTED_OFFICIAL_EXPORT_KINDS=new Set(['arcgis-export','wms-export']);
-const MAX_HISTORICAL_TILES=64,MAX_IMAGE_BYTES=16_000_000,MAX_TOTAL_IMAGE_BYTES=64_000_000,MAX_IMAGE_SEGMENTS=4096;
+// Historical official exports are fetched at the provider's approved native
+// dimensions.  Do not impose an arbitrary byte ceiling here: large municipal
+// rasters are valid inputs and are composed directly into the requested sheet.
+const MAX_HISTORICAL_TILES=64,MAX_IMAGE_SEGMENTS=4096;
+const MAX_MANUAL_ASSET_BYTES=16_000_000;
 const HISTORICAL_ASSET_FIELDS=['createdAt','height','id','kind','mime','sha256','size','width'];
 const HISTORICAL_ASSET_MIMES=new Set(['image/png','image/jpeg','image/tiff']);
 export function throwIfAborted(signal){if(signal?.aborted)throw new DOMException('Export cancelled.','AbortError');}
@@ -223,9 +227,8 @@ function declaredByteLength(headers,code){
   if(!/^(?:0|[1-9]\d*)$/.test(value))throw new Error(`${code}: the official service returned an invalid Content-Length.`);
   const length=Number(value);if(!Number.isSafeInteger(length))throw new Error(`${code}: the official response byte length is unsafe.`);return length;
 }
-async function readBoundedImageResponse(response,{signal,budget,code}){
+async function readImageResponse(response,{signal,code}){
   const declared=declaredByteLength(response.headers,code);
-  if(declared!==null&&(declared>MAX_IMAGE_BYTES||declared>MAX_TOTAL_IMAGE_BYTES-budget.bytes))throw new Error(`${code}: official image responses exceed the safe 16 MB per-image or 64 MB total byte limit.`);
   const reader=response.body?.getReader?.();if(!reader)throw new Error(`${code}: the official image response is not a readable byte stream.`);
   const chunks=[];let bytes=0,segments=0,complete=false,cancelled=false;
   const cancelReader=async reason=>{if(cancelled)return;cancelled=true;try{await reader.cancel(reason);}catch{}};
@@ -234,8 +237,7 @@ async function readBoundedImageResponse(response,{signal,budget,code}){
       const part=await abortable(reader.read(),signal);throwIfAborted(signal);if(!part||typeof part.done!=='boolean')throw new Error(`${code}: the official image stream returned an invalid segment.`);if(part.done){complete=true;break;}
       if(!(part.value instanceof Uint8Array))throw new Error(`${code}: the official image stream returned non-byte data.`);
       if(++segments>MAX_IMAGE_SEGMENTS)throw new Error(`${code}: the official image response has too many stream segments.`);
-      bytes+=part.value.byteLength;budget.bytes+=part.value.byteLength;
-      if(bytes>MAX_IMAGE_BYTES||budget.bytes>MAX_TOTAL_IMAGE_BYTES)throw new Error(`${code}: official image responses exceed the safe 16 MB per-image or 64 MB total byte limit.`);
+      bytes+=part.value.byteLength;
       chunks.push(part.value);
     }
     if(declared!==null&&bytes!==declared)throw new Error(`${code}: the official image response did not match its declared byte length.`);
@@ -253,7 +255,7 @@ function validateHistoricalAsset(asset,item){
   if(!exactKeys(asset,['blob','metadata'])||!exactKeys(asset.metadata,HISTORICAL_ASSET_FIELDS))throw new Error(`${code}: the saved file is not a strict historical imagery asset.`);
   const metadata=asset.metadata;
   if(metadata.id!==item.assetId||metadata.kind!=='historical-image')throw new Error(`${code}: the saved asset belongs to another feature.`);
-  if(!(asset.blob instanceof Blob)||!HISTORICAL_ASSET_MIMES.has(metadata.mime)||asset.blob.type!==metadata.mime||asset.blob.size!==metadata.size||!Number.isSafeInteger(metadata.size)||metadata.size<=0||metadata.size>MAX_IMAGE_BYTES)throw new Error(`${code}: historical asset metadata does not match its Blob.`);
+  if(!(asset.blob instanceof Blob)||!HISTORICAL_ASSET_MIMES.has(metadata.mime)||asset.blob.type!==metadata.mime||asset.blob.size!==metadata.size||!Number.isSafeInteger(metadata.size)||metadata.size<=0||metadata.size>MAX_MANUAL_ASSET_BYTES)throw new Error(`${code}: historical asset metadata does not match its Blob.`);
   if(!Number.isSafeInteger(metadata.width)||metadata.width<=0||!Number.isSafeInteger(metadata.height)||metadata.height<=0||metadata.width>Math.floor(MAX_RASTER_PIXELS/metadata.height))throw new Error(`${code}: historical asset dimensions are invalid.`);
   if(!/^[a-f0-9]{64}$/.test(metadata.sha256)||typeof metadata.createdAt!=='string'||Number.isNaN(Date.parse(metadata.createdAt)))throw new Error(`${code}: historical asset integrity metadata is invalid.`);
   if(item.mode!=='manual'||item.providerId!==null||item.officialExport!==null||item.assetId===null||!item.placement)throw new Error(`${code}: the approved manual imagery record is invalid.`);
@@ -286,11 +288,11 @@ export async function composeHistoricalImage({project,item,geometry,assetStore,p
   try{
     const ctx=canvas.getContext('2d');if(!ctx)throw new Error('The browser could not allocate a historical image canvas.');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,width,height);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
     if(requests){
-      let cursor=0,complete=0,firstError;const byteBudget={bytes:0};
+      let cursor=0,complete=0,firstError;
       async function worker(){while(cursor<requests.length&&!controller.signal.aborted){const request=requests[cursor++];let image;const timeout=setTimeout(()=>{firstError??=new Error(`${code}: official image request timed out. Check your connection and retry.`);controller.abort();},Math.max(1,Math.min(45000,requestTimeoutMs||30000)));try{
         throwIfAborted(controller.signal);const response=await fetchImpl(request.url,{mode:'cors',credentials:'omit',redirect:'error',signal:controller.signal});if(!response.ok)throw new Error(`${code}: official image request failed (HTTP ${response.status}).`);
         if(!/^image\/(png|jpeg|webp)/i.test(response.headers.get('content-type')||''))throw new Error(`${code}: the official service returned an error instead of an image.`);
-        const blob=await readBoundedImageResponse(response,{signal:controller.signal,budget:byteBudget,code});
+        const blob=await readImageResponse(response,{signal:controller.signal,code});
         image=await decodeImage(blob,controller.signal);throwIfAborted(controller.signal);if(image.width!==request.expectedWidth||image.height!==request.expectedHeight)throw new Error(`${code}: the official service returned unexpected image dimensions.`);
         ctx.drawImage(image,request.x,request.y,request.width,request.height);onProgress({phase:'imagery',code,completed:++complete,total:requests.length});
       }catch(error){firstError??=error;controller.abort();}finally{clearTimeout(timeout);image?.close?.();}}}
