@@ -276,7 +276,7 @@ export async function loadHistoricalAssetSnapshot({project,item,assetStore,signa
 }
 
 /** Independently composes the exact approved historical crop and shared project overlays. */
-export async function composeHistoricalImage({project,item,geometry,assetStore,providers,currentOfficialResult,signal,onProgress=()=>{},fetchImpl=globalThis.fetch,requestTimeoutMs=30000}={}){
+export async function composeHistoricalImage({project,item,geometry,assetStore,providers,currentOfficialResult,signal,onProgress=()=>{},fetchImpl=globalThis.fetch,requestTimeoutMs=120000}={}){
   throwIfAborted(signal);checkedHistorical({project,item,geometry});let requests=null,asset=null;
   if(item.mode==='official'){const current=currentOfficialResult??await revalidateHistoricalOfficialSource({project,item,providers,signal,fetchImpl});requests=historicalImageryPlan({project,item,geometry,providers,currentResult:current});}else asset=await loadHistoricalAssetSnapshot({project,item,assetStore,signal});
   throwIfAborted(signal);if(typeof document==='undefined')throw new Error('Historical image composition requires a browser canvas.');
@@ -289,7 +289,7 @@ export async function composeHistoricalImage({project,item,geometry,assetStore,p
     const ctx=canvas.getContext('2d');if(!ctx)throw new Error('The browser could not allocate a historical image canvas.');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,width,height);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
     if(requests){
       let cursor=0,complete=0,firstError;
-      async function worker(){while(cursor<requests.length&&!controller.signal.aborted){const request=requests[cursor++];let image;const timeout=setTimeout(()=>{firstError??=new Error(`${code}: official image request timed out. Check your connection and retry.`);controller.abort();},Math.max(1,Math.min(45000,requestTimeoutMs||30000)));try{
+      async function worker(){while(cursor<requests.length&&!controller.signal.aborted){const request=requests[cursor++];let image;const timeout=setTimeout(()=>{firstError??=new Error(`${code}: official image request timed out. Check your connection and retry.`);controller.abort();},Math.max(1,Math.min(180000,requestTimeoutMs||120000)));try{
         throwIfAborted(controller.signal);const response=await fetchImpl(request.url,{mode:'cors',credentials:'omit',redirect:'error',signal:controller.signal});if(!response.ok)throw new Error(`${code}: official image request failed (HTTP ${response.status}).`);
         if(!/^image\/(png|jpeg|webp)/i.test(response.headers.get('content-type')||''))throw new Error(`${code}: the official service returned an error instead of an image.`);
         const blob=await readImageResponse(response,{signal:controller.signal,code});
