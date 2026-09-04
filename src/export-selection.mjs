@@ -9,11 +9,12 @@ import {validateImageryProvider,validateProviderUrl} from './imagery/provider-re
 import {ONTARIO_IMAGERY_PROVIDER} from './imagery/providers/ontario.mjs';
 import {TORONTO_IMAGERY_PROVIDER} from './imagery/providers/toronto.mjs';
 import {OTTAWA_IMAGERY_PROVIDER} from './imagery/providers/ottawa.mjs';
+import {ESRI_WAYBACK_PROVIDER} from './imagery/providers/wayback.mjs';
 import {createCadExportController} from './cad-ui.mjs';
 import {snapshotCompanyProfile} from './company-profile.mjs';
 import {decodeManualImage} from './imagery/manual-image.mjs';
 
-const DEFAULT_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
+const DEFAULT_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER,ESRI_WAYBACK_PROVIDER]);
 const PDF_PLAN_CONCURRENCY=2;
 const BRANDING_FIELDS=Object.freeze(['companyLogo','companyProfile']),COMPANY_LOGO_FIELDS=Object.freeze(['blob','metadata']),COMPANY_LOGO_METADATA_FIELDS=Object.freeze(['createdAt','height','id','kind','mime','sha256','size','width']),SHA256=/^[a-f0-9]{64}$/,ISO_TIMESTAMP=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 

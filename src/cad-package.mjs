@@ -21,10 +21,11 @@ import {validateImageryProvider} from './imagery/provider-registry.mjs';
 import {ONTARIO_IMAGERY_PROVIDER} from './imagery/providers/ontario.mjs';
 import {TORONTO_IMAGERY_PROVIDER} from './imagery/providers/toronto.mjs';
 import {OTTAWA_IMAGERY_PROVIDER} from './imagery/providers/ottawa.mjs';
+import {ESRI_WAYBACK_PROVIDER} from './imagery/providers/wayback.mjs';
 
 const ZIP_DATE=new Date(Date.UTC(1980,0,1));
 const FIGURE_CODES=Object.freeze(['A','B','C','D','E']);
-const DEFAULT_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER]);
+const DEFAULT_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER,ESRI_WAYBACK_PROVIDER]);
 const LOGO_FIELDS=Object.freeze(['blob','metadata']);
 const ASSET_FIELDS=Object.freeze(['createdAt','height','id','kind','mime','sha256','size','width']);
 export const CAD_PACKAGE_LIMITS=Object.freeze({imageBytes:16_000_000,imagePixels:16_000_000,rasterBytes:128_000_000,pixels:160_000_000,pdfBytes:64_000_000,textBytes:8_000_000,uncompressedBytes:256_000_000,archiveBytes:257_000_000,workingBytes:768_000_000,zipEntryOverheadBytes:1024,zipEndOverheadBytes:1024});
