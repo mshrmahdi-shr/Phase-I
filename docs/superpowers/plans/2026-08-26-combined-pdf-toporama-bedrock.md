@@ -24,7 +24,7 @@
 
 **Own files:** create `src/bedrock.mjs`, `src/bedrock-cache.mjs`, `scripts/cache-mrd126.mjs`, `data/mrd126.kml`, `tests/bedrock.test.mjs`, `tests/bedrock-cache.test.mjs`; modify `.gitignore` only for cache. Keep app, workflow, build and package files for later tasks; request dependency changes if essential.
 
-Inputs are `C:/Users/Mahdi/Downloads/doc.kml` and `C:/Users/Mahdi/Downloads/Bed rock-126Rev1_Legend.pdf`. Scratch evidence is in the parent `work/`: `bedrock-paleo-index.kml`, `bedrock-sample.kmz`, `bedrock-legend-extracted.txt`, rendered legend pages. The official source root is `https://www.geologyontario.mndm.gov.on.ca/mines/data/google/MRD126/`; polygon index is `files/paleo/doc.kml` with 468 links. Restrict traversal to that origin/root/branch and reject path escape.
+Inputs are local user-supplied KML and legend files (kept outside the repository). Scratch evidence is also kept outside the repository. The official source root is `https://www.geologyontario.mndm.gov.on.ca/mines/data/google/MRD126/`; polygon index is `files/paleo/doc.kml` with 468 links. Restrict traversal to that origin/root/branch and reject path escape.
 
 Required interface:
 

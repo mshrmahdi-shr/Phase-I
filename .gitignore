@@ -4,3 +4,19 @@ mrd128-cache/
 mrd126-cache/
 test-results/
 .worktrees/
+
+# Local credentials and private working material. Never commit API keys,
+# environment files, exports, source imagery, or downloaded provider caches.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+exports/
+private/
+*.zip
+*.kmz
