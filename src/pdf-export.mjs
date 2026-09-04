@@ -245,6 +245,17 @@ function renderContinuationPage(doc,project,page,index,count,{draw=true,companyP
   if(draw){doc.setFontSize(6.5);doc.setTextColor(17,17,17);doc.text(`Figure ${sheet.code} · legend continuation ${page.continuationIndex}`,m.x+2,m.y+m.height-1.3);doc.text(`Page ${index+1} of ${count}`,m.x+m.width-2,m.y+m.height-1.3,{align:'right'});}
 }
 function historicalResolution(value){return value===null?'Not published':`${Number(value.toPrecision(6))} m`;}
+function failedHistoricalPlaceholder(page,error){
+  const {width,height}=page.geometry.raster;
+  const fallback='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
+  if(typeof document==='undefined')return {dataUrl:fallback,width,height,dispose(){}};
+  const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
+  const ctx=canvas.getContext('2d');if(!ctx)return {dataUrl:fallback,width,height,dispose(){}};
+  ctx.fillStyle='#f8fafc';ctx.fillRect(0,0,width,height);ctx.strokeStyle='#b91c1c';ctx.lineWidth=Math.max(2,Math.round(width/900));ctx.strokeRect(width*.04,height*.04,width*.92,height*.92);
+  ctx.fillStyle='#7f1d1d';ctx.textAlign='center';ctx.font=`bold ${Math.max(24,Math.round(width/35))}px sans-serif`;ctx.fillText('HISTORICAL IMAGE UNAVAILABLE',width/2,height*.46);
+  ctx.font=`${Math.max(14,Math.round(width/70))}px sans-serif`;ctx.fillText('Retry this sheet when the source service is available.',width/2,height*.54);
+  const dataUrl=canvas.toDataURL('image/jpeg',.9);return {dataUrl,width,height,dispose(){canvas.width=canvas.height=0;}};
+}
 function renderHistoricalPage(doc,project,page,index,count,{draw=true,companyProfile,companyLogoDataUrl}={}){
   const {geometry:g,item,code}=page,m=g.mapFrame,t=g.titleFrame,gap=2,widths=[104,96,132],used=widths.reduce((sum,value)=>sum+value,0)+gap*3;
   const boxes=[];let x=t.x;for(const width of [...widths,t.width-used]){boxes.push({x,y:t.y,width,height:t.height});x+=width+gap;}
@@ -304,11 +315,17 @@ export async function planPdfExport(options){const {pagePlan,selected}=await pre
 
 /** Returns a complete PDF only; downloading belongs to the UI after its final abort check. */
 export async function exportCombinedPdf({project,codes,selection,datasets={},companyProfile,companyLogoDataUrl,dpi=300,onProgress=()=>{},signal,providers,assetStore,revalidateOfficial=revalidateHistoricalOfficialSource,fetchImpl=globalThis.fetch,compose=composeMap,composeHistorical=composeHistoricalImage}){
-  const prepared=await preparePagePlan({project,codes,selection,datasets,companyProfile,companyLogoDataUrl,dpi,signal,requireLogo:true,providers,assetStore,revalidateOfficial,fetchImpl}),{doc,pagePlan,selected,normalizedSelection,snapshot,mapCount,historicalAssetStore,officialResults}=prepared;let completedMaps=0;
+  const prepared=await preparePagePlan({project,codes,selection,datasets,companyProfile,companyLogoDataUrl,dpi,signal,requireLogo:true,providers,assetStore,revalidateOfficial,fetchImpl}),{doc,pagePlan,selected,normalizedSelection,snapshot,mapCount,historicalAssetStore,officialResults}=prepared;let completedMaps=0;const warnings=[];
   for(let i=0;i<pagePlan.length;i++){
     const page=pagePlan[i],sheet=page.sheet;let image;try{
       throwIfAborted(signal);if(page.kind==='map'){onProgress({phase:'sheet',code:sheet.code,completed:completedMaps,total:mapCount});image=await compose({project:snapshot.project,code:sheet.code,features:sheet.features,geometry:sheet.geometry,signal,onProgress});throwIfAborted(signal);}
       if(page.kind==='historical'){onProgress({phase:'sheet',code:page.code,completed:completedMaps,total:mapCount});image=await composeHistorical({project:snapshot.project,item:page.item,geometry:page.geometry,assetStore:historicalAssetStore,providers,currentOfficialResult:officialResults.get(page.item.id),signal,onProgress,fetchImpl});throwIfAborted(signal);}
+    }catch(error){
+      if(page.kind==='historical'&&signal?.aborted!==true&&error?.name!=='AbortError'){
+        warnings.push(`${page.code}: ${error.message}`);image=failedHistoricalPlaceholder(page,error);
+      }else{image?.dispose?.();if(signal?.aborted||error.name==='AbortError')throw new DOMException('Export cancelled.','AbortError');const label=page.kind==='historical'?page.code:`Figure ${page.code}`;throw new Error(`${label}: ${error.message}`,{cause:error});}
+    }
+    try{
       if(image&&(!image.dataUrl||!(image.width>0&&image.height>0)))throw new Error('Map composition did not return a complete image.');if(i)doc.addPage('a3','landscape');
       if(page.kind==='map'){const m=sheet.geometry.mapFrame;doc.addImage(image.dataUrl,undefined,m.x,m.y,m.width,m.height,`map-${sheet.code}-${i}`,'FAST');renderMapPage(doc,snapshot.project,page,i,pagePlan.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});completedMaps++;}
       else if(page.kind==='historical'){const m=page.geometry.mapFrame;doc.addImage(image.dataUrl,undefined,m.x,m.y,m.width,m.height,`map-${page.code}-${i}`,'FAST');renderHistoricalPage(doc,snapshot.project,page,i,pagePlan.length,{companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl});completedMaps++;}
@@ -317,5 +334,5 @@ export async function exportCombinedPdf({project,codes,selection,datasets={},com
     await new Promise(resolve=>setTimeout(resolve,0));
   }
   throwIfAborted(signal);const buffer=doc.output('arraybuffer');await new Promise(resolve=>setTimeout(resolve,0));throwIfAborted(signal);const historicalLabels=pagePlan.filter(page=>page.kind==='historical').map(page=>page.code),tag=`${selected.join('')}${historicalLabels.length?`${selected.length?'-':''}${historicalLabels.join('-')}`:''}`;
-  const filename=`${(snapshot.project.projectNo||'phase-i').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}-figures-${tag}.pdf`,result={blob:new Blob([buffer],{type:'application/pdf'}),filename,pageCount:pagePlan.length,selection:normalizedSelection};onProgress({phase:'complete',completed:pagePlan.length,total:pagePlan.length});throwIfAborted(signal);return result;
+  const filename=`${(snapshot.project.projectNo||'phase-i').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'phase-i'}-figures-${tag}.pdf`,result={blob:new Blob([buffer],{type:'application/pdf'}),filename,pageCount:pagePlan.length,selection:normalizedSelection,warnings:Object.freeze(warnings)};onProgress({phase:'complete',completed:pagePlan.length,total:pagePlan.length});throwIfAborted(signal);return result;
 }

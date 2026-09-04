@@ -187,12 +187,12 @@ test('real combined PDF orders A-B-D, geology continuation, then same-year histo
   for(let page=1;page<=6;page++)assert.match(decoded,new RegExp(`Page ${page} of 6`));
 });
 
-test('historical export snapshots item metadata, disposes every completed image, and returns no partial Blob on failure',async()=>{
+test('historical export snapshots item metadata and continues with a marked placeholder after failure',async()=>{
   const exportPdf=await engine(),p=project(),first=approvedOfficial('74f14168-4de6-4c5f-88f4-87db8ec731c2',1,'Immutable title'),second=approvedOfficial('9833e469-c7e8-4ef1-84f1-b89c608c2126',2,'Failure title');
   p.historical=[first,second];p.historicalSequenceCounters={'1972':2};const disposed=[],seen=[];let result;
-  await assert.rejects(async()=>{result=await exportPdf({project:p,providers:[TORONTO_IMAGERY_PROVIDER],selection:[{kind:'figure',code:'A'},{kind:'historical',id:first.id},{kind:'historical',id:second.id}],
-    compose:compositor([],disposed),composeHistorical:async({item,geometry})=>{seen.push(item.title);p.historical[0].title='Changed during export';if(item.id===second.id)throw Error('official archive failed');return {dataUrl:png('H'),width:1,height:1,bounds:geometry.bounds,dispose:()=>disposed.push('H1')};}});},/H-1972-2.*official archive failed/i);
-  assert.equal(result,undefined);assert.deepEqual(seen,['Immutable title','Failure title']);assert.deepEqual(disposed,['A','H1']);
+  result=await exportPdf({project:p,providers:[TORONTO_IMAGERY_PROVIDER],selection:[{kind:'figure',code:'A'},{kind:'historical',id:first.id},{kind:'historical',id:second.id}],
+    compose:compositor([],disposed),composeHistorical:async({item,geometry})=>{seen.push(item.title);p.historical[0].title='Changed during export';if(item.id===second.id)throw Error('official archive failed');return {dataUrl:png('H'),width:1,height:1,bounds:geometry.bounds,dispose:()=>disposed.push('H1')};}});
+  assert.equal(result.pageCount,3);assert.deepEqual(result.warnings,['H-1972-2: official archive failed']);assert.deepEqual(seen,['Immutable title','Failure title']);assert.deepEqual(disposed,['A','H1']);
 });
 
 test('cancellation during a historical sheet disposes its image and returns no PDF Blob',async()=>{
