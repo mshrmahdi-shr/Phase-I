@@ -1,5 +1,23 @@
 const MARK='/mines/data/google/mrd128/';
 
+export async function fetchWithRetry(fetchImpl,url,{attempts=3,timeoutMs=20_000,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),signal,headers}={}){
+  if(typeof fetchImpl!=='function')throw new TypeError('fetchWithRetry requires a fetch function.');
+  const total=Math.max(1,Math.min(5,Number(attempts)||1));let last;
+  for(let attempt=1;attempt<=total;attempt++){
+    if(signal?.aborted)throw signal.reason??new DOMException('The operation was aborted','AbortError');
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(new Error('request timeout')),Math.max(1,Number(timeoutMs)||1));
+    const abort=()=>controller.abort(signal.reason??new DOMException('The operation was aborted','AbortError'));
+    signal?.addEventListener('abort',abort,{once:true});
+    try{
+      const response=await fetchImpl(url,{signal:controller.signal,headers});
+      if(response?.ok===false)throw new Error(`HTTP ${response.status}`);
+      return response;
+    }catch(error){last=error;if(attempt<total)await sleep(Math.min(2000,250*2**(attempt-1)));}
+    finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+  }
+  throw last??new Error('Fetch failed');
+}
+
 export function assertCompleteCache({saved,failed,pending}){
   if(saved<2||failed>0||pending>0)throw new Error(`Incomplete MRD128 cache: ${saved} saved, ${failed} failed, ${pending} pending.`);
 }

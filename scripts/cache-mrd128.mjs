@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { extractHrefValues, cachePathForMrd128Url, rewriteKmlLinks, assertCompleteCache } from '../src/mrd128-cache.mjs';
+import { extractHrefValues, cachePathForMrd128Url, rewriteKmlLinks, assertCompleteCache, fetchWithRetry } from '../src/mrd128-cache.mjs';
 
 const ROOT='https://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/polygons/doc.kml';
 const MAX_DOCS=600;
@@ -18,9 +18,8 @@ async function fetchOfficial(url){
   let last;
   for(const candidate of [...new Set(candidates)]){
     try{
-      const r=await fetch(candidate,{redirect:'follow',signal:AbortSignal.timeout(10000),headers:{'user-agent':'Phase-I-ESA-MRD128-cache/1.0','accept':'application/vnd.google-earth.kml+xml,application/xml,text/xml,*/*'}});
-      if(!r.ok) throw new Error(`HTTP ${r.status}`);
-      return {response:r,url:candidate};
+      const response=await fetchWithRetry(fetch,candidate,{attempts:3,timeoutMs:20000,headers:{'user-agent':'Phase-I-ESA-MRD128-cache/1.0','accept':'application/vnd.google-earth.kml+xml,application/xml,text/xml,*/*'}});
+      return {response,url:candidate};
     }catch(e){last=e}
   }
   throw last||new Error('Fetch failed');

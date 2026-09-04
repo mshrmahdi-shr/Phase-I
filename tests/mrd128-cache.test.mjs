@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cachePathForMrd128Url, rewriteMrd128Href, extractHrefValues, rewriteKmlLinks, shouldFollowSurficialLink } from '../src/mrd128-cache.mjs';
+import { cachePathForMrd128Url, rewriteMrd128Href, extractHrefValues, rewriteKmlLinks, shouldFollowSurficialLink, fetchWithRetry } from '../src/mrd128-cache.mjs';
 import * as cache from '../src/mrd128-cache.mjs';
 
 test('cachePathForMrd128Url keeps files inside the MRD128 mirror', () => {
@@ -37,4 +37,10 @@ test('a partial or truncated MRD128 cache cannot be reported ready for deploymen
   assert.throws(()=>cache.assertCompleteCache({saved:93,failed:0,pending:2}));
   assert.throws(()=>cache.assertCompleteCache({saved:1,failed:0,pending:0}));
   assert.doesNotThrow(()=>cache.assertCompleteCache({saved:93,failed:0,pending:0}));
+});
+
+test('fetchWithRetry retries transient provider failures before giving up',async()=>{
+  let attempts=0;
+  const response=await fetchWithRetry(async()=>{attempts++;if(attempts<3)throw new Error('timeout');return new Response('ok',{status:200});},'https://official.test/tile.kmz',{attempts:3,timeoutMs:100,sleep:async()=>{}});
+  assert.equal(response.status,200);assert.equal(attempts,3);
 });
