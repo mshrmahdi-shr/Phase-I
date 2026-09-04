@@ -6,6 +6,11 @@ import {validateImageryProvider,validateImageryResult} from '../src/imagery/prov
 import {ONTARIO_IMAGERY_PROVIDER} from '../src/imagery/providers/ontario.mjs';
 import {TORONTO_IMAGERY_PROVIDER} from '../src/imagery/providers/toronto.mjs';
 import {OTTAWA_IMAGERY_PROVIDER} from '../src/imagery/providers/ottawa.mjs';
+import {NAPL_IMAGERY_PROVIDER} from '../src/imagery/providers/napl.mjs';
+
+test('National Air Photo Library is preferred when an equivalent official year is available',()=>{
+  assert.ok(NAPL_IMAGERY_PROVIDER.priority<TORONTO_IMAGERY_PROVIDER.priority);
+});
 
 const fixture=async name=>JSON.parse(await readFile(new URL(`./fixtures/imagery/${name}`,import.meta.url),'utf8'));
 const [mapService,torontoDirectory,ottawaDirectory,ontarioSource]=await Promise.all([

@@ -34,7 +34,7 @@ async function search({location,signal,fetchImpl=globalThis.fetch,domParserImpl}
 }
 
 export const NAPL_IMAGERY_PROVIDER=defineImageryProvider({
-  id:'napl',label:'National Air Photo Library (NAPL) historical imagery',organization:'Natural Resources Canada',priority:40,
+  id:'napl',label:'National Air Photo Library (NAPL) historical imagery',organization:'Natural Resources Canada',priority:5,
   coverage:COVERAGE,licenseUrl:LICENSE_URL,attribution:ATTRIBUTION,policy:'exportable',
   allowedOrigins:Object.freeze([ORIGIN,'https://open.canada.ca']),
   allowedRoots:Object.freeze([`${ORIGIN}/web/`,`${ORIGIN}/ows/`,'https://open.canada.ca/en/']),
