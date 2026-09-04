@@ -220,10 +220,17 @@ export async function exportCadPackage({
     if(item.mode==='manual'){
       const asset=await loadHistoricalAssetSnapshot({project:snapshotProject,item,assetStore,signal});if(!manualAssets.has(item.assetId)){manualBytes+=asset.metadata.size;if(manualBytes>MANUAL_SNAPSHOT_LIMIT)fail(`${code}: selected manual historical assets exceed the 32 MB resident snapshot limit.`);manualAssets.set(item.assetId,deepFreeze({metadata:{...asset.metadata},blob:asset.blob}));}
     }else{
-      const current=deepFreeze(structuredClone(await revalidateOfficial({project:snapshotProject,item,providers:snapshotProviders,signal,fetchImpl})));historicalImageryPlan({project:snapshotProject,item,geometry,providers:snapshotProviders,currentResult:current});officialResults.set(item.id,current);
+      try{
+        const current=deepFreeze(structuredClone(await revalidateOfficial({project:snapshotProject,item,providers:snapshotProviders,signal,fetchImpl})));historicalImageryPlan({project:snapshotProject,item,geometry,providers:snapshotProviders,currentResult:current});officialResults.set(item.id,current);
+      }catch(error){
+        if(error?.name==='AbortError')throw error;
+        const message=error instanceof Error?error.message:String(error);
+        if(!/timed out|timeout|network|fetch failed|http 5\d\d/i.test(message))throw error;
+        // Keep the item in the frozen page plan; PDF composition will emit a marked placeholder.
+      }
     }
   }
-  const historicalStore=snapshotStore(manualAssets),cachedOfficial=async({item})=>{const result=officialResults.get(item.id);if(!result)fail(`${historicalCode(item)}: current official result was not frozen during preflight.`);return result;};
+  const historicalStore=snapshotStore(manualAssets),cachedOfficial=async({item})=>officialResults.get(item.id)||null;
   const planned=await planPdfExport({project:snapshotProject,selection:snapshotSelection,codes:snapshotSelection.filter(item=>item.kind==='figure').map(item=>item.code),datasets:snapshotDatasets,companyProfile:snapshotProfile,dpi,signal,providers:snapshotProviders,assetStore:historicalStore,revalidateOfficial:cachedOfficial,fetchImpl});throwIfAborted(signal);onProgress({phase:'preflight',completed:1,total:1});
   const rasters=new Map(),compositionRequests=new Set(),activeDisposals=new Set();let imageBytes=normalizedLogo.bytes.byteLength,pixels=normalizedLogo.width*normalizedLogo.height;
   const wrap=(kind,composer)=>async args=>{

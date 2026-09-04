@@ -82,6 +82,13 @@ test('CAD export snapshots once, prevents duplicate clicks, maps phases, and res
   h.controller.destroy();h.dom.window.close();
 });
 
+test('CAD success reports historical sheets replaced by placeholders',async()=>{
+  const h=fixture({exportPackage:async()=>({blob:new Blob(['zip'],{type:'application/zip'}),filename:'package.zip',imageCount:2,pageCount:2,warnings:['H-2003-1: official image request timed out']})}),byId=id=>h.document.getElementById(id);
+  await h.controller.start();
+  assert.match(byId('exportProgress').textContent,/Downloaded.*warning|timed out/i);
+  h.controller.destroy();h.dom.window.close();
+});
+
 test('Cancel and Escape abort; late success never downloads and editing is restored',async()=>{
   for(const mode of ['button','escape']){
     const gate=deferred();let input;const h=fixture({exportPackage:args=>{input=args;return gate.promise;}}),byId=id=>h.document.getElementById(id);

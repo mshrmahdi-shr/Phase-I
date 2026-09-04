@@ -195,6 +195,16 @@ test('historical export snapshots item metadata and continues with a marked plac
   assert.equal(result.pageCount,3);assert.deepEqual(result.warnings,['H-1972-2: official archive failed']);assert.deepEqual(seen,['Immutable title','Failure title']);assert.deepEqual(disposed,['A','H1']);
 });
 
+test('historical preflight timeout does not block the complete export',async()=>{
+  const exportPdf=await engine(),p=project(),item=approvedOfficial('74f14168-4de6-4c5f-88f4-87db8ec731c2',1,'Timed out flight');
+  p.historical=[item];p.historicalSequenceCounters={'1972':1};
+  const result=await exportPdf({project:p,providers:[TORONTO_IMAGERY_PROVIDER],selection:[{kind:'historical',id:item.id}],
+    revalidateOfficial:async()=>{throw Error('official image request timed out');},
+    composeHistorical:async()=>{throw Error('preflight failure must become a placeholder');}});
+  assert.equal(result.pageCount,1);
+  assert.deepEqual(result.warnings,['H-1972-1: official image request timed out']);
+});
+
 test('cancellation during a historical sheet disposes its image and returns no PDF Blob',async()=>{
   const exportPdf=await engine(),p=project(),item=approvedOfficial('74f14168-4de6-4c5f-88f4-87db8ec731c2',1,'Cancelled flight'),controller=new AbortController(),disposed=[];p.historical=[item];p.historicalSequenceCounters={'1972':1};let result;
   await assert.rejects(async()=>{result=await exportPdf({project:p,providers:[TORONTO_IMAGERY_PROVIDER],selection:[{kind:'historical',id:item.id}],signal:controller.signal,

@@ -286,7 +286,7 @@ async function preparePagePlan({project,codes,selection,datasets={},companyProfi
   throwIfAborted(signal);const normalized=normalizeSelection(project,codes,selection),snapshot=structuredClone({project,datasets,companyProfile,companyLogoDataUrl});
   const selected=normalized.figureCodes,sheets=selected.map(code=>{try{return prepare(snapshot.project,code,snapshot.datasets,dpi,snapshot.companyProfile);}catch(error){throw new Error(`Figure ${code}: ${error.message}`,{cause:error});}});
   const historicalItems=normalized.historicalItems.map(selectedItem=>snapshot.project.historical.find(item=>item.id===selectedItem.id)),historicalSheets=[];
-  let ownedStore=null,store=assetStore,historicalAssetBytes=0;const historicalAssets=new Map(),officialResults=new Map();
+  let ownedStore=null,store=assetStore,historicalAssetBytes=0;const historicalAssets=new Map(),officialResults=new Map(),officialFailures=new Map();
   try{
     if(historicalItems.some(item=>item.mode==='manual')&&!store){ownedStore=createAssetStore();store=ownedStore;}
     for(const item of historicalItems){
@@ -294,7 +294,14 @@ async function preparePagePlan({project,codes,selection,datasets={},companyProfi
         const errors=validatePrintRequirements({project:snapshot.project,companyProfile:snapshot.companyProfile,figureCode:'A'});if(errors.length)throw new Error(errors.map(error=>error.message).join(' '));
         const geometry=historicalSheetGeometry(snapshot.project,item,dpi);
         if(item.mode==='official'){
-          const current=deepFreeze(structuredClone(await revalidateOfficial({project:snapshot.project,item,providers,signal,fetchImpl})));throwIfAborted(signal);historicalImageryPlan({project:snapshot.project,item,geometry,providers,currentResult:current});officialResults.set(item.id,current);
+          try{
+            const current=deepFreeze(structuredClone(await revalidateOfficial({project:snapshot.project,item,providers,signal,fetchImpl})));throwIfAborted(signal);historicalImageryPlan({project:snapshot.project,item,geometry,providers,currentResult:current});officialResults.set(item.id,current);
+          }catch(error){
+            if(error?.name==='AbortError')throw error;
+            const message=error instanceof Error?error.message:String(error);
+            if(!/timed out|timeout|network|fetch failed|http 5\d\d/i.test(message))throw error;
+            officialFailures.set(item.id,error instanceof Error?error.message:String(error));
+          }
         }else{
           const asset=await loadHistoricalAssetSnapshot({project:snapshot.project,item,assetStore:store,signal});if(!historicalAssets.has(item.assetId)){historicalAssetBytes+=asset.metadata.size;if(historicalAssetBytes>MAX_HISTORICAL_SNAPSHOT_BYTES)throw new Error(`${code}: selected manual historical assets exceed the 32 MB aggregate resident snapshot limit. Export fewer historical sheets together.`);historicalAssets.set(item.assetId,asset);}
         }
@@ -309,17 +316,17 @@ async function preparePagePlan({project,codes,selection,datasets={},companyProfi
   for(const sheet of historicalSheets)pages.push({kind:'historical',...sheet});const pagePlan=deepFreeze(pages);
   pagePlan.forEach((page,index)=>{try{const options={draw:false,companyProfile:snapshot.companyProfile,companyLogoDataUrl:snapshot.companyLogoDataUrl};if(page.kind==='map')renderMapPage(doc,snapshot.project,page,index,pagePlan.length,options);else if(page.kind==='legend')renderContinuationPage(doc,snapshot.project,page,index,pagePlan.length,options);else renderHistoricalPage(doc,snapshot.project,page,index,pagePlan.length,options);}catch(error){const label=page.kind==='historical'?page.code:`Figure ${page.code}`;throw new Error(`${label}: ${error.message}`,{cause:error});}});
   const snapshotStore=Object.freeze({async get(id){const asset=historicalAssets.get(id);return asset?{metadata:{...asset.metadata},blob:asset.blob}:null;}});
-  return {doc,pagePlan,selected,normalizedSelection:deepFreeze(normalized.selection),snapshot:deepFreeze(snapshot),mapCount:sheets.length+historicalSheets.length,historicalAssetStore:snapshotStore,officialResults};
+  return {doc,pagePlan,selected,normalizedSelection:deepFreeze(normalized.selection),snapshot:deepFreeze(snapshot),mapCount:sheets.length+historicalSheets.length,historicalAssetStore:snapshotStore,officialResults,officialFailures};
 }
 export async function planPdfExport(options){const {pagePlan,selected}=await preparePagePlan({...options,requireLogo:false});const continuationCounts=Object.fromEntries(selected.map(code=>[code,pagePlan.filter(page=>page.kind==='legend'&&page.code===code).length]));return deepFreeze({pageCount:pagePlan.length,continuationCounts});}
 
 /** Returns a complete PDF only; downloading belongs to the UI after its final abort check. */
 export async function exportCombinedPdf({project,codes,selection,datasets={},companyProfile,companyLogoDataUrl,dpi=300,onProgress=()=>{},signal,providers,assetStore,revalidateOfficial=revalidateHistoricalOfficialSource,fetchImpl=globalThis.fetch,compose=composeMap,composeHistorical=composeHistoricalImage}){
-  const prepared=await preparePagePlan({project,codes,selection,datasets,companyProfile,companyLogoDataUrl,dpi,signal,requireLogo:true,providers,assetStore,revalidateOfficial,fetchImpl}),{doc,pagePlan,selected,normalizedSelection,snapshot,mapCount,historicalAssetStore,officialResults}=prepared;let completedMaps=0;const warnings=[];
+  const prepared=await preparePagePlan({project,codes,selection,datasets,companyProfile,companyLogoDataUrl,dpi,signal,requireLogo:true,providers,assetStore,revalidateOfficial,fetchImpl}),{doc,pagePlan,selected,normalizedSelection,snapshot,mapCount,historicalAssetStore,officialResults,officialFailures}=prepared;let completedMaps=0;const warnings=[];
   for(let i=0;i<pagePlan.length;i++){
     const page=pagePlan[i],sheet=page.sheet;let image;try{
       throwIfAborted(signal);if(page.kind==='map'){onProgress({phase:'sheet',code:sheet.code,completed:completedMaps,total:mapCount});image=await compose({project:snapshot.project,code:sheet.code,features:sheet.features,geometry:sheet.geometry,signal,onProgress});throwIfAborted(signal);}
-      if(page.kind==='historical'){onProgress({phase:'sheet',code:page.code,completed:completedMaps,total:mapCount});image=await composeHistorical({project:snapshot.project,item:page.item,geometry:page.geometry,assetStore:historicalAssetStore,providers,currentOfficialResult:officialResults.get(page.item.id),signal,onProgress,fetchImpl});throwIfAborted(signal);}
+      if(page.kind==='historical'){onProgress({phase:'sheet',code:page.code,completed:completedMaps,total:mapCount});const preflightFailure=officialFailures.get(page.item.id);if(preflightFailure){warnings.push(`${page.code}: ${preflightFailure}`);image=failedHistoricalPlaceholder(page,new Error(preflightFailure));}else{image=await composeHistorical({project:snapshot.project,item:page.item,geometry:page.geometry,assetStore:historicalAssetStore,providers,currentOfficialResult:officialResults.get(page.item.id),signal,onProgress,fetchImpl});throwIfAborted(signal);}}
     }catch(error){
       if(page.kind==='historical'&&signal?.aborted!==true&&error?.name!=='AbortError'){
         warnings.push(`${page.code}: ${error.message}`);image=failedHistoricalPlaceholder(page,error);
