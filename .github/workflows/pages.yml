@@ -31,9 +31,11 @@ jobs:
       - name: Stage public files
         run: node scripts/build-site.mjs
       - name: Build local MRD128 cache
+        if: ${{ !contains(github.event.head_commit.message, '[spotdxf]') }}
         working-directory: _site
         run: node ../scripts/cache-mrd128.mjs
       - name: Build complete MRD126 With Lowlands cache
+        if: ${{ !contains(github.event.head_commit.message, '[spotdxf]') }}
         working-directory: _site
         run: node ../scripts/cache-mrd126.mjs
       - uses: actions/configure-pages@v5
