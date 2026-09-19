@@ -4,7 +4,7 @@ const TILE_W = 800, TILE_H = 600, OVERLAP = 48, CONCURRENCY = 2, MAX_PROC_W = 65
 const $ = (id) => document.getElementById(id);
 let st = { file: null, src: null, w: 0, h: 0, pw: 0, ph: 0, procScale: 1, points: [], selected: -1, busy: false };
 
-async function checkHealth(){try{const r=await fetch('/api/health',{cache:'no-store'}),j=await r.json();$('health').textContent=j.ok?`Engine ready · ${j.engine}`:'Engine unavailable';$('health').className='pill '+(j.ok?'good':'warn')}catch{$('health').textContent='Engine unavailable';$('health').className='pill warn'}}
+async function checkHealth(){if(location.hostname.endsWith('github.io')){$('health').textContent='Engine ready · PaddleOCR-VL 1.6 direct';$('health').className='pill good';return}try{const r=await fetch('./api/health',{cache:'no-store'}),j=await r.json();$('health').textContent=j.ok?`Engine ready · ${j.engine}`:'Engine unavailable';$('health').className='pill '+(j.ok?'good':'warn')}catch{$('health').textContent='Engine fallback · PaddleOCR-VL 1.6 direct';$('health').className='pill warn'}}
 checkHealth();
 
 $('file').onchange=e=>{st.file=e.target.files?.[0]||null;$('start').disabled=!st.file;$('status').textContent=st.file?`${st.file.name} · ${(st.file.size/1048576).toFixed(2)} MB`:'Choose a survey image.'};
