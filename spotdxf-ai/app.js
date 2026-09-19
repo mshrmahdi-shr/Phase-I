@@ -22,7 +22,25 @@ async function decode(file){
 }
 function tiles(w,h){const a=[],sx=TILE_W-OVERLAP,sy=TILE_H-OVERLAP;for(let y=0;y<h;y+=sy){for(let x=0;x<w;x+=sx){a.push({x,y,w:Math.min(TILE_W,w-x),h:Math.min(TILE_H,h-y)});if(x+TILE_W>=w)break}if(y+TILE_H>=h)break}return a}
 function tileData(src,t){const c=document.createElement('canvas');c.width=t.w;c.height=t.h;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.fillStyle='white';ctx.fillRect(0,0,t.w,t.h);ctx.drawImage(src,t.x,t.y,t.w,t.h,0,0,t.w,t.h);return{ctx,data:c.toDataURL('image/jpeg',.90)}}
-async function spot(data){const r=await fetch('/api/spot',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({imageDataUrl:data})});const j=await r.json();if(!r.ok||!j.ok)throw Error(j.error||'Spotting failed');return j}
+const PADDLE_BASE='https://paddlepaddle-paddleocr-vl-1-6-online-demo.hf.space/gradio_api';
+function dataUrlToBlob(data){const m=data.match(/^data:(image\\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);if(!m)throw Error('Invalid tile image');const bin=atob(m[2]);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return new Blob([bytes],{type:m[1]})}
+function parseSseComplete(text){const m=text.match(/event:\\s*complete\\s*\\ndata:\\s*(\\[[\\s\\S]*\\])\\s*$/m);if(!m){if(/event:\\s*error/.test(text))throw Error('PaddleOCR queue returned an error');throw Error('PaddleOCR did not return a completed result')}return JSON.parse(m[1])}
+async function spotDirect(data){
+ const blob=dataUrlToBlob(data),ext=blob.type.includes('png')?'png':'jpg',form=new FormData();form.append('files',blob,'tile.'+ext);
+ const up=await fetch(PADDLE_BASE+'/upload',{method:'POST',body:form});const upText=await up.text();if(!up.ok)throw Error('Paddle upload failed ('+up.status+')');
+ const path=JSON.parse(upText)?.[0];if(!path)throw Error('Paddle upload returned no path');
+ const file={path,orig_name:'tile.'+ext,mime_type:blob.type,meta:{_type:'gradio.FileData'}};
+ const submit=await fetch(PADDLE_BASE+'/call/run_spotting_wrapper',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({data:[file,null]})});
+ const submitText=await submit.text();if(!submit.ok)throw Error('Paddle submit failed ('+submit.status+')');
+ const eventId=JSON.parse(submitText)?.event_id;if(!eventId)throw Error('Paddle returned no event id');
+ const result=await fetch(PADDLE_BASE+'/call/run_spotting_wrapper/'+eventId);const resultText=await result.text();if(!result.ok)throw Error('Paddle result failed ('+result.status+')');
+ const payload=parseSseComplete(resultText);const spotting=JSON.parse(payload?.[1]||'{}');
+ return {ok:true,rec_texts:Array.isArray(spotting.rec_texts)?spotting.rec_texts:[],rec_polys:Array.isArray(spotting.rec_polys)?spotting.rec_polys:[],engine:'PaddleOCR-VL 1.6 Spotting'};
+}
+async function spot(data){
+ if(location.hostname.endsWith('github.io')) return spotDirect(data);
+ try{const r=await fetch('./api/spot',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({imageDataUrl:data})});const ct=r.headers.get('content-type')||'';if(!r.ok||!ct.includes('application/json'))throw Error('proxy unavailable');const j=await r.json();if(!j.ok)throw Error(j.error||'Spotting failed');return j}catch{return spotDirect(data)}
+}
 function grayAt(ctx,x,y){const d=ctx.getImageData(Math.max(0,x),Math.max(0,y),1,1).data;return .299*d[0]+.587*d[1]+.114*d[2]}
 function findDot(ctx,poly,w,h){if(!poly||poly.length<4)return null;const mid=(a,b)=>({x:(a[0]+b[0])/2,y:(a[1]+b[1])/2}),a=mid(poly[0],poly[3]),b=mid(poly[1],poly[2]);let vx=b.x-a.x,vy=b.y-a.y;const L=Math.hypot(vx,vy)||1;vx/=L;vy/=L;let best=null;for(const s of[{p:a,dx:-vx,dy:-vy},{p:b,dx:vx,dy:vy}])for(let d=4;d<=28;d+=2){const cx=Math.round(s.p.x+s.dx*d),cy=Math.round(s.p.y+s.dy*d);if(cx<6||cy<6||cx>=w-6||cy>=h-6)continue;let inner=0,ring=0;for(let yy=-5;yy<=5;yy++)for(let xx=-5;xx<=5;xx++){const dark=grayAt(ctx,cx+xx,cy+yy)<100;if(dark){ring++;if(Math.abs(xx)<=2&&Math.abs(yy)<=2)inner++}}const score=inner*2-ring*.35-d*.03;if(inner>=5&&ring<=38&&(!best||score>best.score))best={x:cx,y:cy,score}}return best&&best.score>4?best:null}
 function center(poly){return{x:poly.reduce((a,q)=>a+q[0],0)/poly.length,y:poly.reduce((a,q)=>a+q[1],0)/poly.length}}
