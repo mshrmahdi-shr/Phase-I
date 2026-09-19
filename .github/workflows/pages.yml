@@ -28,6 +28,9 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Run core tests
         run: pnpm test
+      - name: Run SpotDXF tests
+        working-directory: spotdxf-ai
+        run: npm test && node --check app.js && node --check api/spot.js
       - name: Stage public files
         run: node scripts/build-site.mjs
       - name: Build local MRD128 cache
