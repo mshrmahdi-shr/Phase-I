@@ -23,8 +23,8 @@ async function decode(file){
 function tiles(w,h){const a=[],sx=TILE_W-OVERLAP,sy=TILE_H-OVERLAP;for(let y=0;y<h;y+=sy){for(let x=0;x<w;x+=sx){a.push({x,y,w:Math.min(TILE_W,w-x),h:Math.min(TILE_H,h-y)});if(x+TILE_W>=w)break}if(y+TILE_H>=h)break}return a}
 function tileData(src,t){const c=document.createElement('canvas');c.width=t.w;c.height=t.h;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.fillStyle='white';ctx.fillRect(0,0,t.w,t.h);ctx.drawImage(src,t.x,t.y,t.w,t.h,0,0,t.w,t.h);return{ctx,data:c.toDataURL('image/jpeg',.90)}}
 const PADDLE_BASE='https://paddlepaddle-paddleocr-vl-1-6-online-demo.hf.space/gradio_api';
-function dataUrlToBlob(data){const m=data.match(/^data:(image\\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);if(!m)throw Error('Invalid tile image');const bin=atob(m[2]);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return new Blob([bytes],{type:m[1]})}
-function parseSseComplete(text){const m=text.match(/event:\\s*complete\\s*\\ndata:\\s*(\\[[\\s\\S]*\\])\\s*$/m);if(!m){if(/event:\\s*error/.test(text))throw Error('PaddleOCR queue returned an error');throw Error('PaddleOCR did not return a completed result')}return JSON.parse(m[1])}
+function dataUrlToBlob(data){const m=data.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);if(!m)throw Error('Invalid tile image');const bin=atob(m[2]);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return new Blob([bytes],{type:m[1]})}
+function parseSseComplete(text){const m=text.match(/event:\s*complete\s*\ndata:\s*(\[[\s\S]*\])\s*$/m);if(!m){if(/event:\s*error/.test(text))throw Error('PaddleOCR queue returned an error');throw Error('PaddleOCR did not return a completed result')}return JSON.parse(m[1])}
 async function spotDirect(data){
  const blob=dataUrlToBlob(data),ext=blob.type.includes('png')?'png':'jpg',form=new FormData();form.append('files',blob,'tile.'+ext);
  const up=await fetch(PADDLE_BASE+'/upload',{method:'POST',body:form});const upText=await up.text();if(!up.ok)throw Error('Paddle upload failed ('+up.status+')');
