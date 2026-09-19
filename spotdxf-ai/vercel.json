@@ -1,0 +1,9 @@
+{
+  "functions": {
+    "api/spot.js": {"maxDuration": 60},
+    "api/health.js": {"maxDuration": 10}
+  },
+  "headers": [
+    {"source": "/(.*)", "headers": [{"key": "X-Content-Type-Options", "value": "nosniff"}]}
+  ]
+}
