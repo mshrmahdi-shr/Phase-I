@@ -55,6 +55,9 @@ export async function buildSite({output=path.join(root,'_site'),revision=process
     .replace('src="app.js"',`src="${releaseUrl('app.js',revision)}"`));
   for(const name of ['app.js','styles.css','print-preflight.mjs'])await fs.copyFile(path.join(root,name),path.join(output,name));
   for(const name of ['src','data'])await fs.cp(path.join(root,name),path.join(output,name),{recursive:true});
+  // Publish the isolated SpotDXF subproject alongside the Phase-I site.
+  // SpotDXF remains self-contained under /spotdxf-ai and does not import Phase-I app code.
+  await fs.cp(path.join(root,'spotdxf-ai'),path.join(output,'spotdxf-ai'),{recursive:true});
   await fs.rm(path.join(output,'src/proj4-runtime.mjs'),{force:true});
   await fs.writeFile(path.join(output,'app.js'),releaseModuleSource(await fs.readFile(path.join(output,'app.js'),'utf8'),revision));
   await fs.writeFile(path.join(output,'print-preflight.mjs'),releaseModuleSource(await fs.readFile(path.join(output,'print-preflight.mjs'),'utf8'),revision));
