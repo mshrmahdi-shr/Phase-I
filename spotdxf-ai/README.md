@@ -36,3 +36,11 @@ Do not set the repository root as the Vercel project root; this folder is intent
 ## Confidentiality warning
 
 The current prototype sends OCR tiles to PaddlePaddle's public Hugging Face demo endpoint. Do not upload confidential company drawings unless that external processing is permitted. Production should replace `PADDLE_GRADIO_BASE` with a private GPU-hosted PaddleOCR-VL endpoint.
+
+## Civil 3D COGO export
+
+Use **Civil 3D PNEZD (.csv)** for the most predictable COGO-point import. The generated file is headerless and follows **Point Number, Northing, Easting, Elevation, Description**. The default raw description is `SPOT_ELEV`, so a Civil 3D Point Group can include points by Raw Description `SPOT_ELEV` (or the custom description entered in the UI). A LandXML COGO export is also provided. The 3D DXF remains available for generic CAD use, but DXF POINT entities are not Civil 3D COGO points and therefore are not the preferred input for Point Groups.
+
+## High-recall detection
+
+High Recall is enabled by default. It raises the processing width from 6500 px to 9000 px, increases tile overlap, sends lossless PNG OCR tiles, and upscales OCR tiles 1.35× before PaddleOCR-VL 1.6. OCR text polygons are mapped back to original-image coordinates. A broader local dot/cross search is then used to attach the elevation label to the survey mark. Labels without a plausible nearby survey mark remain orange REVIEW candidates instead of being silently exported as spot points.

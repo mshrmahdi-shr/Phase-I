@@ -1,9 +1,26 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpotDXF AI</title><link rel="stylesheet" href="./styles.css"><script src="./vendor/UTIF.js"></script></head>
 <body><main>
-<header><div><h1>SpotDXF <span>AI</span></h1><div class="muted">Survey image → PaddleOCR-VL 1.6 Spotting → reviewed 3D DXF</div></div><div id="health" class="pill">Checking engine…</div></header>
+<header><div><h1>SpotDXF <span>AI</span></h1><div class="muted">Survey image → high-recall PaddleOCR-VL 1.6 → Civil 3D COGO-ready export</div></div><div id="health" class="pill">Checking engine…</div></header>
 <section class="card top"><div><b>Upload survey drawing</b><div class="muted">TIFF / PNG / JPEG · no local installation</div></div><label class="filebtn"><input id="file" type="file" accept=".tif,.tiff,.png,.jpg,.jpeg,image/*">Choose file</label><button id="start" class="primary" disabled>Extract spot elevations</button><div class="progress"><span id="status">Choose a survey image.</span><div class="bar"><div id="bar"></div></div></div></section>
-<section id="work" class="workspace hidden"><section class="card viewer"><div class="head"><h2>Review points</h2><span id="count" class="muted"></span></div><div id="stage"><canvas id="preview"></canvas><div id="markers"></div></div><div class="note">Blue = likely point. Orange = review. Select a row, then click the drawing to move its point.</div></section>
-<aside class="card side"><h2>DXF setup</h2><label>Drawing scale 1 : <input id="scale" type="number" value="1500"></label><label>Scan DPI <input id="dpi" type="number" value="300"></label><label>Origin Easting <input id="originX" type="number" value="0" step=".01"></label><label>Origin Northing <input id="originY" type="number" value="0" step=".01"></label><div id="mpp" class="calc"></div><button id="csv" disabled>Download CSV</button><button id="dxf" class="primary" disabled>Download DXF</button><div id="exportNote" class="note">Export unlocks when at least one candidate is included.</div></aside>
+<section id="work" class="workspace hidden"><section class="card viewer"><div class="head"><h2>Review points</h2><span id="count" class="muted"></span></div><div id="stage"><canvas id="preview"></canvas><div id="markers"></div></div><div class="note">Blue = numeric elevation with a nearby dot/cross found. Orange = OCR candidate that still needs review. Select a row, then click the drawing to move its exact point.</div></section>
+<aside class="card side"><h2>Detection + Civil 3D</h2>
+<label>High recall <input id="highRecall" type="checkbox" checked></label>
+<label>Min elevation <input id="minElev" type="number" value="0" step=".01"></label>
+<label>Max elevation <input id="maxElev" type="number" value="999" step=".01"></label>
+<label>Drawing scale 1 : <input id="scale" type="number" value="1500"></label>
+<label>Scan DPI <input id="dpi" type="number" value="300"></label>
+<label>Origin Easting <input id="originX" type="number" value="0" step=".01"></label>
+<label>Origin Northing <input id="originY" type="number" value="0" step=".01"></label>
+<label>Start point # <input id="startPoint" type="number" value="1001" step="1"></label>
+<label>Raw Description <input id="description" type="text" value="SPOT_ELEV"></label>
+<div id="mpp" class="calc"></div>
+<button id="pnezd" class="primary" disabled>Civil 3D PNEZD (.csv)</button>
+<button id="landxml" disabled>Civil 3D COGO LandXML</button>
+<button id="dxf" disabled>3D DXF</button>
+<button id="csv" disabled>Review CSV</button>
+<div id="exportNote" class="note">Export unlocks when at least one verified point is included.</div>
+<div class="note"><b>Civil 3D:</b> Import the PNEZD file with <i>PNEZD (comma delimited)</i>. Then create a Point Group using Raw Description <b>SPOT_ELEV</b> (or the description you set above). DXF POINT entities alone are not Civil 3D COGO points.</div>
+</aside>
 <section class="card tablecard"><div class="head"><h2>Detected candidates</h2><button id="add">+ Add manually</button></div><div class="scroll"><table><thead><tr><th>Use</th><th>#</th><th>Elevation</th><th>X px</th><th>Y px</th><th>Engine text</th><th>Status</th><th></th></tr></thead><tbody id="rows"></tbody></table></div></section></section>
 </main><script type="module" src="./app.js"></script></body></html>

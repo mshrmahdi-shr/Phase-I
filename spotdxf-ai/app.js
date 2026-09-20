@@ -1,6 +1,6 @@
-import { parseElevationText, dedupePoints, metresPerPixel, buildCsv, buildDxf } from './lib/core.mjs';
+import { parseElevationText, dedupePoints, metresPerPixel, buildCsv, buildDxf, buildCivil3dPnezd, buildLandXml } from './lib/core.mjs';
 
-const TILE_W = 800, TILE_H = 600, OVERLAP = 48, CONCURRENCY = 2, MAX_PROC_W = 6500;
+const TILE_W = 800, TILE_H = 600, FAST_OVERLAP = 48, HIGH_OVERLAP = 110, CONCURRENCY = 2, FAST_MAX_PROC_W = 6500, HIGH_MAX_PROC_W = 9000, HIGH_OCR_UPSCALE = 1.35;
 const $ = (id) => document.getElementById(id);
 let st = { file: null, src: null, w: 0, h: 0, pw: 0, ph: 0, procScale: 1, points: [], selected: -1, busy: false };
 
@@ -10,18 +10,26 @@ checkHealth();
 $('file').onchange=e=>{st.file=e.target.files?.[0]||null;$('start').disabled=!st.file;$('status').textContent=st.file?`${st.file.name} · ${(st.file.size/1048576).toFixed(2)} MB`:'Choose a survey image.'};
 
 async function decode(file){
+  const maxProcW=$('highRecall')?.checked?HIGH_MAX_PROC_W:FAST_MAX_PROC_W;
   const lower=file.name.toLowerCase();
   if(lower.endsWith('.tif')||lower.endsWith('.tiff')||file.type==='image/tiff'){
     const buf=await file.arrayBuffer(); const ifds=UTIF.decode(buf); if(!ifds.length) throw Error('TIFF could not be decoded');
     UTIF.decodeImage(buf,ifds[0]); const rgba=UTIF.toRGBA8(ifds[0]); const w=ifds[0].width,h=ifds[0].height;
-    const scale=Math.min(1,MAX_PROC_W/w),pw=Math.max(1,Math.round(w*scale)),ph=Math.max(1,Math.round(h*scale));
+    const scale=Math.min(1,maxProcW/w),pw=Math.max(1,Math.round(w*scale)),ph=Math.max(1,Math.round(h*scale));
     const imageData=new ImageData(new Uint8ClampedArray(rgba.buffer,rgba.byteOffset,rgba.byteLength),w,h); const bmp=await createImageBitmap(imageData);
     const c=document.createElement('canvas');c.width=pw;c.height=ph;const ctx=c.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,pw,ph);ctx.drawImage(bmp,0,0,w,h,0,0,pw,ph);bmp.close();return{canvas:c,origW:w,origH:h,scale};
   }
-  const bmp=await createImageBitmap(file),w=bmp.width,h=bmp.height,scale=Math.min(1,MAX_PROC_W/w),pw=Math.round(w*scale),ph=Math.round(h*scale);const c=document.createElement('canvas');c.width=pw;c.height=ph;c.getContext('2d').drawImage(bmp,0,0,w,h,0,0,pw,ph);bmp.close();return{canvas:c,origW:w,origH:h,scale};
+  const bmp=await createImageBitmap(file),w=bmp.width,h=bmp.height,scale=Math.min(1,maxProcW/w),pw=Math.round(w*scale),ph=Math.round(h*scale);const c=document.createElement('canvas');c.width=pw;c.height=ph;c.getContext('2d').drawImage(bmp,0,0,w,h,0,0,pw,ph);bmp.close();return{canvas:c,origW:w,origH:h,scale};
 }
-function tiles(w,h){const a=[],sx=TILE_W-OVERLAP,sy=TILE_H-OVERLAP;for(let y=0;y<h;y+=sy){for(let x=0;x<w;x+=sx){a.push({x,y,w:Math.min(TILE_W,w-x),h:Math.min(TILE_H,h-y)});if(x+TILE_W>=w)break}if(y+TILE_H>=h)break}return a}
-function tileData(src,t){const c=document.createElement('canvas');c.width=t.w;c.height=t.h;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.fillStyle='white';ctx.fillRect(0,0,t.w,t.h);ctx.drawImage(src,t.x,t.y,t.w,t.h,0,0,t.w,t.h);return{ctx,data:c.toDataURL('image/jpeg',.90)}}
+function tiles(w,h,overlap){const a=[],sx=TILE_W-overlap,sy=TILE_H-overlap;for(let y=0;y<h;y+=sy){for(let x=0;x<w;x+=sx){a.push({x,y,w:Math.min(TILE_W,w-x),h:Math.min(TILE_H,h-y)});if(x+TILE_W>=w)break}if(y+TILE_H>=h)break}return a}
+function tileData(src,t,ocrScale=1){
+ const base=document.createElement('canvas');base.width=t.w;base.height=t.h;const ctx=base.getContext('2d',{willReadFrequently:true});
+ ctx.fillStyle='white';ctx.fillRect(0,0,t.w,t.h);ctx.drawImage(src,t.x,t.y,t.w,t.h,0,0,t.w,t.h);
+ if(ocrScale===1)return{ctx,data:base.toDataURL('image/png'),ocrScale:1};
+ const send=document.createElement('canvas');send.width=Math.max(1,Math.round(t.w*ocrScale));send.height=Math.max(1,Math.round(t.h*ocrScale));
+ const sctx=send.getContext('2d');sctx.fillStyle='white';sctx.fillRect(0,0,send.width,send.height);sctx.imageSmoothingEnabled=true;sctx.imageSmoothingQuality='high';sctx.drawImage(base,0,0,send.width,send.height);
+ return{ctx,data:send.toDataURL('image/png'),ocrScale};
+}
 const PADDLE_BASE='https://paddlepaddle-paddleocr-vl-1-6-online-demo.hf.space/gradio_api';
 function dataUrlToBlob(data){const m=data.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);if(!m)throw Error('Invalid tile image');const bin=atob(m[2]);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return new Blob([bytes],{type:m[1]})}
 function parseSseComplete(text){const m=text.match(/event:\s*complete\s*\ndata:\s*(\[[\s\S]*\])\s*$/m);if(!m){if(/event:\s*error/.test(text))throw Error('PaddleOCR queue returned an error');throw Error('PaddleOCR did not return a completed result')}return JSON.parse(m[1])}
@@ -41,16 +49,52 @@ async function spot(data){
  if(location.hostname.endsWith('github.io')) return spotDirect(data);
  try{const r=await fetch('./api/spot',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({imageDataUrl:data})});const ct=r.headers.get('content-type')||'';if(!r.ok||!ct.includes('application/json'))throw Error('proxy unavailable');const j=await r.json();if(!j.ok)throw Error(j.error||'Spotting failed');return j}catch{return spotDirect(data)}
 }
-function grayAt(ctx,x,y){const d=ctx.getImageData(Math.max(0,x),Math.max(0,y),1,1).data;return .299*d[0]+.587*d[1]+.114*d[2]}
-function findDot(ctx,poly,w,h){if(!poly||poly.length<4)return null;const mid=(a,b)=>({x:(a[0]+b[0])/2,y:(a[1]+b[1])/2}),a=mid(poly[0],poly[3]),b=mid(poly[1],poly[2]);let vx=b.x-a.x,vy=b.y-a.y;const L=Math.hypot(vx,vy)||1;vx/=L;vy/=L;let best=null;for(const s of[{p:a,dx:-vx,dy:-vy},{p:b,dx:vx,dy:vy}])for(let d=4;d<=28;d+=2){const cx=Math.round(s.p.x+s.dx*d),cy=Math.round(s.p.y+s.dy*d);if(cx<6||cy<6||cx>=w-6||cy>=h-6)continue;let inner=0,ring=0;for(let yy=-5;yy<=5;yy++)for(let xx=-5;xx<=5;xx++){const dark=grayAt(ctx,cx+xx,cy+yy)<100;if(dark){ring++;if(Math.abs(xx)<=2&&Math.abs(yy)<=2)inner++}}const score=inner*2-ring*.35-d*.03;if(inner>=5&&ring<=38&&(!best||score>best.score))best={x:cx,y:cy,score}}return best&&best.score>4?best:null}
+function findDot(ctx,poly,w,h){
+ if(!poly||poly.length<4)return null;
+ const xs=poly.map(p=>p[0]),ys=poly.map(p=>p[1]),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),pad=52;
+ const x0=Math.max(0,Math.floor(minX-pad)),y0=Math.max(0,Math.floor(minY-pad)),x1=Math.min(w-1,Math.ceil(maxX+pad)),y1=Math.min(h-1,Math.ceil(maxY+pad));
+ const rw=x1-x0+1,rh=y1-y0+1;if(rw<11||rh<11)return null;
+ const data=ctx.getImageData(x0,y0,rw,rh).data;
+ const dark=(x,y)=>{const lx=Math.round(x)-x0,ly=Math.round(y)-y0;if(lx<0||ly<0||lx>=rw||ly>=rh)return false;const i=(ly*rw+lx)*4;return (.299*data[i]+.587*data[i+1]+.114*data[i+2])<115};
+ const distRect=(x,y)=>{const dx=x<minX?minX-x:x>maxX?x-maxX:0,dy=y<minY?minY-y:y>maxY?y-maxY:0;return Math.hypot(dx,dy)};
+ let best=null;
+ for(let cy=y0+5;cy<=y1-5;cy+=2)for(let cx=x0+5;cx<=x1-5;cx+=2){
+   if(cx>=minX-3&&cx<=maxX+3&&cy>=minY-3&&cy<=maxY+3)continue;
+   const distance=distRect(cx,cy);if(distance<2||distance>48)continue;
+   let inner=0,outer=0,hLine=0,vLine=0;
+   for(let yy=-5;yy<=5;yy++)for(let xx=-5;xx<=5;xx++)if(dark(cx+xx,cy+yy)){outer++;if(Math.abs(xx)<=2&&Math.abs(yy)<=2)inner++}
+   for(let k=-4;k<=4;k++){if(dark(cx+k,cy))hLine++;if(dark(cx,cy+k))vLine++}
+   const dotLike=inner>=7&&outer<=58;
+   const crossLike=hLine>=5&&vLine>=5&&outer<=50;
+   if(!dotLike&&!crossLike)continue;
+   const score=inner*1.8+Math.min(hLine,vLine)*1.2-outer*.22-distance*.05;
+   if(!best||score>best.score)best={x:cx,y:cy,score,type:crossLike?'cross':'dot'};
+ }
+ return best&&best.score>3.5?best:null;
+}
 function center(poly){return{x:poly.reduce((a,q)=>a+q[0],0)/poly.length,y:poly.reduce((a,q)=>a+q[1],0)/poly.length}}
-function candidates(j,t,ctx){const out=[],texts=j.rec_texts||[],polys=j.rec_polys||[];for(let i=0;i<Math.min(texts.length,polys.length);i++){const parsed=parseElevationText(texts[i]);if(!parsed.length)continue;const poly=polys[i].map(q=>[Number(q[0]),Number(q[1])]),c=center(poly),dot=findDot(ctx,poly,t.w,t.h);parsed.forEach((p,k)=>{let lx=dot?dot.x:c.x,ly=dot?dot.y:c.y;if(parsed.length>1&&!dot){const a=poly[0],b=poly[1],f=(k+.5)/parsed.length;lx=a[0]+(b[0]-a[0])*f;ly=a[1]+(b[1]-a[1])*f}const valid=p.validRange;const likelyContour=p.roundHundredth&&!dot;out.push({value:valid?p.value:null,raw:p.raw,rawFull:String(texts[i]),x:(t.x+lx)/st.procScale,y:(t.y+ly)/st.procScale,status:(valid&&dot&&!likelyContour&&parsed.length===1)?'OK':'REVIEW',include:valid&&!likelyContour,confidence:valid&&dot?.92:valid?.62:.35})})}return out}
+function candidates(j,t,ctx,ocrScale=1){
+ const out=[],texts=j.rec_texts||[],polys=j.rec_polys||[];
+ const minElev=Number($('minElev')?.value||0),maxElev=Number($('maxElev')?.value||999);
+ for(let i=0;i<Math.min(texts.length,polys.length);i++){
+  const parsed=parseElevationText(texts[i]);if(!parsed.length)continue;
+  const poly=polys[i].map(q=>[Number(q[0])/ocrScale,Number(q[1])/ocrScale]),c=center(poly),dot=findDot(ctx,poly,t.w,t.h);
+  parsed.forEach((p,k)=>{
+   let lx=dot?dot.x:c.x,ly=dot?dot.y:c.y;
+   if(parsed.length>1&&!dot){const a=poly[0],b=poly[1],f=(k+.5)/parsed.length;lx=a[0]+(b[0]-a[0])*f;ly=a[1]+(b[1]-a[1])*f}
+   const valid=p.validRange&&p.value>=minElev&&p.value<=maxElev;
+   const auto=valid&&!!dot&&parsed.length===1;
+   out.push({value:valid?p.value:null,raw:p.raw,rawFull:String(texts[i]),x:(t.x+lx)/st.procScale,y:(t.y+ly)/st.procScale,status:auto?'OK':'REVIEW',include:auto,confidence:auto?.95:valid?.58:.25,markType:dot?.type||null});
+  });
+ }
+ return out;
+}
 async function pool(items,worker,limit){let idx=0,done=0;async function one(){while(true){const i=idx++;if(i>=items.length)return;try{await worker(items[i],i)}catch(e){console.warn(e)}done++;$('bar').style.width=(done/items.length*100).toFixed(1)+'%';$('status').textContent=`Processing tile ${done} / ${items.length} · ${st.points.length} candidates`}}await Promise.all(Array.from({length:limit},one))}
 
-$('start').onclick=async()=>{if(!st.file||st.busy)return;st.busy=true;$('start').disabled=true;$('csv').disabled=$('dxf').disabled=true;st.points=[];$('bar').style.width='0%';try{$('status').textContent='Decoding image…';const dec=await decode(st.file);st.src=dec.canvas;st.w=dec.origW;st.h=dec.origH;st.pw=dec.canvas.width;st.ph=dec.canvas.height;st.procScale=dec.scale;const pv=$('preview'),sc=Math.min(1,1800/st.pw);pv.width=Math.round(st.pw*sc);pv.height=Math.round(st.ph*sc);pv.getContext('2d').drawImage(st.src,0,0,pv.width,pv.height);$('work').classList.remove('hidden');const ts=tiles(st.pw,st.ph);await pool(ts,async(t)=>{const z=tileData(st.src,t),j=await spot(z.data);st.points=dedupePoints(st.points.concat(candidates(j,t,z.ctx)));renderTable();renderMarkers()},CONCURRENCY);$('bar').style.width='100%';renderTable();renderMarkers();updateExport();$('status').textContent=`DONE · ${st.points.length} numeric candidates · ${selected().length} included · ${ts.length} tiles · ${Math.round(st.procScale*100)}% OCR scale`}catch(e){$('status').textContent='ERROR: '+e.message;$('bar').style.width='0%'}finally{st.busy=false;$('start').disabled=!st.file}};
+$('start').onclick=async()=>{if(!st.file||st.busy)return;st.busy=true;$('start').disabled=true;for(const id of ['csv','dxf','pnezd','landxml'])$(id).disabled=true;st.points=[];$('bar').style.width='0%';try{$('status').textContent='Decoding image…';const dec=await decode(st.file);st.src=dec.canvas;st.w=dec.origW;st.h=dec.origH;st.pw=dec.canvas.width;st.ph=dec.canvas.height;st.procScale=dec.scale;const pv=$('preview'),sc=Math.min(1,1800/st.pw);pv.width=Math.round(st.pw*sc);pv.height=Math.round(st.ph*sc);pv.getContext('2d').drawImage(st.src,0,0,pv.width,pv.height);$('work').classList.remove('hidden');const high=$('highRecall').checked,overlap=high?HIGH_OVERLAP:FAST_OVERLAP,ocrScale=high?HIGH_OCR_UPSCALE:1;const ts=tiles(st.pw,st.ph,overlap);await pool(ts,async(t)=>{const z=tileData(st.src,t,ocrScale),j=await spot(z.data);st.points=dedupePoints(st.points.concat(candidates(j,t,z.ctx,z.ocrScale)));renderTable();renderMarkers()},CONCURRENCY);$('bar').style.width='100%';renderTable();renderMarkers();updateExport();$('status').textContent=`DONE · ${st.points.length} numeric candidates · ${selected().length} auto-included spot points · ${ts.length} tiles · ${high?'HIGH RECALL':'FAST'} · ${Math.round(st.procScale*100)}% base scale`}catch(e){$('status').textContent='ERROR: '+e.message;$('bar').style.width='0%'}finally{st.busy=false;$('start').disabled=!st.file}};
 
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function renderTable(){const b=$('rows');b.innerHTML='';st.points.forEach((p,i)=>{const tr=document.createElement('tr');if(i===st.selected)tr.className='sel';tr.innerHTML=`<td><input data-use type="checkbox" ${p.include?'checked':''}></td><td>${i+1}</td><td><input data-val type="number" step=".01" value="${p.value??''}"></td><td><input data-x type="number" step="1" value="${Math.round(p.x)}"></td><td><input data-y type="number" step="1" value="${Math.round(p.y)}"></td><td>${escapeHtml(p.rawFull)}</td><td class="${p.status==='OK'?'oktxt':'revtxt'}">${p.status}</td><td><button data-del>×</button></td>`;tr.onclick=()=>{st.selected=i;renderTable();renderMarkers()};tr.querySelector('[data-use]').onchange=e=>{e.stopPropagation();p.include=e.target.checked;updateExport()};tr.querySelector('[data-val]').onchange=e=>{p.value=Number(e.target.value);p.status='REVIEW';updateExport()};tr.querySelector('[data-x]').onchange=e=>{p.x=Number(e.target.value);renderMarkers()};tr.querySelector('[data-y]').onchange=e=>{p.y=Number(e.target.value);renderMarkers()};tr.querySelector('[data-del]').onclick=e=>{e.stopPropagation();st.points.splice(i,1);renderTable();renderMarkers();updateExport()};b.appendChild(tr)});$('count').textContent=st.points.length+' candidates'}
 function renderMarkers(){const host=$('markers'),pv=$('preview'),stage=$('stage');host.innerHTML='';const r=pv.getBoundingClientRect(),sr=stage.getBoundingClientRect();host.style.position='absolute';host.style.left=(r.left-sr.left+stage.scrollLeft)+'px';host.style.top=(r.top-sr.top+stage.scrollTop)+'px';host.style.width=r.width+'px';host.style.height=r.height+'px';st.points.forEach((p,i)=>{const m=document.createElement('div');m.className='marker '+(p.status==='OK'?'':'review')+(i===st.selected?' selected':'');m.style.left=(p.x/st.w*100)+'%';m.style.top=(p.y/st.h*100)+'%';m.title=`${p.value??p.raw} · ${p.status}`;m.onclick=e=>{e.stopPropagation();st.selected=i;renderTable();renderMarkers()};host.appendChild(m)})}
 window.addEventListener('resize',renderMarkers);$('stage').onclick=e=>{if(st.selected<0||!st.w)return;const r=$('preview').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)return;const p=st.points[st.selected];p.x=(e.clientX-r.left)/r.width*st.w;p.y=(e.clientY-r.top)/r.height*st.h;p.status='REVIEW';renderTable();renderMarkers()};$('add').onclick=()=>{if(!st.w)return;st.points.push({value:null,raw:'manual',rawFull:'manual',x:st.w/2,y:st.h/2,status:'REVIEW',include:false,confidence:1});st.selected=st.points.length-1;renderTable();renderMarkers()};
-function opts(){return{imageHeight:st.h,scale:Number($('scale').value),dpi:Number($('dpi').value),originX:Number($('originX').value||0),originY:Number($('originY').value||0)}}function selected(){return st.points.filter(p=>p.include&&Number.isFinite(p.value))}function updateMpp(){$('mpp').textContent=`Scale conversion: ${metresPerPixel($('scale').value,$('dpi').value).toFixed(6)} m/pixel`}$('scale').oninput=$('dpi').oninput=updateMpp;updateMpp();function updateExport(){const n=selected().length;$('csv').disabled=$('dxf').disabled=n===0;$('exportNote').textContent=n?`${n} points will be exported.`:'No included valid points yet.'}function dl(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),3000)}$('csv').onclick=()=>{if(!selected().length)return;dl((st.file?.name||'survey').replace(/\.[^.]+$/,'')+'_spots.csv',buildCsv(st.points,opts()),'text/csv')};$('dxf').onclick=()=>{if(!selected().length)return;dl((st.file?.name||'survey').replace(/\.[^.]+$/,'')+'_spots.dxf',buildDxf(st.points,opts()),'application/dxf')};
+function opts(){return{imageHeight:st.h,scale:Number($('scale').value),dpi:Number($('dpi').value),originX:Number($('originX').value||0),originY:Number($('originY').value||0),startPoint:Number($('startPoint').value||1),description:$('description').value||'SPOT_ELEV'}}function selected(){return st.points.filter(p=>p.include&&Number.isFinite(p.value))}function updateMpp(){$('mpp').textContent=`Scale conversion: ${metresPerPixel($('scale').value,$('dpi').value).toFixed(6)} m/pixel`}$('scale').oninput=$('dpi').oninput=updateMpp;updateMpp();function updateExport(){const n=selected().length;for(const id of ['csv','dxf','pnezd','landxml'])$(id).disabled=n===0;$('exportNote').textContent=n?`${n} points will be exported. Civil 3D Raw Description: ${$('description').value||'SPOT_ELEV'}`:'No included valid points yet.'}function dl(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),3000)}$('csv').onclick=()=>{if(!selected().length)return;dl((st.file?.name||'survey').replace(/\.[^.]+$/,'')+'_spots_review.csv',buildCsv(st.points,opts()),'text/csv')};$('pnezd').onclick=()=>{if(!selected().length)return;dl((st.file?.name||'survey').replace(/\.[^.]+$/,'')+'_Civil3D_PNEZD.csv',buildCivil3dPnezd(st.points,opts()),'text/csv')};$('landxml').onclick=()=>{if(!selected().length)return;dl((st.file?.name||'survey').replace(/\.[^.]+$/,'')+'_Civil3D_COGO.xml',buildLandXml(st.points,opts()),'application/xml')};$('dxf').onclick=()=>{if(!selected().length)return;dl((st.file?.name||'survey').replace(/\.[^.]+$/,'')+'_spots_3D.dxf',buildDxf(st.points,opts()),'application/dxf')};$('description').oninput=updateExport;
