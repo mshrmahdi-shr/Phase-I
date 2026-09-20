@@ -114,3 +114,67 @@ export function buildDxf(points, opts) {
   }
   return `${dxf}0\nENDSEC\n0\nEOF\n`;
 }
+
+
+function dxfPair(code, value) {
+  return `${code}\n${value}\n`;
+}
+
+export function buildCivil3dSoftdeskDxf(points, opts) {
+  const selected = selectedPoints(points);
+  const start = pointStart(opts);
+  const description = cleanDescription(opts?.description);
+  const textHeight = Number.isFinite(Number(opts?.textHeight)) && Number(opts.textHeight) > 0 ? Number(opts.textHeight) : 0.8;
+  let dxf = '';
+
+  dxf += dxfPair(0, 'SECTION') + dxfPair(2, 'HEADER');
+  dxf += dxfPair(9, '$ACADVER') + dxfPair(1, 'AC1009');
+  dxf += dxfPair(0, 'ENDSEC');
+
+  dxf += dxfPair(0, 'SECTION') + dxfPair(2, 'TABLES');
+  dxf += dxfPair(0, 'TABLE') + dxfPair(2, 'LAYER') + dxfPair(70, 2);
+  dxf += dxfPair(0, 'LAYER') + dxfPair(2, '0') + dxfPair(70, 0) + dxfPair(62, 7) + dxfPair(6, 'CONTINUOUS');
+  dxf += dxfPair(0, 'LAYER') + dxfPair(2, 'SPOT_ELEVATIONS') + dxfPair(70, 0) + dxfPair(62, 2) + dxfPair(6, 'CONTINUOUS');
+  dxf += dxfPair(0, 'ENDTAB') + dxfPair(0, 'ENDSEC');
+
+  // Autodesk Civil 3D recognises legacy Softdesk point blocks when the
+  // block is named POINT and contains ELEV, POINT and DESC attributes.
+  dxf += dxfPair(0, 'SECTION') + dxfPair(2, 'BLOCKS');
+  dxf += dxfPair(0, 'BLOCK') + dxfPair(8, '0') + dxfPair(2, 'POINT') + dxfPair(70, 2)
+      + dxfPair(10, 0) + dxfPair(20, 0) + dxfPair(30, 0) + dxfPair(3, 'POINT') + dxfPair(1, '');
+
+  const attdef = (tag, prompt, x, y) =>
+    dxfPair(0, 'ATTDEF') + dxfPair(8, '0')
+    + dxfPair(10, x) + dxfPair(20, y) + dxfPair(30, 0)
+    + dxfPair(40, textHeight) + dxfPair(1, '') + dxfPair(3, prompt)
+    + dxfPair(2, tag) + dxfPair(70, 0);
+
+  dxf += attdef('ELEV', 'Elevation', 0.8, 0.8);
+  dxf += attdef('POINT', 'Point Number', 0.8, 0.0);
+  dxf += attdef('DESC', 'Description', 0.8, -0.8);
+  dxf += dxfPair(0, 'ENDBLK') + dxfPair(8, '0');
+  dxf += dxfPair(0, 'ENDSEC');
+
+  dxf += dxfPair(0, 'SECTION') + dxfPair(2, 'ENTITIES');
+
+  selected.forEach((p, i) => {
+    const w = toWorld(p, opts.imageHeight, opts.scale, opts.dpi, opts.originX, opts.originY);
+    const pointNo = start + i;
+    dxf += dxfPair(0, 'INSERT') + dxfPair(8, 'SPOT_ELEVATIONS') + dxfPair(2, 'POINT')
+      + dxfPair(66, 1) + dxfPair(10, w.x.toFixed(4)) + dxfPair(20, w.y.toFixed(4)) + dxfPair(30, w.z.toFixed(3))
+      + dxfPair(41, 1) + dxfPair(42, 1) + dxfPair(43, 1) + dxfPair(50, 0);
+
+    const attrib = (tag, value, dx, dy) =>
+      dxfPair(0, 'ATTRIB') + dxfPair(8, 'SPOT_ELEVATIONS')
+      + dxfPair(10, (w.x + dx).toFixed(4)) + dxfPair(20, (w.y + dy).toFixed(4)) + dxfPair(30, w.z.toFixed(3))
+      + dxfPair(40, textHeight) + dxfPair(1, value) + dxfPair(2, tag) + dxfPair(70, 0);
+
+    dxf += attrib('ELEV', w.z.toFixed(3), 0.8, 0.8);
+    dxf += attrib('POINT', String(pointNo), 0.8, 0.0);
+    dxf += attrib('DESC', description, 0.8, -0.8);
+    dxf += dxfPair(0, 'SEQEND') + dxfPair(8, 'SPOT_ELEVATIONS');
+  });
+
+  dxf += dxfPair(0, 'ENDSEC') + dxfPair(0, 'EOF');
+  return dxf;
+}

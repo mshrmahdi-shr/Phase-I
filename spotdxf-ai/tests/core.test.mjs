@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseElevationText, buildCsv, buildDxf, buildCivil3dPnezd, buildLandXml, metresPerPixel } from '../lib/core.mjs';
+import { parseElevationText, buildCsv, buildDxf, buildCivil3dPnezd, buildLandXml, buildCivil3dSoftdeskDxf, metresPerPixel } from '../lib/core.mjs';
 
 test('parses 2 and 3 digit survey elevations', () => {
   const p = parseElevationText('179.08 79.07 178.00');
@@ -40,4 +40,19 @@ test('LandXML exports COGO point name, description, northing/easting/elevation',
   assert.match(xml, /<CgPoints>/);
   assert.match(xml, /<CgPoint name="5001" desc="SPOT_ELEV" code="SPOT_ELEV">/);
   assert.match(xml, /181\.840<\/CgPoint>/);
+});
+
+
+test('Civil 3D DXF uses Softdesk POINT block with ELEV POINT DESC attributes', () => {
+  const points = [{include:true,value:181.84,x:100,y:200,status:'OK'}];
+  const opts = {imageHeight:1000,scale:1500,dpi:300,originX:500000,originY:4800000,startPoint:5001,description:'SPOT_ELEV'};
+  const dxf = buildCivil3dSoftdeskDxf(points, opts);
+  assert.match(dxf, /2\nPOINT\n70\n2\n/);
+  assert.match(dxf, /2\nELEV\n/);
+  assert.match(dxf, /2\nPOINT\n/);
+  assert.match(dxf, /2\nDESC\n/);
+  assert.match(dxf, /1\n181\.840\n2\nELEV\n/);
+  assert.match(dxf, /1\n5001\n2\nPOINT\n/);
+  assert.match(dxf, /1\nSPOT_ELEV\n2\nDESC\n/);
+  assert.match(dxf, /0\nINSERT\n8\nSPOT_ELEVATIONS\n2\nPOINT\n66\n1\n/);
 });

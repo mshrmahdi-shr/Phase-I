@@ -17,10 +17,10 @@
 <div id="mpp" class="calc"></div>
 <button id="pnezd" class="primary" disabled>Civil 3D PNEZD (.csv)</button>
 <button id="landxml" disabled>Civil 3D COGO LandXML</button>
-<button id="dxf" disabled>3D DXF</button>
+<button id="dxf" class="primary" disabled>Civil 3D POINT DXF</button>
 <button id="csv" disabled>Review CSV</button>
 <div id="exportNote" class="note">Export unlocks when at least one verified point is included.</div>
-<div class="note"><b>Civil 3D:</b> Import the PNEZD file with <i>PNEZD (comma delimited)</i>. Then create a Point Group using Raw Description <b>SPOT_ELEV</b> (or the description you set above). DXF POINT entities alone are not Civil 3D COGO points.</div>
+<div class="note"><b>Civil 3D DXF:</b> The DXF now uses a legacy Softdesk-compatible block named <b>POINT</b> with <b>ELEV / POINT / DESC</b> attributes. Open the DXF in Civil 3D, then use <b>Home → Create Ground Data → Points → Replace Softdesk Point Blocks</b>. Civil 3D converts them to real COGO points and keeps the elevation + raw description. Then create a Point Group using Raw Description <b>SPOT_ELEV</b> (or your custom description).</div>
 </aside>
 <section class="card tablecard"><div class="head"><h2>Detected candidates</h2><button id="add">+ Add manually</button></div><div class="scroll"><table><thead><tr><th>Use</th><th>#</th><th>Elevation</th><th>X px</th><th>Y px</th><th>Engine text</th><th>Status</th><th></th></tr></thead><tbody id="rows"></tbody></table></div></section></section>
 </main><script type="module" src="./app.js"></script></body></html>
