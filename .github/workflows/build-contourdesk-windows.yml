@@ -14,24 +14,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Extract source
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path buildsrc | Out-Null
-          python -m zipfile -e ContourDesk/ContourDesk_v0.1_clean.zip buildsrc
       - name: Install dependencies
-        working-directory: buildsrc
+        working-directory: ContourDesk
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller pytest
+          pip install -r requirements.txt pyinstaller
       - name: Test
-        working-directory: buildsrc
+        working-directory: ContourDesk
         run: python -m pytest -q
       - name: Build portable EXE
-        working-directory: buildsrc
+        working-directory: ContourDesk
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name ContourDesk --collect-all skimage --collect-all scipy --collect-all ezdxf app.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name ContourDesk --collect-all cv2 --collect-all ezdxf --collect-all fitz app.py
       - uses: actions/upload-artifact@v4
         with:
           name: ContourDesk-Windows
-          path: buildsrc/dist/ContourDesk.exe
+          path: ContourDesk/dist/ContourDesk.exe

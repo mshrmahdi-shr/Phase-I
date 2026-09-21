@@ -1,22 +1,33 @@
 # ContourDesk
 
-Clean-room desktop raster-to-vector prototype inspired by the documented workflow of classic map digitizers such as R2V. No proprietary R2V source code is copied.
+ContourDesk is a clean-room desktop raster-to-vector application built from scratch after inspecting the packaging of the supplied R2V installer and studying the public R2V workflow documentation. It does **not** copy R2V's proprietary source code or algorithms.
 
-## What is included
+The supplied installer is an Inno Setup 6.7.0 Windows package, signed by Able Software LLC; the loader was built with Embarcadero Delphi for Win32. The compressed application payload does not disclose the proprietary tracing implementation.
 
-- Two-click Auto Trace with continuity-based line following and small-gap bridging.
-- Multi Trace: draw a cut line across many contours and trace the crossings.
-- Contour labeling: draw across contours, enter starting elevation and interval, and assign Z values sequentially.
-- Semantic layers for contours, buildings, property boundaries, and miscellaneous linework.
+ContourDesk reproduces the useful workflow concepts for survey/topographic scans:
+
+- Prepare/threshold and skeletonize TIFF/PNG/JPEG/PDF maps.
+- **Auto Trace (2 clicks):** click twice on the same contour to give the tracer direction/context.
+- **Multi Trace:** draw a crossing line and trace several intersected contour lines.
+- **Label Contours:** draw a crossing line, enter starting elevation and contour interval.
+- Manual contour/building/property-boundary digitizing on separate layers.
+- Buildings and boundaries export at Z=0.
 - Manual spot elevations.
-- Civil 3D-friendly DXF export:
-  - 3D contour polylines with Z,
-  - buildings/boundaries at Z=0,
-  - Softdesk-compatible POINT blocks with ELEV / POINT / DESC attributes for conversion to COGO points.
-- TIFF/PNG/JPEG/PDF input.
 - Project save/load.
-- Portable Windows EXE build workflow via GitHub Actions.
+- Civil 3D DXF export with 3D contour polylines and Softdesk-compatible POINT blocks containing ELEV / POINT / DESC attributes, so Civil 3D can convert them to COGO points.
 
-Source package: `ContourDesk_v0.1_clean.zip`.
+This semi-automatic design is intentional: on one-bit survey scans, contour lines, building edges, property lines, symbols and text are all black. A user seed is much safer than pretending a fully automatic classifier can reliably separate every feature.
 
-The supplied `r2vsetup.exe` was inspected statically only. It is an Inno Setup 6.7.0 installer whose loader is built with Embarcadero Delphi for Win32. The proprietary application payload is compressed, so the installer itself does not reveal the R2V tracing algorithm. The workflow implemented here comes from public R2V documentation and is reimplemented from scratch.
+## Windows build
+
+GitHub Actions builds a portable `ContourDesk.exe`. Open the workflow artifact named **ContourDesk-Windows**.
+
+## Usage
+
+1. Open TIFF/PDF.
+2. Click **Prepare**.
+3. Select **Auto Trace** and click twice along one contour.
+4. Use **Multi Trace** for a family of contours.
+5. Use **Label Contours** across the traced contours.
+6. Trace buildings/boundaries on their dedicated layers.
+7. Export Civil 3D DXF.
