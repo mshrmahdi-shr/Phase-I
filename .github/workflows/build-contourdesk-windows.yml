@@ -18,7 +18,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path buildsrc | Out-Null
-          Expand-Archive -Path ContourDesk/ContourDesk_v0.1_clean.zip -DestinationPath buildsrc -Force
+          python -m zipfile -e ContourDesk/ContourDesk_v0.1_clean.zip buildsrc
       - name: Install dependencies
         working-directory: buildsrc
         run: |
