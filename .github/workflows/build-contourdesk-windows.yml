@@ -1,0 +1,37 @@
+name: Build ContourDesk Windows
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ContourDesk/**'
+      - '.github/workflows/build-contourdesk-windows.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Extract source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path buildsrc | Out-Null
+          Expand-Archive -Path ContourDesk/ContourDesk_v0.1_clean.zip -DestinationPath buildsrc -Force
+      - name: Install dependencies
+        working-directory: buildsrc
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pytest
+      - name: Test
+        working-directory: buildsrc
+        run: python -m pytest -q
+      - name: Build portable EXE
+        working-directory: buildsrc
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed --name ContourDesk --collect-all skimage --collect-all scipy --collect-all ezdxf app.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ContourDesk-Windows
+          path: buildsrc/dist/ContourDesk.exe
