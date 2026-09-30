@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Borehole Section SaaS</title>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<header>
+  <div><strong>Borehole Section SaaS</strong><span class="badge">Web MVP 0.2.0</span></div>
+  <div class="privacy">Stateless processing · files are not retained</div>
+</header>
+<main>
+<section class="panel controls">
+  <h2>1. Project files</h2>
+  <label>Plan DXF<input id="planFile" type="file" accept=".dxf" /></label>
+  <label>Borehole logs PDF<input id="logFiles" type="file" accept=".pdf" multiple /></label>
+  <div class="row"><button id="newProject">New project</button><button id="uploadAll">Parse files</button></div>
+  <div id="uploadStatus" class="status"></div>
+
+  <h2>2. Draw section</h2>
+  <div class="row"><button id="drawMode">Draw section</button><button id="clearSection">Clear</button></div>
+  <p class="hint">Click 2 or more points on the plan. Double-click or press “Finish” when done.</p>
+  <button id="finishSection">Finish line</button>
+  <label>Section name<input id="sectionName" value="A-A'" /></label>
+  <label>Metres per DXF unit<input id="metersPerUnit" type="number" step="0.0001" value="1" /></label>
+  <label>Vertical exaggeration<select id="vex"><option>1</option><option>2</option><option>5</option></select></label>
+
+  <h2>3. Boreholes</h2>
+  <label>Manual borehole point<select id="manualBh"></select></label>
+  <button id="assignMode">Assign selected BH by clicking plan</button>
+  <div id="bhList" class="bhlist"></div>
+  <button id="generate">Generate DXF</button>
+  <a id="download" class="download hidden">Download section DXF</a>
+</section>
+
+<section class="panel viewer">
+  <div class="toolbar"><span>Plan workspace</span><span id="cursor"></span></div>
+  <canvas id="planCanvas"></canvas>
+  <div id="warnings" class="warnings"></div>
+</section>
+
+<section class="panel qa">
+  <h2>Extraction QA</h2>
+  <div id="qa"></div>
+  <div class="note">Red analytical text found in the plan is treated as an exceedance. The generated section uses the sample interval from the plan table when available and draws the red spot at the same vertical interval.</div>
+</section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
