@@ -1,5 +1,5 @@
 import {closeRing,normalizeMrd128Unit,getMrd128Legend,kmlColorToCss,pointInPolygon,validLocation} from './core.mjs';
-import {shouldFollowSurficialLink} from './mrd128-cache.mjs';
+import {MAX_MRD128_DOCUMENTS,shouldFollowSurficialLink} from './mrd128-cache.mjs';
 
 function xml(text){
   const doc=new DOMParser().parseFromString(text,'application/xml');
@@ -118,7 +118,7 @@ export async function resolveLinks({text,base,cacheRoot,kind='surficial',bounds,
       if(/(^|\.)geologyontario\./i.test(url.hostname)&&url.pathname.includes(marker)) url.href=new URL('polygons/'+url.pathname.split(marker)[1],cache).href;
       if(url.origin!==cache.origin||!url.pathname.startsWith(cache.pathname+'polygons/')) throw new Error('MRD128 must load from the local deployment cache.');
       if(seen.has(url.href))continue;
-      if(current.depth>=6||docs>=150)throw new Error('The geology file contains too many nested links.');
+      if(current.depth>=6||docs>=MAX_MRD128_DOCUMENTS)throw new Error('The geology file contains too many nested links.');
       seen.add(url.href);progress(`Loading local geology section ${docs}…`);
       const response=await fetchFn(url.href,{signal:AbortSignal.timeout(30000)});
       if(!response.ok)throw new Error(`Cached geology section is unavailable (HTTP ${response.status}).`);
