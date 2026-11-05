@@ -1,9 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { extractHrefValues, cachePathForMrd128Url, rewriteKmlLinks, assertCompleteCache, fetchWithRetry } from '../src/mrd128-cache.mjs';
+import {MAX_MRD128_DOCUMENTS,extractHrefValues,cachePathForMrd128Url,rewriteKmlLinks,assertCompleteCache,fetchWithRetry} from '../src/mrd128-cache.mjs';
 
 const ROOT='https://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/polygons/doc.kml';
-const MAX_DOCS=600;
 const BATCH=8;
 const queue=[ROOT];
 const seen=new Set();
@@ -26,7 +25,7 @@ async function fetchOfficial(url){
 }
 
 async function mirrorOne(requested){
-  if(seen.has(requested) || seen.size>=MAX_DOCS) return [];
+  if(seen.has(requested) || seen.size>=MAX_MRD128_DOCUMENTS) return [];
   seen.add(requested);
   try{
     const {response,url}=await fetchOfficial(requested);
@@ -59,10 +58,10 @@ async function mirrorOne(requested){
   }
 }
 
-while(queue.length && seen.size<MAX_DOCS){
+while(queue.length && seen.size<MAX_MRD128_DOCUMENTS){
   const batch=queue.splice(0,BATCH);
   const results=await Promise.all(batch.map(mirrorOne));
-  for(const children of results) for(const child of children) if(!seen.has(child) && queue.length<MAX_DOCS) queue.push(child);
+  for(const children of results) for(const child of children) if(!seen.has(child) && queue.length<MAX_MRD128_DOCUMENTS) queue.push(child);
 }
 
 assertCompleteCache({saved,failed,pending:queue.length});
