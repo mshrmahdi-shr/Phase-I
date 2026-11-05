@@ -19,7 +19,7 @@
       <button id="importCompanyTemplate" class="ghost">Import Company Template</button>
       <button id="manageHistoricalHeader" class="ghost">Historical Imagery</button>
       <input id="importCompanyTemplateFile" type="file" accept=".zip,.phasei-template.zip,application/zip" hidden />
-      <button id="newProject" class="ghost">New Project</button><button id="saveProject" class="primary">Save</button>
+      <button id="newProject" class="ghost">New Project</button><button id="saveProject" class="primary">Save in Browser</button>
       </div>
     </header>
 
@@ -76,12 +76,12 @@
         <div class="section-heading"><h2>Export</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
         <button id="exportPdf" class="primary wide" aria-describedby="exportButtonHelp" title="Open the export checklist to see exactly what is missing">Export PDF / AutoCAD</button>
         <p id="exportButtonHelp" class="helper export-button-help">If export is unavailable, open the checklist: disabled rows show the exact missing item and the top warning lists all active problems.</p>
-        <button id="exportProjectPackage" class="primary wide">Download Project Package</button>
-        <div class="button-grid"><button id="importProjectPackage" type="button">Import Project Package</button><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button></div>
+        <button id="exportProjectPackage" class="primary wide">Save Project File (.phasei-project.zip)</button>
+        <div class="button-grid"><button id="importProjectPackage" type="button">Open Project File</button><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button></div>
         <input id="importProjectPackageFile" type="file" accept="application/zip,.phasei-project.zip" hidden />
         <div class="legacy-project-tools"><span class="helper">Legacy compatibility</span><div class="button-grid"><button id="exportJson">Export Legacy JSON</button><label for="importJson" class="file-button">Import Legacy JSON<input id="importJson" type="file" accept="application/json,.json" /></label></div></div>
         <div id="printValidation" class="validation-panel" role="alert" hidden></div>
-        <p class="helper">The recommended .phasei-project.zip backup includes the project branding snapshot, exact logo, and permitted local historical files. JSON is legacy metadata-only compatibility. A3 opens a full-size preview before printing. Export DXF creates a standalone boundary/title-block drawing; Export PDF / AutoCAD creates the complete raster package.</p>
+        <p class="helper">Save Project File creates an editable .phasei-project.zip that you can reopen later and continue editing. It includes the project branding snapshot, exact logo, and permitted local historical files. JSON is legacy metadata-only compatibility. A3 opens a full-size preview before printing. Export DXF creates a standalone boundary/title-block drawing; Export PDF / AutoCAD creates the complete raster package.</p>
       </section>
     </aside>
 
@@ -119,7 +119,7 @@
   <div id="projectPackageDialog" hidden role="dialog" aria-modal="true" aria-labelledby="projectPackageHeading" aria-describedby="projectPackageHelp">
     <section class="project-package-panel">
       <div class="project-package-heading"><div><div class="eyebrow">RECOMMENDED BACKUP AND SHARE FORMAT</div><h2 id="projectPackageHeading">Project Package</h2></div></div>
-      <p id="projectPackageHelp">The recommended .phasei-project.zip backup/share package preserves the project, required company branding, and permitted local historical imagery. Import always inspects the complete package before anything is replaced.</p>
+      <p id="projectPackageHelp">This editable project file preserves the project, required company branding, and permitted local historical imagery so you can reopen it later and continue editing. Opening a file always inspects the complete package before anything is replaced.</p>
       <div id="projectPackagePreview" class="project-package-preview" hidden>
         <h3>Review imported package</h3>
         <p id="projectPackageSummary"></p><p id="projectPackageCompanySummary"></p><p id="projectPackageAssetSummary"></p>
