@@ -45,6 +45,18 @@ test('saved A-E crops may be smaller or larger than their default A3 views',asyn
   }
 });
 
+test('geology loading uses the final D or E sheet bounds even for large saved views',async()=>{
+  const {geologySheetBounds}=await import('../src/sheet-layout.mjs');
+  const p=createProject();p.location={lat:43.7,lng:-79.3};
+  const large={north:44.2,south:43.2,east:-78.7,west:-79.9};
+  p.figures.D.bounds=large;p.figures.E.bounds=large;
+  const expected={west:-80.12576944146386,south:43.2,east:-78.47423055853616,north:44.2};
+  for(const kind of ['surficial','bedrock'])for(const key of Object.keys(expected)){
+    assert.ok(Math.abs(geologySheetBounds(p,kind)[key]-expected[key])<1e-10,`${kind} ${key} must follow the fitted output sheet`);
+  }
+  assert.throws(()=>geologySheetBounds(p,'other'),/geology/i);
+});
+
 test('saved A3 views reject SITE exclusion, non-finite, inverted, degenerate, and out-of-range bounds',async()=>{
   const {sheetGeometry}=await import('../src/sheet-layout.mjs');
   const p=createProject();p.location={lat:43.7,lng:-79.3};
