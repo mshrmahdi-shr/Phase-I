@@ -49,6 +49,11 @@ export function sheetGeometry(project,code,dpi=300){
   return {code,dpi,page:{width:420,height:297,margin:7},sheet:{x:7,y:7,width:406,height:283},mapFrame,
     titleFrame:{x:343.7,y:9.3,width:67,height:278.4},bounds,projected,raster,scale:metricScale(bounds,raster.width,raster.width*55/mapFrame.width)};
 }
+export function geologySheetBounds(project,kind,dpi=150){
+  const code=kind==='surficial'?'D':kind==='bedrock'?'E':null;
+  if(!code)throw new Error('Unknown geology dataset type.');
+  return {...sheetGeometry(project,code,dpi).bounds};
+}
 export function captureFigureView(project,code,bounds){
   const defaults=figureDefaults();
   if(!defaults[code]||!project?.figures?.[code])throw new Error('Choose a valid figure A-E.');
