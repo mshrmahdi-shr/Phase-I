@@ -53,6 +53,23 @@ test('local KMZ traversal includes neighbouring tiles and never fetches OGS',asy
   await assert.rejects(()=>geology.resolveLinks({text:root,base:origin+'data/mrd128.kml',cacheRoot:origin+'mrd128-cache/',kind:'surficial',bounds:{west:4,east:6,south:4,north:6},fetchFn:broken,JSZip}),/404/);
 });
 
+test('large official surficial extents may traverse more than 150 cached documents',async()=>{
+  const origin='https://example.test/Phase-I/';
+  const root='<kml><NetworkLink><name>Surficial Geology</name><Link><href>http://www.geologyontario.mndm.gov.on.ca/mines/data/google/mrd128/polygons/doc.kml</href></Link></NetworkLink></kml>';
+  const count=160;
+  const index=`<kml>${Array.from({length:count},(_,i)=>`<NetworkLink><name>tile ${i}</name><Link><href>files/tile-${i}.kml</href></Link></NetworkLink>`).join('')}</kml>`;
+  const requests=[];
+  const fetchFn=async url=>{
+    requests.push(url);
+    if(url===origin+'mrd128-cache/polygons/doc.kml')return {ok:true,text:async()=>index};
+    if(url.startsWith(origin+'mrd128-cache/polygons/files/tile-'))return {ok:true,text:async()=>'<kml></kml>'};
+    throw new Error('Unexpected request: '+url);
+  };
+  const result=await geology.resolveLinks({text:root,base:origin+'data/mrd128.kml',cacheRoot:origin+'mrd128-cache/',kind:'surficial',bounds:{west:-81,east:-78,south:42,north:45},fetchFn,JSZip});
+  assert.equal(result.docs,count+2);
+  assert.equal(requests.length,count+1);
+});
+
 test('relevant legend excludes far polygons and units only within a polygon hole',()=>{
   const a=geology.parsePolys(kml('8a'),'surficial')[0];
   const b={...a,name:'Far',unitCode:'9c',polygon:[[20,20],[30,20],[30,30],[20,20]],holes:[]};
