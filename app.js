@@ -3,7 +3,7 @@ import {parsePolys,resolveLinks,readKmz,relevantFeatures,relevantUnits,siteFeatu
 import {createPreflight} from './print-preflight.mjs';
 import {createPrintSession,waitForMapTiles} from './src/print-session.mjs';
 import {sourceForFigure} from './src/map-sources.mjs';
-import {sheetGeometry,metricScale,captureFigureView} from './src/sheet-layout.mjs';
+import {sheetGeometry,metricScale,captureFigureView,geologySheetBounds} from './src/sheet-layout.mjs';
 import {loadBedrockCache} from './src/bedrock-cache.mjs';
 import {createExportDialog} from './src/export-selection.mjs';
 import {exportCombinedPdf,planPdfExport} from './src/pdf-export.mjs';
@@ -175,11 +175,7 @@ function redraw(){siteLayer?.remove();buildingLayer?.remove();if(project.siteBou
 function renderFigures(){const h=$('figureList');h.innerHTML='';for(const [c,f] of Object.entries(project.figures)){const d=document.createElement('div');d.className='figure-row'+(c===active?' active':'');d.innerHTML=`<div class="figure-top"><div><div class="figure-code">FIGURE ${c}</div><div class="figure-title">${esc(f.title)}</div></div><span class="badge" title="${f.bounds?'Saved A3 map span':'Default A3 map span'}">${fmt(f.extentMeters)}</span></div><div class="figure-actions"><button title="${f.bounds?'Restore the saved A3 map position and zoom':'Show the current A3 map extent'}">${f.bounds?'View saved':'View'}</button><button title="Save the current map position and zoom for A3/PDF">${f.bounds?'Update A3 view':'Use for A3'}</button></div>`;d.children[1].children[0].onclick=()=>selectFig(c,true);d.children[1].children[1].onclick=()=>useForA3(c);h.appendChild(d)}}
 function fmt(m){return m>=1000?`${m/1000} km`:`${m} m`;}
 function currentBounds(){const b=map.getBounds();return{north:b.getNorth(),south:b.getSouth(),east:b.getEast(),west:b.getWest()};}
-function requiredGeologyBounds(kind='surficial',includeView=false){
-  const code=kind==='surficial'?'D':'E',bounds={...sheetGeometry(project,code,150).bounds};
-  if(includeView&&active===code){const visible=currentBounds();for(const key of ['north','east'])bounds[key]=Math.max(bounds[key],visible[key]);for(const key of ['south','west'])bounds[key]=Math.min(bounds[key],visible[key]);}
-  return bounds;
-}
+function requiredGeologyBounds(kind='surficial'){return geologySheetBounds(project,kind,150);}
 function selectFig(code,fit){
   if(exportBusy)return;
   active=code;drawingController.cancel();renderFigures();
@@ -189,7 +185,7 @@ function selectFig(code,fit){
   if(kind&&project.location){
     const custom=geoSource[kind]?.id==='custom'||project.geology[kind]?.source?.id==='custom';
     if(custom){if(!geoReady[kind])status('geologyStatus','Reimport the custom geology file, or explicitly load the official source.','error');}
-    else if(!geoReady[kind]||!containsBounds(geoCoverage[kind],requiredGeologyBounds(kind,true)))kind==='surficial'?loadMRD(false):loadOfficialBedrock(false);
+    else if(!geoReady[kind]||!containsBounds(geoCoverage[kind],requiredGeologyBounds(kind)))kind==='surficial'?loadMRD(false):loadOfficialBedrock(false);
   }
   if(fit)status('mapSourceStatus',`Figure ${code} A3 view restored (${fmt(project.figures[code].extentMeters)}). Output source: ${sourceForFigure(code).label}.`,'ok');
 }
@@ -234,7 +230,7 @@ async function loadMRD(user=true){
   if(exportBusy)return;
   if(!project.location){if(user)status('geologyStatus','Locate the property first.','error');return;}
   const ticket=++geoRequest.surficial,revision=locationRevision;
-  let bounds;try{bounds=requiredGeologyBounds('surficial',true);}catch(error){status('geologyStatus',error.message,'error');return;}
+  let bounds;try{bounds=requiredGeologyBounds('surficial');}catch(error){status('geologyStatus',error.message,'error');return;}
   officialLoading.surficial=ticket;
   geoReady.surficial=false;preflight.refresh();exportDialog?.refresh();loadingButton('loadMrd128',true);
   status('geologyStatus','Loading local OGS MRD128 cache…');
@@ -254,7 +250,7 @@ async function loadOfficialBedrock(user=true){
   if(exportBusy)return;
   if(!project.location){if(user)status('geologyStatus','Locate the property first.','error');return;}
   const ticket=++geoRequest.bedrock,revision=locationRevision;
-  let bounds;try{bounds=requiredGeologyBounds('bedrock',true);}catch(error){status('geologyStatus',error.message,'error');return;}
+  let bounds;try{bounds=requiredGeologyBounds('bedrock');}catch(error){status('geologyStatus',error.message,'error');return;}
   officialLoading.bedrock=ticket;
   geoReady.bedrock=false;preflight.refresh();exportDialog?.refresh();loadingButton('loadBedrock',true);
   status('geologyStatus','Loading local MRD126-REV1 With Lowlands geometry cache…');
