@@ -1,4 +1,5 @@
 const MARK='/mines/data/google/mrd128/';
+export const MAX_MRD128_DOCUMENTS=600;
 
 export async function fetchWithRetry(fetchImpl,url,{attempts=3,timeoutMs=20_000,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),signal,headers}={}){
   if(typeof fetchImpl!=='function')throw new TypeError('fetchWithRetry requires a fetch function.');
