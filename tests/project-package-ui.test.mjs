@@ -21,7 +21,9 @@ function harness(overrides={}){
 test('package controls are accessible, recommended, and keep JSON explicitly labelled legacy',()=>{
   const document=new JSDOM(HTML).window.document;
   for(const id of ['exportProjectPackage','importProjectPackage','importProjectPackageFile','projectPackageDialog','projectPackageHeading','projectPackageStatus','projectPackageMeter','projectPackagePreview','confirmProjectPackageImport','cancelProjectPackage'])assert.ok(document.getElementById(id),`missing #${id}`);
-  assert.match(document.getElementById('exportProjectPackage').textContent,/project package/i);assert.match(document.getElementById('projectPackageHelp').textContent,/recommended|backup|share/i);
+  assert.match(document.getElementById('exportProjectPackage').textContent,/save project file/i);
+  assert.match(document.getElementById('importProjectPackage').textContent,/open project file/i);
+  assert.match(document.getElementById('projectPackageHelp').textContent,/reopen|continue editing/i);
   assert.match(document.getElementById('exportJson').textContent,/legacy json/i);assert.match(document.querySelector('label[for="importJson"]').textContent,/legacy json/i);
   const dialog=document.getElementById('projectPackageDialog');assert.equal(dialog.getAttribute('role'),'dialog');assert.equal(dialog.getAttribute('aria-modal'),'true');assert.equal(dialog.getAttribute('aria-labelledby'),'projectPackageHeading');
   assert.equal(document.getElementById('projectPackageStatus').getAttribute('aria-live'),'polite');assert.equal(document.getElementById('importProjectPackageFile').getAttribute('accept').includes('.phasei-project.zip'),true);
