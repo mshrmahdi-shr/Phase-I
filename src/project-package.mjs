@@ -12,7 +12,7 @@ const MAX_JSON_BYTES=4*1024*1024;
 const MAX_ENTRIES=68;
 const MAX_COMPRESSION_RATIO=200;
 const MAX_PIXELS=16_000_000;
-const README='Phase I project package\n\nImport this .phasei-project.zip file with Import Project Package, review the project and company summary, then confirm replacement. JSON import remains available only for legacy projects.\n';
+const README='Phase I SHR project file\n\nOpen this .shr file with Open Project File, review the project and company summary, then confirm replacement. The file preserves project settings, saved map views, site/building drawings, branding, the exact logo, and permitted local historical images. JSON import remains available only for legacy projects.\n';
 const PROJECT_FIELDS=['address','buildingBoundary','company','companyProfileSnapshot','createdAt','date','dpi','exportPreferences','figures','geology','historical','historicalSequenceCounters','id','location','name','projectNo','schemaVersion','siteBoundary','updatedAt'];
 const PROFILE_FIELDS=['address','companyName','email','id','logoAssetId','logoHeight','logoMime','logoPlacement','logoWidth','phone','preparedBy','reviewedBy','schemaVersion','updatedAt','website'];
 const PLACEMENT_FIELDS=['align','scale'];
@@ -60,7 +60,7 @@ async function sha256(bytes){
 }
 function safeFilename(project){
   let base=String(project.projectNo||project.name||'phase-i-project').normalize('NFKD').replace(/\p{Mark}/gu,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,80).replace(/-+$/,'')||'phase-i-project';
-  if(/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(base))base=`project-${base}`;return `${base}.phasei-project.zip`;
+  if(/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(base))base=`project-${base}`;return `${base}.shr`;
 }
 function deepFreeze(value,seen=new Set()){
   if(!value||typeof value!=='object'||value instanceof Blob||seen.has(value))return value;seen.add(value);
@@ -177,7 +177,7 @@ export async function exportProjectPackage({project,assetStore,Zip=globalThis.JS
   await hashEntries(payload);const entries=payload.map(({bytes,...entry})=>entry),manifest={schemaVersion:PACKAGE_SCHEMA_VERSION,format:PACKAGE_FORMAT,projectId:snapshot.id,companyProfileId:profile.id,entries},manifestBytes=utf8(stableJson(manifest));
   const archive=new Constructor(),options={date:ZIP_DATE,createFolders:false};archive.file('manifest.json',manifestBytes,options);for(const item of payload)archive.file(item.path,item.bytes,options);
   throwIfAborted(signal);let bytes;try{bytes=await archive.generateAsync({type:'uint8array',compression:'STORE',platform:'DOS',streamFiles:false},metadata=>{throwIfAborted(signal);onProgress({phase:'compressing',percent:metadata.percent});});}catch(error){throw error;}
-  throwIfAborted(signal);return {blob:new Blob([bytes],{type:'application/zip'}),filename:safeFilename(snapshot),manifest:deepFreeze(structuredClone(manifest))};
+  throwIfAborted(signal);return {blob:new Blob([bytes],{type:'application/x-shr-project'}),filename:safeFilename(snapshot),manifest:deepFreeze(structuredClone(manifest))};
 }
 
 function sourceBytes(source){
