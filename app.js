@@ -1,5 +1,5 @@
 import {applyCompanyProfileToProject,createProject,requireProjectCompanyProfile,restoreProject,closeRing,validBoundary,buildDxf} from './src/core.mjs';
-import {parsePolys,resolveLinks,readKmz,relevantFeatures,relevantUnits,siteFeature,containsBounds} from './src/geology.mjs';
+import {parsePolys,resolveLinks,readKmz,relevantFeatures,relevantUnits,siteFeature,containsBounds,geologyLegendLabel} from './src/geology.mjs';
 import {createPreflight} from './print-preflight.mjs';
 import {createPrintSession,waitForMapTiles} from './src/print-session.mjs';
 import {sourceForFigure} from './src/map-sources.mjs';
@@ -299,12 +299,12 @@ function detect(){
   $('geoLegend').innerHTML=hit?legendEntry(hit):geo[kind].length?'SITE is outside the loaded geology polygons.':`No ${kind} polygons loaded. Reload the source after reopening a saved project.`;
   updateLegend();preflight?.refresh();
 }
-function legendEntry(g){return `<div class="legend-row"><span class="swatch" style="background:${esc(g.color)}"></span><div><b>${esc(g.name)}</b><br>${esc(g.description)}</div></div>`;}
+function legendEntry(g){const label=geologyLegendLabel(g);return `<div class="legend-row geology-legend-row" data-unit-code="${esc(label.code)}"><span class="swatch" style="background:${esc(g.color)}"></span><div class="legend-copy"><strong>${esc(label.heading)}</strong>${label.description?`<span>${esc(label.description)}</span>`:''}</div></div>`;}
 function updateLegend(){
   const box=$('mapLegend'),kind=geologyKind();box.style.display=kind?'block':'none';
   if(!kind)return;
   const units=relevantUnits(geo[kind],currentBounds());
-  box.innerHTML='<b>LEGEND</b>'+units.map(g=>`<div class="map-legend-row"><span class="swatch" style="background:${esc(g.color)}"></span><span>${esc(g.name)}</span></div>`).join('');
+  box.innerHTML='<b>LEGEND</b>'+units.map(g=>{const label=geologyLegendLabel(g);return `<div class="map-legend-row"><span class="swatch" style="background:${esc(g.color)}"></span><span><strong>${esc(label.heading)}</strong></span></div>`;}).join('');
   if(!units.length)box.innerHTML+='<small>No geology in this view</small>';
 }
 map.on('moveend resize',()=>{renderGeo();updateScale();if(printSession?.isOpen)refreshPrint();});
