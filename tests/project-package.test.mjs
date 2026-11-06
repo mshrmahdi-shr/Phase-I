@@ -68,6 +68,9 @@ function officialItem(){
 function projectFixture(){
   const project=createProject({name:'Historical package <safe>',projectNo:'AB-12345',address:'Toronto',date:'2026-08-27'});
   project.id='project-historical-1';project.createdAt=STAMP;project.updatedAt=STAMP;project.location={...SITE};
+  project.siteBoundary=[[-79.381,43.649],[-79.379,43.649],[-79.379,43.651],[-79.381,43.651],[-79.381,43.649]];
+  project.buildingBoundary=[[-79.3806,43.6494],[-79.3794,43.6494],[-79.3794,43.6506],[-79.3806,43.6506],[-79.3806,43.6494]];
+  project.dpi=150;project.figures.D={...project.figures.D,title:'CUSTOM SURFICIAL GEOLOGY',extentMeters:4250};
   project.historical=[
     manualItem({id:IDS.firstItem,assetId:IDS.firstAsset,year:1960,sequence:1,title:'scan one.png'}),
     manualItem({id:IDS.secondItem,assetId:IDS.secondAsset,year:1960,sequence:2,title:'scan two.png'}),officialItem()
@@ -151,12 +154,16 @@ async function addManifestDeclaredMetadata(blob,{path,kind,mediaType,bytes,evide
 test('exports a deterministic versioned package and round-trips two manual images, branding, and metadata-only official imagery',async()=>{
   const value=await fixture(),first=await exportProjectPackage({project:value.project,companyProfile:value.profile,assetStore:value.store,Zip:JSZip});
   const second=await exportProjectPackage({project:value.project,companyProfile:value.profile,assetStore:value.store,Zip:JSZip});
-  assert.equal(first.filename,'ab-12345.phasei-project.zip');assert.deepEqual(new Uint8Array(await first.blob.arrayBuffer()),new Uint8Array(await second.blob.arrayBuffer()));
+  assert.equal(first.filename,'ab-12345.shr');assert.deepEqual(new Uint8Array(await first.blob.arrayBuffer()),new Uint8Array(await second.blob.arrayBuffer()));
   assert.deepEqual(value.store.operations.filter(entry=>entry==='list'),[],'export reads referenced assets directly instead of enumerating unrelated assets');
   assert.equal(value.store.operations.includes('get:orphan-company-logo'),false);
   const candidate=await inspectPackage(first.blob,{Zip:JSZip});
   assert.equal(candidate.schemaVersion,1);assert.equal(candidate.project.historical.length,3);assert.equal(candidate.companyProfile.companyName,'Acme Environmental');
   assert.deepEqual(candidate.project.geology.bedrock.source,value.project.geology.bedrock.source,'custom geology provenance round-trips without guessed fields');
+  assert.deepEqual(candidate.project.siteBoundary,value.project.siteBoundary,'site drawings round-trip in the SHR project file');
+  assert.deepEqual(candidate.project.buildingBoundary,value.project.buildingBoundary,'building drawings round-trip in the SHR project file');
+  assert.deepEqual(candidate.project.figures,value.project.figures,'figure titles, extents and saved views round-trip in the SHR project file');
+  assert.equal(candidate.project.dpi,value.project.dpi,'composition settings round-trip in the SHR project file');
   assert.deepEqual(candidate.project.companyProfileSnapshot,candidate.companyProfile);assert.deepEqual(candidate.assets.map(value=>value.metadata.id),['company-logo-acme',IDS.firstAsset,IDS.secondAsset]);
   const archive=await JSZip.loadAsync(await first.blob.arrayBuffer()),manifest=JSON.parse(await archive.file('manifest.json').async('text'));
   assert.deepEqual(Object.keys(archive.files),['manifest.json','project.json','company-profile.json',`assets/company-logo-acme.png`,`assets/${IDS.firstAsset}.png`,`assets/${IDS.secondAsset}.png`,'README.txt']);
