@@ -93,7 +93,27 @@ export function relevantFeatures(features,bounds){
     corners.some(p=>pointInPolygon(p,g.polygon,g.holes))||
     [g.polygon,...(g.holes||[])].some(ring=>ring.some((p,i)=>i>0&&segmentIntersects(ring[i-1],p,bounds)))));
 }
-export function relevantUnits(features,bounds){return [...new Map(relevantFeatures(features,bounds).map(g=>[g.unitCode||g.name,g])).values()];}
+function geologyUnitKey(unit){return String(unit?.unitCode||unit?.name||'').trim();}
+export function compareGeologyUnits(left,right){
+  const a=geologyUnitKey(left),b=geologyUnitKey(right),am=/^(\d+)\s*([a-z]*)/i.exec(a),bm=/^(\d+)\s*([a-z]*)/i.exec(b);
+  if(am&&bm){const number=Number(am[1])-Number(bm[1]);if(number)return number;const suffix=am[2].toLowerCase().localeCompare(bm[2].toLowerCase(),'en');if(suffix)return suffix;}
+  else if(am)return -1;else if(bm)return 1;
+  return a.localeCompare(b,'en',{numeric:true,sensitivity:'base'});
+}
+export function geologyLegendLabel(unit){
+  const code=String(unit?.unitCode||'').trim().toUpperCase();
+  let title=String(unit?.official?.title||unit?.name||'Geology unit').trim();
+  if(code){
+    const escaped=code.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    title=title.replace(new RegExp(`^${escaped}(?:\\s*[—–:-]\\s*|\\s+)`,'i'),'').trim()||title;
+  }
+  const displayTitle=unit?.official?title.toUpperCase():title;
+  const heading=[code,displayTitle].filter(Boolean).join(' ');
+  return {code,title:displayTitle,heading,description:String(unit?.description||'').trim()};
+}
+export function relevantUnits(features,bounds){
+  return [...new Map(relevantFeatures(features,bounds).map(g=>[g.unitCode||g.name,g])).values()].sort(compareGeologyUnits);
+}
 export function siteFeature(features,location){
   if(!validLocation(location))return null;
   return features.find(g=>pointInPolygon([location.lng,location.lat],g.polygon,g.holes))||null;
