@@ -77,6 +77,25 @@ test('relevant legend excludes far polygons and units only within a polygon hole
   assert.deepEqual(geology.relevantUnits([a],{west:4,east:6,south:4,north:6}),[]);
 });
 
+test('relevant legend uses natural geology-unit order regardless of source feature order',()=>{
+  const ring=[[0,0],[10,0],[10,10],[0,10],[0,0]];
+  const units=['19','5b','8a','20','9c','5e','9a','9b','12','5d','6'];
+  const features=units.map(unitCode=>({name:`${unitCode} unit`,unitCode,polygon:ring,holes:[],description:'',color:'#fff'}));
+  assert.deepEqual(
+    geology.relevantUnits(features,{west:1,east:2,south:1,north:2}).map(value=>value.unitCode),
+    ['5b','5d','5e','6','8a','9a','9b','9c','12','19','20']
+  );
+});
+
+test('legend labels combine the code and uppercase title without repeating the code',()=>{
+  const unit=geology.parsePolys(kml('9c deposits'),'surficial')[0];
+  const label=geology.geologyLegendLabel(unit);
+  assert.equal(label.code,'9C');
+  assert.match(label.heading,/^9C COARSE-TEXTURED GLACIOLACUSTRINE DEPOSITS$/);
+  assert.doesNotMatch(label.heading,/9C.*9C/);
+  assert.match(label.description,/Sand, gravel/);
+});
+
 test('visible material between two holes remains in the map and legend',()=>{
   const ring=(w,s,e,n)=>[[w,s],[e,s],[e,n],[w,n],[w,s]];
   const feature={name:'Material',unitCode:'8a',polygon:ring(0,0,10,10),holes:[ring(1,1,4,9),ring(6,1,9,9)]};
