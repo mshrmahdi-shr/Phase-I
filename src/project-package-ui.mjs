@@ -3,10 +3,17 @@ import {commitProjectPackage,exportProjectPackage,inspectProjectPackage} from '.
 function required(document,id){const element=document.getElementById(id);if(!element)throw new Error(`Project package UI requires #${id}.`);return element;}
 function abortError(){return new DOMException('Cancelled','AbortError');}
 function aborted(error){return error?.name==='AbortError';}
-function defaultDownload({blob,filename},document,signal){
-  if(signal?.aborted)throw signal.reason??abortError();const create=globalThis.URL?.createObjectURL,revoke=globalThis.URL?.revokeObjectURL;
-  if(typeof create!=='function'||typeof revoke!=='function')throw new Error('This browser cannot download the completed project package.');const url=create(blob),link=document.createElement('a');
-  try{if(signal?.aborted)throw signal.reason??abortError();link.href=url;link.download=filename;link.hidden=true;document.body.append(link);link.click();}finally{link.remove();setTimeout(()=>revoke(url),0);}
+async function defaultDownload({blob,filename},document,signal){
+  if(signal?.aborted)throw signal.reason??abortError();
+  if(typeof globalThis.showSaveFilePicker==='function'){
+    const handle=await globalThis.showSaveFilePicker({suggestedName:filename,types:[{description:'SHR editable project',accept:{'application/x-shr-project':['.shr']}}]});
+    if(signal?.aborted)throw signal.reason??abortError();const writable=await handle.createWritable();
+    try{await writable.write(blob);if(signal?.aborted)throw signal.reason??abortError();await writable.close();return {method:'picker',filename};}
+    catch(error){try{await writable.abort?.();}catch{}throw error;}
+  }
+  const create=globalThis.URL?.createObjectURL,revoke=globalThis.URL?.revokeObjectURL;
+  if(typeof create!=='function'||typeof revoke!=='function')throw new Error('This browser cannot save the completed SHR project file.');const url=create(blob),link=document.createElement('a');
+  try{if(signal?.aborted)throw signal.reason??abortError();link.href=url;link.download=filename;link.hidden=true;document.body.append(link);link.click();return {method:'download',filename};}finally{link.remove();setTimeout(()=>revoke(url),0);}
 }
 
 export function createProjectPackageUI({document,assetStore,Zip=globalThis.JSZip,getState,readState,persistState,initialize,onCommitted=()=>{},isAssetReferenced=async()=>false,setBusy=()=>{},
@@ -42,8 +49,8 @@ export function createProjectPackageUI({document,assetStore,Zip=globalThis.JSZip
     if(operation||destroyed)return false;candidate=null;preview.hidden=true;open(exportButton);text('Validating the project, company profile, and referenced files…');meter.removeAttribute('value');
     try{return await run('export',async({controller,token})=>{
       const state=getState(),output=await exportPackage({...state,assetStore,Zip,signal:controller.signal,onProgress:update=>{if(operation?.token===token)progress(update);}});
-      if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();await download(output,document,controller.signal);if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();text('Recommended project package downloaded. Keep it with the project records.','ok');return true;
-    });}catch(error){if(!aborted(error)&&!destroyed)text(`Project package was not downloaded: ${error.message}`,'error');return false;}
+      if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();const saved=await download(output,document,controller.signal);if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();text(saved?.method==='picker'?'SHR project file saved in the selected project folder.':'SHR project file exported. Keep it in the project folder.','ok');return true;
+    });}catch(error){if(!aborted(error)&&!destroyed)text(`SHR project file was not saved: ${error.message}`,'error');return false;}
   }
   async function inspectWork(event){
     const file=event?.target?.files?.[0];if(!file||operation||destroyed)return false;open(document.activeElement);candidate=null;preview.hidden=true;confirmButton.disabled=true;text('Inspecting the project package without changing this browser…');meter.removeAttribute('value');
