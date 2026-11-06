@@ -12,7 +12,7 @@ function harness(overrides={}){
   let state={project:{id:'current',name:'Current project'},companyProfile:{id:'current-company',companyName:'Current company'}};
   const controller=createProjectPackageUI({document,assetStore:{},Zip:class{},getState:()=>state,readState:async()=>structuredClone(state),
     persistState:async next=>{events.push('persist');state=structuredClone(next);},initialize:async()=>events.push('initialize'),onCommitted:async()=>events.push('committed'),setBusy:value=>events.push(`busy:${value}`),
-    download:output=>downloads.push(output),exportPackage:async()=>({blob:new Blob(['zip']),filename:'project.phasei-project.zip'}),
+    download:output=>downloads.push(output),exportPackage:async()=>({blob:new Blob(['zip']),filename:'project.shr'}),
     inspectPackage:async()=>({schemaVersion:1,project:{id:'imported',name:'Imported <img src=x>'},companyProfile:{id:'imported-company',companyName:'Imported <script>'},assets:[{metadata:{id:'a'}}],warnings:[]}),
     commitPackage:async(candidate,options)=>{await options.persistState({project:candidate.project,companyProfile:candidate.companyProfile});await options.initialize({project:candidate.project,companyProfile:candidate.companyProfile});return {project:candidate.project,companyProfile:candidate.companyProfile,addedAssetIds:['a'],reusedAssetIds:[]};},...overrides});
   return {dom,document,controller,events,downloads,get state(){return state;},set state(value){state=value;}};
@@ -26,7 +26,8 @@ test('package controls are accessible, recommended, and keep JSON explicitly lab
   assert.match(document.getElementById('projectPackageHelp').textContent,/reopen|continue editing/i);
   assert.match(document.getElementById('exportJson').textContent,/legacy json/i);assert.match(document.querySelector('label[for="importJson"]').textContent,/legacy json/i);
   const dialog=document.getElementById('projectPackageDialog');assert.equal(dialog.getAttribute('role'),'dialog');assert.equal(dialog.getAttribute('aria-modal'),'true');assert.equal(dialog.getAttribute('aria-labelledby'),'projectPackageHeading');
-  assert.equal(document.getElementById('projectPackageStatus').getAttribute('aria-live'),'polite');assert.equal(document.getElementById('importProjectPackageFile').getAttribute('accept').includes('.phasei-project.zip'),true);
+  assert.equal(document.getElementById('projectPackageStatus').getAttribute('aria-live'),'polite');assert.equal(document.getElementById('importProjectPackageFile').getAttribute('accept').includes('.shr'),true);
+  assert.match(document.getElementById('projectPackageHelp').textContent,/settings|logo|drawings/i);
   assert.match(CSS,/#projectPackageDialog\s*\{/);assert.match(CSS,/\.project-package-panel\s*\{/);assert.match(CSS,/@media\(max-width:540px\)[\s\S]*\.project-package-actions/);
 });
 
@@ -40,13 +41,24 @@ test('export reports progress and cancellation prevents a late package from down
   assert.equal(h.document.getElementById('projectPackageDialog').hidden,false,'cancelling dialog remains visible until the operation settles');
   assert.equal(h.document.getElementById('cancelProjectPackage').disabled,false);assert.equal(h.document.activeElement,h.document.getElementById('cancelProjectPackage'));
   assert.match(h.document.getElementById('projectPackageStatus').textContent,/cancelling/i);
-  gate.resolve({blob:new Blob(['late']),filename:'late.phasei-project.zip'});await h.controller.whenIdle();
+  gate.resolve({blob:new Blob(['late']),filename:'late.shr'});await h.controller.whenIdle();
   assert.equal(h.downloads.length,0);assert.equal(h.document.getElementById('projectPackageDialog').hidden,true);assert.equal(h.document.activeElement,h.document.getElementById('exportProjectPackage'));
   assert.deepEqual(h.events,['busy:true','busy:false']);h.controller.destroy();h.dom.window.close();
 });
 
+test('supported browsers save the SHR file through a folder-aware file picker',async()=>{
+  const original=globalThis.showSaveFilePicker,events=[];let pickerOptions;
+  globalThis.showSaveFilePicker=async options=>{pickerOptions=options;return {async createWritable(){return {async write(blob){events.push(`write:${blob.size}`);},async close(){events.push('close');},async abort(){events.push('abort');}};}};};
+  try{
+    const h=harness({download:undefined});h.document.getElementById('exportProjectPackage').click();await h.controller.whenIdle();
+    assert.equal(pickerOptions.suggestedName,'project.shr');assert.deepEqual(pickerOptions.types[0].accept['application/x-shr-project'],['.shr']);
+    assert.deepEqual(events,['write:3','close']);assert.match(h.document.getElementById('projectPackageStatus').textContent,/selected project folder/i);
+    h.controller.destroy();h.dom.window.close();
+  }finally{if(original===undefined)delete globalThis.showSaveFilePicker;else globalThis.showSaveFilePicker=original;}
+});
+
 test('inspection previews untrusted names as text and does not mutate until explicit confirmation',async()=>{
-  const h=harness(),input=h.document.getElementById('importProjectPackageFile'),file=new h.dom.window.File(['zip'],'safe.phasei-project.zip',{type:'application/zip'});
+  const h=harness(),input=h.document.getElementById('importProjectPackageFile'),file=new h.dom.window.File(['zip'],'safe.shr',{type:'application/x-shr-project'});
   Object.defineProperty(input,'files',{value:[file],configurable:true});input.dispatchEvent(new h.dom.window.Event('change',{bubbles:true}));await h.controller.whenIdle();
   assert.equal(h.events.includes('persist'),false);assert.equal(h.state.project.id,'current');assert.equal(h.document.getElementById('projectPackagePreview').hidden,false);
   assert.match(h.document.getElementById('projectPackageSummary').textContent,/Imported <img src=x>/);assert.equal(h.document.getElementById('projectPackageSummary').querySelector('img'),null);
