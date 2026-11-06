@@ -11,16 +11,18 @@
 </head>
 <body>
   <header class="topbar">
-    <div><div class="eyebrow">PHASE I ESA</div><h1>Mapping & Figure Generator</h1></div>
-      <div class="top-actions">
-      <button id="editCompanyProfile" class="ghost">Edit Company Profile</button>
-      <button id="applyCompanyTemplate" class="ghost">Apply Current Template to Project</button>
-      <button id="exportCompanyTemplate" class="ghost">Export Company Template</button>
-      <button id="importCompanyTemplate" class="ghost">Import Company Template</button>
-      <button id="manageHistoricalHeader" class="ghost">Historical Imagery</button>
+    <div class="brand-lockup"><div class="eyebrow">PHASE I ESA</div><h1>Mapping & Figure Generator</h1><span>Ontario figure workspace</span></div>
+    <div class="top-actions">
+      <button id="manageHistoricalHeader" class="glass-button">Historical Imagery</button>
+      <details class="action-menu"><summary>Company &amp; Branding</summary><div class="action-menu-panel">
+        <button id="editCompanyProfile">Edit Company Profile</button>
+        <button id="applyCompanyTemplate">Apply Template to Project</button>
+        <button id="exportCompanyTemplate">Export Company Template</button>
+        <button id="importCompanyTemplate">Import Company Template</button>
+      </div></details>
       <input id="importCompanyTemplateFile" type="file" accept=".zip,.phasei-template.zip,application/zip" hidden />
-      <button id="newProject" class="ghost">New Project</button><button id="saveProject" class="primary">Save in Browser</button>
-      </div>
+      <button id="newProject" class="glass-button">New Project</button><button id="saveProject" class="primary">Quick Save</button>
+    </div>
     </header>
 
     <div id="errorCenter" role="alertdialog" aria-modal="false" aria-labelledby="errorCenterTitle" hidden>
@@ -34,23 +36,23 @@
   <main class="app-shell">
     <aside class="panel project-panel">
       <section>
-        <div class="section-heading"><h2>Project</h2><span id="saveState" class="badge">Local</span></div>
+        <div class="section-heading"><h2><span class="step-number">1</span> Project Setup</h2><span id="saveState" class="badge">Browser</span></div>
         <label>Project name<input id="projectName" placeholder="Phase I ESA – 92 Orchard Road" /></label>
         <div class="two-col"><label>Project no.<input id="projectNo" placeholder="AB-12345" /></label><label>Date<input id="projectDate" type="date" /></label></div>
         <label>Address<div class="inline-input"><input id="address" placeholder="92 Orchard Road, Ajax, ON" /><button id="searchAddress" class="primary">Find</button></div></label>
         <div id="searchStatus" class="helper">Uses OpenStreetMap/Nominatim for address lookup.</div>
-        <div id="saveMessage" class="helper" role="status">Saved projects stay in this browser. Export Project for a backup.</div>
+        <div id="saveMessage" class="helper" role="status">Quick Save stays in this browser. Save an SHR project file for a portable editable copy.</div>
       </section>
 
       <section>
-        <div class="section-heading"><h2>Site geometry</h2><span id="drawState" class="badge">Idle</span></div>
+        <div class="section-heading"><h2><span class="step-number">2</span> Site Geometry</h2><span id="drawState" class="badge">Idle</span></div>
         <div class="button-grid"><button id="setSite">Set SITE</button><button id="drawSite">Draw Site Boundary</button><button id="drawBuilding">Draw Building</button><button id="finishDraw">Finish Draw</button><button id="undoPoint">Undo Point</button><button id="clearGeometry" class="danger-soft">Clear Geometry</button></div>
         <p class="helper">Find tries to add an editable boundary from the address source automatically. Review and adjust it when needed; if no boundary is published, draw one manually.</p>
         <p class="helper">Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels.</p>
       </section>
 
       <section>
-        <div class="section-heading"><h2>Imagery</h2><span class="badge">Official + manual</span></div>
+        <div class="section-heading"><h2><span class="step-number">3</span> Map &amp; Imagery</h2><span class="badge">Official + manual</span></div>
         <button id="manageHistorical" class="primary wide">Find or add historical imagery</button>
         <label>Composition DPI<select id="dpi"><option>150</option><option selected>300</option><option value="600">600 (too large for A3)</option></select></label>
         <button id="openEarth">Open site in Google Earth</button>
@@ -61,7 +63,7 @@
       </section>
 
       <section>
-        <div class="section-heading"><h2>Geology</h2><span class="badge">OGS MRD128</span></div>
+        <div class="section-heading"><h2><span class="step-number">4</span> Geology</h2><span class="badge">OGS data</span></div>
         <button id="loadMrd128" class="primary wide">Load official MRD128 Surficial</button>
         <button id="loadBedrock" class="primary wide">Load official MRD126 Bedrock</button>
         <p class="helper">OGS MRD128-REV polygons load from this site's cached KML/KMZ, with the supplied official legend. Reload geology after reopening a project.</p>
@@ -73,15 +75,15 @@
       </section>
 
       <section>
-        <div class="section-heading"><h2>Export</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
+        <div class="section-heading"><h2><span class="step-number">5</span> Export &amp; Project File</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
         <button id="exportPdf" class="primary wide" aria-describedby="exportButtonHelp" title="Open the export checklist to see exactly what is missing">Export PDF / AutoCAD</button>
         <p id="exportButtonHelp" class="helper export-button-help">If export is unavailable, open the checklist: disabled rows show the exact missing item and the top warning lists all active problems.</p>
-        <button id="exportProjectPackage" class="primary wide">Save Project File (.phasei-project.zip)</button>
-        <div class="button-grid"><button id="importProjectPackage" type="button">Open Project File</button><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button></div>
-        <input id="importProjectPackageFile" type="file" accept="application/zip,.phasei-project.zip" hidden />
+        <div class="project-file-actions"><button id="exportProjectPackage" class="primary wide">Save Project File (.shr)</button><button id="importProjectPackage" type="button">Open Project File (.shr)</button></div>
+        <div class="button-grid"><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button></div>
+        <input id="importProjectPackageFile" type="file" accept=".shr,application/x-shr-project,application/zip,.phasei-project.zip" hidden />
         <div class="legacy-project-tools"><span class="helper">Legacy compatibility</span><div class="button-grid"><button id="exportJson">Export Legacy JSON</button><label for="importJson" class="file-button">Import Legacy JSON<input id="importJson" type="file" accept="application/json,.json" /></label></div></div>
         <div id="printValidation" class="validation-panel" role="alert" hidden></div>
-        <p class="helper">Save Project File creates an editable .phasei-project.zip that you can reopen later and continue editing. It includes the project branding snapshot, exact logo, and permitted local historical files. JSON is legacy metadata-only compatibility. A3 opens a full-size preview before printing. Export DXF creates a standalone boundary/title-block drawing; Export PDF / AutoCAD creates the complete raster package.</p>
+        <p class="helper">The `.shr` file is the complete editable project: settings, saved figure views, site/building drawings, branding, exact logo, and permitted local historical files. Save it inside the project folder and reopen it whenever revisions are needed. JSON is legacy metadata only.</p>
       </section>
     </aside>
 
@@ -93,7 +95,7 @@
     </section>
 
     <aside class="panel figures-panel">
-      <div class="section-heading"><h2>Figures</h2><span class="badge">A3</span></div>
+      <div class="section-heading"><h2>Figure Sheets</h2><span class="badge">A3</span></div>
       <div id="figureList"></div>
       <div class="legend-card"><div class="section-heading"><h3>Detected geology</h3><span class="badge" id="geoUnitBadge">—</span></div><div id="geoLegend" class="helper">Select Figure D/E and load the geology source.</div></div>
       <div class="aerial-card"><div class="section-heading"><h3>Historical aerials</h3><span class="badge" id="aerialCount">0</span></div><div id="historicalApprovedList" class="helper">No historical imagery approved.</div></div>
@@ -118,8 +120,8 @@
 
   <div id="projectPackageDialog" hidden role="dialog" aria-modal="true" aria-labelledby="projectPackageHeading" aria-describedby="projectPackageHelp">
     <section class="project-package-panel">
-      <div class="project-package-heading"><div><div class="eyebrow">RECOMMENDED BACKUP AND SHARE FORMAT</div><h2 id="projectPackageHeading">Project Package</h2></div></div>
-      <p id="projectPackageHelp">This editable project file preserves the project, required company branding, and permitted local historical imagery so you can reopen it later and continue editing. Opening a file always inspects the complete package before anything is replaced.</p>
+      <div class="project-package-heading"><div><div class="eyebrow">PORTABLE EDITABLE PROJECT</div><h2 id="projectPackageHeading">SHR Project File</h2></div></div>
+      <p id="projectPackageHelp">The `.shr` file preserves project settings, saved figure views, site/building drawings, required company branding, the exact logo, and permitted local historical imagery. Save it in the job folder, then reopen it later to continue editing. Every file is inspected before current data is replaced.</p>
       <div id="projectPackagePreview" class="project-package-preview" hidden>
         <h3>Review imported package</h3>
         <p id="projectPackageSummary"></p><p id="projectPackageCompanySummary"></p><p id="projectPackageAssetSummary"></p>
