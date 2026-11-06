@@ -1,7 +1,7 @@
 import {sheetGeometry} from './sheet-layout.mjs';
 import {sourceForFigure} from './map-sources.mjs';
 import {composeHistoricalImage,composeMap,historicalImageryPlan,loadHistoricalAssetSnapshot,revalidateHistoricalOfficialSource,throwIfAborted} from './map-compositor.mjs';
-import {relevantFeatures,relevantUnits,siteFeature,containsBounds} from './geology.mjs';
+import {relevantFeatures,relevantUnits,siteFeature,containsBounds,geologyLegendLabel} from './geology.mjs';
 import {validBoundary,validLocation} from './core.mjs';
 import {validatePrintRequirements} from './print-validation.mjs';
 import {planLegend} from './legend-layout.mjs';
@@ -45,7 +45,10 @@ function textBlock(doc,text,box,size,{align='left',draw=true}={}){
   if(lines.length*leading>box.height+.01)throw new Error('Text does not fit the sheet. Shorten the project, title, source or legend text.');
   if(draw){
     doc.setFontSize(size);doc.setTextColor(17,17,17);
-    for(let i=0;i<lines.length;i++)doc.text(lines[i],align==='center'?box.x+box.width/2:box.x,box.y+size*.352778+i*leading,{align,isInputVisual:false,isOutputVisual:true});
+    for(let i=0;i<lines.length;i++){
+      const x=align==='center'?box.x+box.width/2:box.x,y=box.y+size*.352778+i*leading,options={align,isInputVisual:false,isOutputVisual:true};
+      doc.text(lines[i],x,y,options);
+    }
   }
   return lines.length*leading;
 }
@@ -115,10 +118,11 @@ function legendEntries(project,sheet){
     ...sheet.units.map(unit=>({...unit,code:String(unit.unitCode||unit.name||'Geology unit')})),
   ];
 }
-function legendText(entry){
-  if(entry.symbol)return entry.name;
-  return [...new Set([entry.code,entry.name,entry.description].filter(value=>typeof value==='string'&&value.trim()).map(value=>value.trim()))].join('\n');
+function legendParts(entry){
+  if(entry.symbol)return {code:'',title:entry.name,heading:entry.name,description:''};
+  return geologyLegendLabel(entry);
 }
+function legendText(entry){const parts=legendParts(entry);return [parts.heading,parts.description].filter(Boolean).join('\n');}
 function legendMeasure(doc){
   return (entry,{fontSize,width})=>{
     const textWidth=width-LEGEND_SYMBOL_WIDTH;
@@ -161,9 +165,27 @@ function planSheetLegend(doc,project,sheet){
 function columnDimensions(box,columnCount){
   return {width:(box.width-box.padding*2-box.gap*(columnCount-1))/columnCount,height:box.height-box.padding*2};
 }
+function legendHeadingBlock(doc,parts,box,size,{draw=true}={}){
+  if(!parts.code)return textBlock(doc,parts.heading,box,size,{draw});
+  const lines=linesFor(doc,parts.heading,box.width,size),leading=size*.352778*1.24;
+  if(lines.length*leading>box.height+.01)throw new Error('Text does not fit the sheet. Shorten the project, title, source or legend text.');
+  if(draw){
+    doc.setFontSize(size);doc.setTextColor(17,17,17);
+    lines.forEach((line,index)=>{
+      const y=box.y+size*.352778+index*leading,options={isInputVisual:false,isOutputVisual:true};
+      if(index===0&&line.startsWith(parts.code)){
+        const title=line.slice(parts.code.length).trimStart();
+        doc.text(parts.code,box.x,y,options);
+        if(title)doc.text(title,box.x+doc.getTextWidth(`${parts.code} `),y,options);
+      }else doc.text(line,box.x,y,options);
+    });
+  }
+  return lines.length*leading;
+}
 function drawLegendEntry(doc,entry,x,y,width,fontSize,{draw=true}={}){
-  const height=legendMeasure(doc)(entry,{fontSize,width});
-  textBlock(doc,legendText(entry),{x:x+LEGEND_SYMBOL_WIDTH,y,width:width-LEGEND_SYMBOL_WIDTH,height:height-2},fontSize,{draw});
+  const height=legendMeasure(doc)(entry,{fontSize,width}),parts=legendParts(entry),textX=x+LEGEND_SYMBOL_WIDTH,textWidth=width-LEGEND_SYMBOL_WIDTH;
+  const headingHeight=legendHeadingBlock(doc,parts,{x:textX,y,width:textWidth,height:height-2},fontSize,{draw});
+  if(parts.description)textBlock(doc,parts.description,{x:textX,y:y+headingHeight+.3,width:textWidth,height:height-headingHeight-2},fontSize*.9,{draw});
   if(draw){
     doc.setDrawColor(17,17,17);doc.setLineWidth(.2);
     if(entry.symbol==='site'){doc.setFillColor(239,68,68);doc.circle(x+3,y+1.8,1.2,'F');}
