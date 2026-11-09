@@ -49,7 +49,7 @@ test('Pages staging includes app modules but excludes repository and test depend
   assert.ok((await fs.readFile(path.join(output,'app.js'),'utf8')).length>0);
   assert.ok((await fs.stat(path.join(output,'src/geology.mjs'))).isFile());
   assert.ok((await fs.stat(path.join(output,'src/company-ui.mjs'))).isFile());
-  for(const name of ['vendor/jspdf.umd.min.js','vendor/jspdf.LICENSE','vendor/geotiff.js','vendor/geotiff.LICENSE','vendor/proj4.esm.mjs','vendor/proj4.LICENSE.md','assets/fonts/DejaVuSans.ttf','assets/fonts/LICENSE.txt'])assert.ok((await fs.stat(path.join(output,name))).isFile(),name);
+  for(const name of ['vendor/jspdf.umd.min.js','vendor/jspdf.LICENSE','vendor/geotiff.js','vendor/geotiff.LICENSE','vendor/proj4.esm.mjs','vendor/proj4.LICENSE.md','vendor/leaflet.js','vendor/leaflet.css','vendor/leaflet.LICENSE','vendor/jszip.min.js','vendor/jszip.LICENSE.markdown','vendor/images/marker-icon.png','vendor/images/marker-shadow.png','assets/fonts/DejaVuSans.ttf','assets/fonts/LICENSE.txt'])assert.ok((await fs.stat(path.join(output,name))).isFile(),name);
   assert.ok((await fs.stat(path.join(output,'vendor/geotiff.js'))).size>100_000,'the pinned self-contained browser entry is staged');
   assert.ok((await fs.stat(path.join(output,'vendor/proj4.esm.mjs'))).size>100_000,'the pinned self-contained projection browser entry is staged');
   for(const stale of ['vendor/proj4.js','vendor/proj4.umd.mjs','src/proj4-runtime.mjs'])await assert.rejects(()=>fs.access(path.join(output,stale)));
@@ -62,6 +62,11 @@ test('Pages staging includes app modules but excludes repository and test depend
   assert.match(projectionRuntimeSource,/export default proj4;/);
   assert.doesNotMatch(projectionRuntimeSource,/globalThis/,'the browser artifact must never access the shared global object');
   assert.doesNotMatch(projectionSource+projectionRuntimeSource,/https?:|cdn|unpkg/i,'projection runtime must load only the locally staged module');
+  const stagedIndex=await fs.readFile(path.join(output,'index.html'),'utf8');
+  assert.match(stagedIndex,/href="vendor\/leaflet\.css\?v=test-commit"/);
+  assert.match(stagedIndex,/src="vendor\/leaflet\.js\?v=test-commit"/);
+  assert.match(stagedIndex,/src="vendor\/jszip\.min\.js\?v=test-commit"/);
+  assert.doesNotMatch(stagedIndex,/unpkg|jsdelivr|cdnjs/i,'the app shell must not depend on third-party CDNs');
   for(const name of ['.git','node_modules','tests','scripts','.superpowers','work','reference.pdf'])await assert.rejects(()=>fs.access(path.join(output,name)));
   const staged=[];
   const walk=async directory=>{for(const entry of await fs.readdir(directory,{withFileTypes:true})){const file=path.join(directory,entry.name);entry.isDirectory()?await walk(file):staged.push(path.relative(output,file));}};
@@ -167,8 +172,8 @@ test('staged first-party executable and style URLs change as a release moves',as
   for(let index=0;index<a.entries.length;index++)assert.notEqual(a.entries[index],b.entries[index]);
   for(let index=0;index<a.moduleUrls.length;index++)assert.notEqual(a.moduleUrls[index],b.moduleUrls[index]);
   const html=await fs.readFile(path.join(first,'index.html'),'utf8');
-  assert.match(html,/https:\/\/unpkg\.com\/leaflet@1\.9\.4\/dist\/leaflet\.js/);
-  assert.match(html,/https:\/\/cdn\.jsdelivr\.net\/npm\/jszip@3\.10\.1\/dist\/jszip\.min\.js/);
+  assert.match(html,/vendor\/leaflet\.js\?v=release%20A%2F%3F%26/);
+  assert.match(html,/vendor\/jszip\.min\.js\?v=release%20A%2F%3F%26/);
 });
 
 test('release module transform versions side-effect imports with an importable apostrophe-safe revision',async t=>{
