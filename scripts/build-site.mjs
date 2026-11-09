@@ -51,7 +51,10 @@ export async function buildSite({output=path.join(root,'_site'),revision=process
   await fs.mkdir(output,{recursive:true});
   const index=await fs.readFile(path.join(root,'index.html'),'utf8');
   await fs.writeFile(path.join(output,'index.html'),index
+    .replace('href="vendor/leaflet.css"',`href="${releaseUrl('vendor/leaflet.css',revision)}"`)
     .replace('href="styles.css"',`href="${releaseUrl('styles.css',revision)}"`)
+    .replace('src="vendor/leaflet.js"',`src="${releaseUrl('vendor/leaflet.js',revision)}"`)
+    .replace('src="vendor/jszip.min.js"',`src="${releaseUrl('vendor/jszip.min.js',revision)}"`)
     .replace('src="app.js"',`src="${releaseUrl('app.js',revision)}"`));
   for(const name of ['app.js','styles.css','print-preflight.mjs'])await fs.copyFile(path.join(root,name),path.join(output,name));
   for(const name of ['src','data'])await fs.cp(path.join(root,name),path.join(output,name),{recursive:true});
@@ -66,7 +69,8 @@ export async function buildSite({output=path.join(root,'_site'),revision=process
   for(const stale of ['proj4.js','proj4.umd.mjs'])await fs.rm(path.join(output,'vendor',stale),{force:true});
   await fs.writeFile(path.join(output,'vendor/proj4.esm.mjs'),proj4Module);
   await fs.mkdir(path.join(output,'assets/fonts'),{recursive:true});
-  for(const [from,to] of [['node_modules/jspdf/dist/jspdf.umd.min.js','vendor/jspdf.umd.min.js'],['node_modules/jspdf/LICENSE','vendor/jspdf.LICENSE'],['node_modules/geotiff/dist-browser/geotiff.js','vendor/geotiff.js'],['node_modules/geotiff/LICENSE','vendor/geotiff.LICENSE'],['node_modules/proj4/LICENSE.md','vendor/proj4.LICENSE.md'],['assets/fonts/DejaVuSans.ttf','assets/fonts/DejaVuSans.ttf'],['assets/fonts/LICENSE.txt','assets/fonts/LICENSE.txt']])await fs.copyFile(path.join(root,from),path.join(output,to));
+  for(const [from,to] of [['node_modules/jspdf/dist/jspdf.umd.min.js','vendor/jspdf.umd.min.js'],['node_modules/jspdf/LICENSE','vendor/jspdf.LICENSE'],['node_modules/geotiff/dist-browser/geotiff.js','vendor/geotiff.js'],['node_modules/geotiff/LICENSE','vendor/geotiff.LICENSE'],['node_modules/proj4/LICENSE.md','vendor/proj4.LICENSE.md'],['node_modules/leaflet/dist/leaflet.js','vendor/leaflet.js'],['node_modules/leaflet/dist/leaflet.css','vendor/leaflet.css'],['node_modules/leaflet/LICENSE','vendor/leaflet.LICENSE'],['node_modules/jszip/dist/jszip.min.js','vendor/jszip.min.js'],['node_modules/jszip/LICENSE.markdown','vendor/jszip.LICENSE.markdown'],['assets/fonts/DejaVuSans.ttf','assets/fonts/DejaVuSans.ttf'],['assets/fonts/LICENSE.txt','assets/fonts/LICENSE.txt']])await fs.copyFile(path.join(root,from),path.join(output,to));
+  await fs.cp(path.join(root,'node_modules/leaflet/dist/images'),path.join(output,'vendor/images'),{recursive:true});
   await fs.writeFile(path.join(output,'version.json'),JSON.stringify({revision,builtAt:new Date().toISOString()},null,2));
   console.log('Pages source staged in '+output);
 }
