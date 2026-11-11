@@ -141,7 +141,10 @@ function siteChanged(location){
   if(exportBusy)return;
   const moved=!project.location||project.location.lat!==location.lat||project.location.lng!==location.lng;
   project.location=location;
-  if(moved)for(const figure of Object.values(project.figures))delete figure.bounds;
+  if(moved){
+    for(const kind of ['surficial','bedrock']){if(officialLoading[kind]){geoRequest[kind]++;officialLoading[kind]=0;}}
+    for(const figure of Object.values(project.figures))delete figure.bounds;
+  }
   locationRevision++;setMarker(location);detect();renderFigures();save();historicalUI?.refresh();refreshPrint();autoLoadOfficialGeology();
 }
 function geocoderBoundary(result){const geometry=result?.geojson;if(!geometry||!['Polygon','MultiPolygon'].includes(geometry.type))return null;const candidates=geometry.type==='Polygon'?[geometry.coordinates?.[0]]:(geometry.coordinates||[]).map(polygon=>polygon?.[0]);const rings=candidates.filter(ring=>Array.isArray(ring)&&ring.length>=4).map(ring=>ring.map(point=>[Number(point?.[0]),Number(point?.[1])])).filter(ring=>ring.every(point=>Number.isFinite(point[0])&&Number.isFinite(point[1])));if(!rings.length)return null;const ring=rings.sort((a,b)=>b.length-a.length)[0],closed=closeRing(ring);return validBoundary(closed)?closed:null;}
