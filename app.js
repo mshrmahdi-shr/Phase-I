@@ -28,12 +28,26 @@ document[DRAWING_BINDINGS]?.abort();
 const drawingBindings=new window.AbortController();document[DRAWING_BINDINGS]=drawingBindings;
 function loadCompanyProfile(){try{const saved=localStorage.getItem(COMPANY_STORAGE);return saved?normalizeCompanyProfile(JSON.parse(saved)):null;}catch{return null;}}
 function saveCompanyProfile(profile){const normalized=normalizeCompanyProfile(profile);localStorage.setItem(COMPANY_STORAGE,JSON.stringify(normalized));return normalized;}
+const assetStore=createAssetStore();
+function dataUrlToBlob(dataUrl){
+  const match=/^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+  if(!match)throw new Error('The bundled default logo data is invalid.');
+  const bytes=Uint8Array.from(atob(match[2]),character=>character.charCodeAt(0));
+  return new Blob([bytes],{type:match[1]});
+}
+async function ensureDefaultCompanyProfile(){
+  const existing=loadCompanyProfile();
+  if(existing)return existing;
+  const logo=await assetStore.get(DEFAULT_FISHER_LOGO_ASSET_ID);
+  if(!logo)await assetStore.addIfAbsent({metadata:DEFAULT_FISHER_LOGO_METADATA,blob:dataUrlToBlob(DEFAULT_FISHER_LOGO_DATA_URL)},{ownerToken:'fisher-default-profile-v1'});
+  return saveCompanyProfile(normalizeCompanyProfile(DEFAULT_FISHER_PROFILE));
+}
 let companyProfile=loadCompanyProfile();
+if(!companyProfile)companyProfile=await ensureDefaultCompanyProfile();
 let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject({companyProfileSnapshot:companyProfile})})();
 let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,packageUI,geologyProvenance,exportBusy=false,printBranding=null,packagePersistenceToken=null;
 let annotationMode=null,annotationTarget=null;const annotationLayers=[];
 let requestProjectImport=()=>false;
-const assetStore=createAssetStore();
 const companyDialog=createCompanyProfileDialog({document,assetStore,loadProfile:loadCompanyProfile,saveProfile:saveCompanyProfile,Zip:JSZip,isAssetReferenced:id=>project.companyProfileSnapshot?.logoAssetId===id,onOpenProject:()=>requestProjectImport(),onChanged:profile=>{
   companyProfile=profile;preflight?.refresh();exportDialog?.refresh();if(!printSession?.isOpen)refreshPrint();
 }});
