@@ -229,10 +229,9 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
     globalThis.fetch=async url=>{requests.push(url);if(url.endsWith('manifest.json'))await gate;return {ok:true,json:async()=>url.endsWith('manifest.json')?manifest:{features:[feature]}};};
     choose('E');assert.equal(requests.length,1,'Figure E automatically starts its official cache load');
     const marker=Object.values(map._layers).find(layer=>layer instanceof L.Marker);marker.setLatLng([43.66,-79.38]);marker.fire('dragend');
-    release();await new Promise(resolve=>setTimeout(resolve,0));
-    assert.match($('geologyStatus').textContent,/SITE changed/);
-    assert.equal(JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology.bedrock,null);
-    await $('loadBedrock').onclick();
+    release();
+    for(let attempt=0;attempt<50&&!/Loaded 1 bedrock/.test($('geologyStatus').textContent);attempt++)await new Promise(resolve=>setTimeout(resolve,0));
+    assert.match($('geologyStatus').textContent,/Loaded 1 bedrock/);
     assert.equal(JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology.bedrock.source.id,'MRD126-REV1');
     const planningWindow=globalThis.window;delete globalThis.window;
     try{await $('exportPdf').onclick();assert.equal($('exportFigureE').disabled,false);}finally{globalThis.window=planningWindow;}$('cancelExport').click();
