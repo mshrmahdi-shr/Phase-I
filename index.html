@@ -83,14 +83,12 @@
       <details class="workflow-card">
         <summary><span><span class="step-number">5</span> Geology</span><span class="badge">OGS</span></summary>
         <div class="workflow-card-body">
-        <button id="loadMrd128" class="primary wide">Load official MRD128 Surficial</button>
-        <button id="loadBedrock" class="primary wide">Load official MRD126 Bedrock</button>
-        <p class="helper">OGS MRD128-REV polygons load from this site's cached KML/KMZ, with the supplied official legend. Reload geology after reopening a project.</p>
+        <p class="helper">Official OGS MRD128-REV Surficial and MRD126-REV1 Bedrock polygons load automatically after the site location is set. Reload the project if a previous load was interrupted.</p>
         <label>Or import KML/KMZ<input id="uploadGeology" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" /></label>
         <label>Import dataset type<select id="geologyKind"><option value="surficial">Surficial geology</option><option value="bedrock">Bedrock geology</option></select></label>
         <button id="editGeologyProvenance" type="button" hidden>Edit custom source details</button>
-        <p class="helper">Official Bedrock: MRD126-REV1 With Lowlands, compiled at 1:250,000. Custom imports keep their own legend; use the official button to replace them.</p>
-        <div id="geologyStatus" class="helper">Locate the property first, then load MRD128.</div>
+        <p class="helper">Official Bedrock: MRD126-REV1 With Lowlands, compiled at 1:250,000. Custom imports keep their own legend and remain available when re-imported.</p>
+        <div id="geologyStatus" class="helper">Locate the property first; official Surficial and Bedrock geology will load automatically.</div>
         </div>
       </details>
 
