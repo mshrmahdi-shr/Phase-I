@@ -37,7 +37,7 @@ const assetStore=createAssetStore();
 const companyDialog=createCompanyProfileDialog({document,assetStore,loadProfile:loadCompanyProfile,saveProfile:saveCompanyProfile,Zip:JSZip,isAssetReferenced:id=>project.companyProfileSnapshot?.logoAssetId===id,onOpenProject:()=>requestProjectImport(),onChanged:profile=>{
   companyProfile=profile;preflight?.refresh();exportDialog?.refresh();if(!printSession?.isOpen)refreshPrint();
 }});
-let locationRevision=0;
+let locationRevision=0,autoGeologyRevision=-1;
 const geoCoverage={surficial:null,bedrock:null},geoReady={surficial:false,bedrock:false},geoRequest={surficial:0,bedrock:0};
 // Imports supersede dataset commits, but only an official request owns its load button.
 const officialLoading={surficial:0,bedrock:0};
@@ -120,7 +120,7 @@ function renderWorkflowIssues(newError){
 }
 function status(id,t,k=''){const node=$(id);if(!node)return;node.textContent=t;node.dataset.kind=k;if(k==='error'&&t)workflowErrors.set(id,t);else if(k!=='error')workflowErrors.delete(id);renderWorkflowIssues(k==='error'&&Boolean(t));}
 $('dismissErrorCenter').onclick=()=>{errorCenterDismissed=true;$('errorCenter').hidden=true;};
-function loadingButton(id,value){const button=$(id);button.dataset.loading=String(value);button.disabled=value||exportBusy;}
+function loadingButton(id,value){const button=$(id);if(!button)return;button.dataset.loading=String(value);button.disabled=value||exportBusy;}
 function sync(){for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).value=project[k]||'';$('dpi').value=project.dpi||300;$('dpiBadge').textContent=`${project.dpi||300} DPI`;if(project.location){map.setView([project.location.lat,project.location.lng],16);setMarker(project.location)};redraw();renderFigures();historicalUI?.refresh();refreshPrint();updateLegend();updateScale();updateMapSourceStatus()}
 for(const [id,k] of [['projectName','name'],['projectNo','projectNo'],['address','address'],['projectDate','date']])$(id).oninput=e=>{project[k]=e.target.value;save();refreshPrint()};$('dpi').onchange=e=>{project.dpi=+e.target.value;$('dpiBadge').textContent=`${project.dpi} DPI`;save()};
 $('searchAddress').onclick=async()=>{
@@ -142,7 +142,7 @@ function siteChanged(location){
   const moved=!project.location||project.location.lat!==location.lat||project.location.lng!==location.lng;
   project.location=location;
   if(moved)for(const figure of Object.values(project.figures))delete figure.bounds;
-  locationRevision++;setMarker(location);detect();renderFigures();save();historicalUI?.refresh();refreshPrint();
+  locationRevision++;setMarker(location);detect();renderFigures();save();historicalUI?.refresh();refreshPrint();autoLoadOfficialGeology();
 }
 function geocoderBoundary(result){const geometry=result?.geojson;if(!geometry||!['Polygon','MultiPolygon'].includes(geometry.type))return null;const candidates=geometry.type==='Polygon'?[geometry.coordinates?.[0]]:(geometry.coordinates||[]).map(polygon=>polygon?.[0]);const rings=candidates.filter(ring=>Array.isArray(ring)&&ring.length>=4).map(ring=>ring.map(point=>[Number(point?.[0]),Number(point?.[1])])).filter(ring=>ring.every(point=>Number.isFinite(point[0])&&Number.isFinite(point[1])));if(!rings.length)return null;const ring=rings.sort((a,b)=>b.length-a.length)[0],closed=closeRing(ring);return validBoundary(closed)?closed:null;}
 function setMarker(p){
@@ -246,7 +246,6 @@ const esriKeyStore=createEsriKeyStore();
 function refreshEsriKeyStatus(){const configured=Boolean(esriKeyStore.load());status('esriKeyStatus',configured?'Esri API key is configured in this browser. It is not included in project packages or source files.':'Optional: enter an Esri API key for this browser only. It is never included in project exports.',configured?'ok':'');}
 $('saveEsriApiKey').onclick=()=>{try{esriKeyStore.save($('esriApiKey').value);$('esriApiKey').value='';refreshEsriKeyStatus();status('imageryStatus','Esri key saved locally. Reloading the map layers…','ok');setTimeout(()=>location.reload(),150);}catch(error){status('esriKeyStatus',error.message,'error');}};
 refreshEsriKeyStatus();
-$('loadMrd128').onclick=()=>loadMRD(true);
 async function loadMRD(user=true){
   if(exportBusy)return;
   if(!project.location){if(user)status('geologyStatus','Locate the property first.','error');return;}
@@ -266,7 +265,6 @@ async function loadMRD(user=true){
   }catch(e){if(ticket===geoRequest.surficial)status('geologyStatus',`MRD128 load failed: ${e.message} Check the published cache or import a polygon KML/KMZ.`,'error');}
   finally{if(ticket===officialLoading.surficial){officialLoading.surficial=0;loadingButton('loadMrd128',false);preflight.refresh();exportDialog?.refresh();}}
 }
-$('loadBedrock').onclick=()=>loadOfficialBedrock(true);
 async function loadOfficialBedrock(user=true){
   if(exportBusy)return;
   if(!project.location){if(user)status('geologyStatus','Locate the property first.','error');return;}
@@ -284,6 +282,13 @@ async function loadOfficialBedrock(user=true){
     commitDataset(result.features,'bedrock',result.source,result.docs,result.coverage);
   }catch(error){if(ticket===geoRequest.bedrock)status('geologyStatus',`MRD126 Bedrock load failed: ${error.message} Check the published cache or import a polygon KML/KMZ.`,'error');}
   finally{if(ticket===officialLoading.bedrock){officialLoading.bedrock=0;loadingButton('loadBedrock',false);preflight.refresh();exportDialog?.refresh();}}
+}
+function autoLoadOfficialGeology(){
+  if(!project.location||exportBusy||autoGeologyRevision===locationRevision)return;
+  autoGeologyRevision=locationRevision;
+  const needsOfficial=kind=>project.geology[kind]?.source?.id!=='custom'&&(!geoReady[kind]||!containsBounds(geoCoverage[kind],requiredGeologyBounds(kind)));
+  if(needsOfficial('surficial'))void loadMRD(false);
+  if(needsOfficial('bedrock'))void loadOfficialBedrock(false);
 }
 geologyProvenance=createGeologyProvenanceController({document,parsePolys,readKmz,Zip:JSZip,onCommit:async({mode,kind,source,features,docs,coverage,requestToken})=>{
   if(exportBusy)throw new Error('Finish the current export before changing geology provenance.');
@@ -410,7 +415,7 @@ async function initializePackageState(next,context={}){
   const normalized=normalizedPackageState(next,{requireProfile:context.phase!=='rollback'});project=normalized.project;companyProfile=normalized.companyProfile;drawingController.cancel();printSession?.close();printBranding=null;locationRevision++;
   for(const kind of ['surficial','bedrock']){geoRequest[kind]++;geo[kind].length=0;geoSource[kind]=null;geoCoverage[kind]=null;geoReady[kind]=false;}
   geoLayer?.remove();geoLayer=null;siteMarker?.remove();siteMarker=null;siteLayer?.remove();siteLayer=null;buildingLayer?.remove();buildingLayer=null;active='A';$('coords').textContent='No site selected';
-  sync();await companyDialog.refresh();await historicalUI.refresh();preflight?.refresh();exportDialog?.refresh();return true;
+  sync();autoLoadOfficialGeology();await companyDialog.refresh();await historicalUI.refresh();preflight?.refresh();exportDialog?.refresh();return true;
 }
 packageUI=createProjectPackageUI({document,assetStore,Zip:JSZip,getState:readPackageState,readState:readPackageState,persistState:persistPackageState,initialize:initializePackageState,
   isAssetReferenced:(id,state)=>state?.companyProfile?.logoAssetId===id||state?.project?.companyProfileSnapshot?.logoAssetId===id||state?.project?.historical?.some(item=>item.assetId===id),setBusy:setExportBusy,
@@ -418,4 +423,4 @@ packageUI=createProjectPackageUI({document,assetStore,Zip:JSZip,getState:readPac
 requestProjectImport=()=>{companyDialog.hideForExternalFlow();return packageUI.selectFile();};
 const openHistorical=()=>{if(exportBusy)return;drawingController.cancel();historicalUI.open();};
 $('manageHistorical').onclick=openHistorical;$('manageHistoricalHeader').onclick=openHistorical;
-sync();await companyDialog.refresh();if(!companyProfile)await companyDialog.open();else if(!project.companyProfileSnapshot)status('saveMessage','This legacy project has no assigned branding. Review the reusable Company Profile, then choose Apply Current Template to Project before creating outputs.','error');
+sync();autoLoadOfficialGeology();await companyDialog.refresh();if(!companyProfile)await companyDialog.open();else if(!project.companyProfileSnapshot)status('saveMessage','This legacy project has no assigned branding. Review the reusable Company Profile, then choose Apply Current Template to Project before creating outputs.','error');
