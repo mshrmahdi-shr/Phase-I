@@ -52,7 +52,7 @@ test('supported browsers save the SHR file through a folder-aware file picker',a
   try{
     const h=harness({download:undefined});h.document.getElementById('exportProjectPackage').click();await h.controller.whenIdle();
     assert.equal(pickerOptions.suggestedName,'project.shr');assert.deepEqual(pickerOptions.types[0].accept['application/x-shr-project'],['.shr']);
-    assert.deepEqual(events,['write:3','close']);assert.match(h.document.getElementById('projectPackageStatus').textContent,/selected project folder/i);
+    assert.deepEqual(events,['write:3','close']);assert.match(h.document.getElementById('projectPackageStatus').textContent,/selected project folder/i);assert.equal(h.document.getElementById('projectPackageDialog').hidden,true,'successful save closes the package dialog');
     h.controller.destroy();h.dom.window.close();
   }finally{if(original===undefined)delete globalThis.showSaveFilePicker;else globalThis.showSaveFilePicker=original;}
 });
