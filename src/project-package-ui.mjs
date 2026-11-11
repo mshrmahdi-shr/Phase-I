@@ -47,10 +47,14 @@ export function createProjectPackageUI({document,assetStore,Zip=globalThis.JSZip
   }
   async function exportWork(){
     if(operation||destroyed)return false;candidate=null;preview.hidden=true;open(exportButton);text('Validating the project, company profile, and referenced files…');meter.removeAttribute('value');
-    try{return await run('export',async({controller,token})=>{
-      const state=getState(),output=await exportPackage({...state,assetStore,Zip,signal:controller.signal,onProgress:update=>{if(operation?.token===token)progress(update);}});
-      if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();const saved=await download(output,document,controller.signal);if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();text(saved?.method==='picker'?'SHR project file saved in the selected project folder.':'SHR project file exported. Keep it in the project folder.','ok');return true;
-    });}catch(error){if(!aborted(error)&&!destroyed)text(`SHR project file was not saved: ${error.message}`,'error');return false;}
+    try{
+      const result=await run('export',async({controller,token})=>{
+        const state=getState(),output=await exportPackage({...state,assetStore,Zip,signal:controller.signal,onProgress:update=>{if(operation?.token===token)progress(update);}});
+        if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();const saved=await download(output,document,controller.signal);if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();text(saved?.method==='picker'?'SHR project file saved in the selected project folder.':'SHR project file exported. Keep it in the project folder.','ok');return true;
+      });
+      if(result)close({abort:false});
+      return result;
+    }catch(error){if(!aborted(error)&&!destroyed)text(`SHR project file was not saved: ${error.message}`,'error');return false;}
   }
   async function inspectWork(event){
     const file=event?.target?.files?.[0];if(!file||operation||destroyed)return false;open(document.activeElement);candidate=null;preview.hidden=true;confirmButton.disabled=true;text('Inspecting the project package without changing this browser…');meter.removeAttribute('value');
