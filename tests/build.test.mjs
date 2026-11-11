@@ -218,3 +218,15 @@ test('company profile does not block initial project setup',async()=>{
   assert.doesNotMatch(app,/if\(!companyProfile\)await companyDialog\.open\(\)/);
   assert.match(app,/Complete the Company Profile only when you are ready/);
 });
+
+
+test('Fisher Engineering is seeded as the default company template',async()=>{
+  const app=await fs.readFile(path.join(process.cwd(),'app.js'),'utf8');
+  const defaults=await fs.readFile(path.join(process.cwd(),'src/company-defaults.mjs'),'utf8');
+  assert.match(app,/ensureDefaultCompanyProfile\(\)/);
+  assert.match(app,/DEFAULT_FISHER_PROFILE/);
+  assert.match(defaults,/Fisher Engineering Limited/);
+  assert.match(defaults,/400 Esna Park Dr\., #15/);
+  assert.match(defaults,/fisher@fishereng\.com/);
+  assert.match(defaults,/fisher-default-logo/);
+});
