@@ -37,7 +37,7 @@ const assetStore=createAssetStore();
 const companyDialog=createCompanyProfileDialog({document,assetStore,loadProfile:loadCompanyProfile,saveProfile:saveCompanyProfile,Zip:JSZip,isAssetReferenced:id=>project.companyProfileSnapshot?.logoAssetId===id,onOpenProject:()=>requestProjectImport(),onChanged:profile=>{
   companyProfile=profile;preflight?.refresh();exportDialog?.refresh();if(!printSession?.isOpen)refreshPrint();
 }});
-let locationRevision=0,autoGeologyRevision=-1;
+let locationRevision=0;
 const geoCoverage={surficial:null,bedrock:null},geoReady={surficial:false,bedrock:false},geoRequest={surficial:0,bedrock:0};
 // Imports supersede dataset commits, but only an official request owns its load button.
 const officialLoading={surficial:0,bedrock:0};
@@ -215,7 +215,7 @@ function useForA3(code){
   try{
     const captured=captureFigureView(project,code,currentBounds());
     project.figures[code]={...project.figures[code],...captured};
-    renderFigures();save();refreshPrint();preflight.refresh();
+    renderFigures();save();refreshPrint();preflight.refresh();autoLoadOfficialGeology();
     status('mapSourceStatus',`Figure ${code} A3 view saved (${fmt(captured.extentMeters)}). Click View saved to restore it.`,'ok');
   }catch(error){status('mapSourceStatus',error.message,'error');}
 }
@@ -284,11 +284,10 @@ async function loadOfficialBedrock(user=true){
   finally{if(ticket===officialLoading.bedrock){officialLoading.bedrock=0;loadingButton('loadBedrock',false);preflight.refresh();exportDialog?.refresh();}}
 }
 function autoLoadOfficialGeology(){
-  if(!project.location||exportBusy||autoGeologyRevision===locationRevision)return;
-  autoGeologyRevision=locationRevision;
+  if(!project.location||exportBusy)return;
   const needsOfficial=kind=>project.geology[kind]?.source?.id!=='custom'&&(!geoReady[kind]||!containsBounds(geoCoverage[kind],requiredGeologyBounds(kind)));
-  if(needsOfficial('surficial'))void loadMRD(false);
-  if(needsOfficial('bedrock'))void loadOfficialBedrock(false);
+  if(needsOfficial('surficial')&&!officialLoading.surficial)void loadMRD(false);
+  if(needsOfficial('bedrock')&&!officialLoading.bedrock)void loadOfficialBedrock(false);
 }
 geologyProvenance=createGeologyProvenanceController({document,parsePolys,readKmz,Zip:JSZip,onCommit:async({mode,kind,source,features,docs,coverage,requestToken})=>{
   if(exportBusy)throw new Error('Finish the current export before changing geology provenance.');
@@ -383,7 +382,7 @@ async function prepareCadBranding(expected,{signal}={}){
   signal?.throwIfAborted();const branding=await companyDialog.outputSnapshot(expected);signal?.throwIfAborted();return Object.freeze({companyProfile:branding.companyProfile,companyLogo:branding.companyLogo});
 }
 exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile:project.companyProfileSnapshot,providers:HISTORICAL_PROVIDERS,assetStore}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport,prepareCadBranding,exportCadPackage});
-$('exportPdf').onclick=()=>{if(!printSession.isOpen)return exportDialog.open();};
+$('exportPdf').onclick=()=>{if(!printSession.isOpen){autoLoadOfficialGeology();return exportDialog.open();}};
 function refreshPrint(){
   const f=project.figures[active];
   $('printProject').textContent=project.name||'—';$('printAddress').textContent=project.address||'—';
