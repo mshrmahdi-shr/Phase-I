@@ -382,7 +382,7 @@ async function prepareCadBranding(expected,{signal}={}){
   signal?.throwIfAborted();const branding=await companyDialog.outputSnapshot(expected);signal?.throwIfAborted();return Object.freeze({companyProfile:branding.companyProfile,companyLogo:branding.companyLogo});
 }
 exportDialog=createExportDialog({document,getState:()=>({project,datasets:datasets(),companyProfile:project.companyProfileSnapshot,providers:HISTORICAL_PROVIDERS,assetStore}),save,setBusy:setExportBusy,exportPdf:exportBrandedPdf,planPdf:planPdfExport,prepareCadBranding,exportCadPackage});
-$('exportPdf').onclick=()=>{if(!printSession.isOpen){autoLoadOfficialGeology();return exportDialog.open();}};
+$('exportPdf').onclick=()=>{if(!printSession.isOpen)return exportDialog.open();};
 function refreshPrint(){
   const f=project.figures[active];
   $('printProject').textContent=project.name||'—';$('printAddress').textContent=project.address||'—';
