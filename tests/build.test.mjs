@@ -205,3 +205,10 @@ test('official geology controls are automatic after a site is available',async()
   assert.match(app,/loadOfficialBedrock\(false\)/);
   assert.match(app,/autoLoadOfficialGeology\(\);/);
 });
+
+
+test('official geology rechecks final sheet coverage before export',async()=>{
+  const app=await fs.readFile(path.join(process.cwd(),'app.js'),'utf8');
+  assert.match(app,/function useForA3\([\s\S]*?autoLoadOfficialGeology\(\);/);
+  assert.match(app,/\$\('exportPdf'\)\.onclick=.*autoLoadOfficialGeology\(\)/);
+});
