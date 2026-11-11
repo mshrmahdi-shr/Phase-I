@@ -11,7 +11,7 @@ function isInteractiveTarget(target){
   return Boolean(target?.matches?.(INTERACTIVE_TARGET)||target?.closest?.(INTERACTIVE_TARGET));
 }
 
-export function createDrawingController({closeRing,validBoundary,onDraft=()=>{},onCommit=()=>{},onCancel=()=>{},onStatus=()=>{}}){
+export function createDrawingController({closeRing,validBoundary,onDraft=()=>{},onCommit=()=>{},onCancel=()=>{},onStatus=()=>{},onUndo=()=>undefined,onRedo=()=>undefined}){
   let mode=null,points=[];
 
   function safeStatus(message){try{onStatus(message);}catch{}}
@@ -85,7 +85,20 @@ export function createDrawingController({closeRing,validBoundary,onDraft=()=>{},
   }
 
   function handleKey(event){
-    if(mode===null||event.defaultPrevented||event.isComposing||event.repeat||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey||isInteractiveTarget(event.target))return undefined;
+    if(event.defaultPrevented||event.isComposing||event.repeat||event.altKey||isInteractiveTarget(event.target))return undefined;
+    const key=String(event.key||'').toLowerCase();
+    if(event.ctrlKey||event.metaKey){
+      if(key==='z'){
+        event.preventDefault();
+        try{return event.shiftKey?onRedo():onUndo();}catch{safeStatus(CALLBACK_FAILURE);return undefined;}
+      }
+      if(key==='y'&&!event.shiftKey){
+        event.preventDefault();
+        try{return onRedo();}catch{safeStatus(CALLBACK_FAILURE);return undefined;}
+      }
+      return undefined;
+    }
+    if(mode===null||event.shiftKey)return undefined;
     if(event.key==='Enter'||event.code==='NumpadEnter'){event.preventDefault();return finish();}
     if(event.key==='Backspace'){event.preventDefault();return undo();}
     if(event.key==='Escape'){event.preventDefault();return cancel();}
