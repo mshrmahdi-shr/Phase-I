@@ -258,7 +258,7 @@ test('status callback failures never change finish results or core state',()=>{
 
 test('Ctrl+Z, Ctrl+Shift+Z, and Ctrl+Y delegate undo and redo without hijacking inputs',()=>{
   const calls=[];
-  const {controller}=createDrawingController({closeRing,validBoundary,onUndo:()=>calls.push('undo'),onRedo:()=>calls.push('redo')});
+  const controller=createDrawingController({closeRing,validBoundary,onUndo:()=>calls.push('undo'),onRedo:()=>calls.push('redo')});
   for(const event of [
     keyEvent({key:'z',ctrlKey:true}),
     keyEvent({key:'z',ctrlKey:true,shiftKey:true}),
