@@ -211,3 +211,10 @@ test('official geology rechecks final sheet coverage before export',async()=>{
   const app=await fs.readFile(path.join(process.cwd(),'app.js'),'utf8');
   assert.match(app,/function useForA3\([\s\S]*?autoLoadOfficialGeology\(\);/);
 });
+
+
+test('company profile does not block initial project setup',async()=>{
+  const app=await fs.readFile(path.join(process.cwd(),'app.js'),'utf8');
+  assert.doesNotMatch(app,/if\(!companyProfile\)await companyDialog\.open\(\)/);
+  assert.match(app,/Complete the Company Profile only when you are ready/);
+});
