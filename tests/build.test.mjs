@@ -193,3 +193,15 @@ test('release module transform versions side-effect imports with an importable a
   const loaded=await import(pathToFileURL(entry).href+'?entry');
   assert.equal(loaded.answer,42);assert.equal(globalThis.__releaseCacheSideEffect,true);
 });
+
+
+test('official geology controls are automatic after a site is available',async()=>{
+  const html=await fs.readFile(path.join(process.cwd(),'index.html'),'utf8');
+  const app=await fs.readFile(path.join(process.cwd(),'app.js'),'utf8');
+  assert.doesNotMatch(html,/id="loadMrd128"/);
+  assert.doesNotMatch(html,/id="loadBedrock"/);
+  assert.match(app,/function autoLoadOfficialGeology\(\)/);
+  assert.match(app,/loadMRD\(false\)/);
+  assert.match(app,/loadOfficialBedrock\(false\)/);
+  assert.match(app,/autoLoadOfficialGeology\(\);/);
+});
