@@ -70,6 +70,7 @@ function projectFixture(){
   project.id='project-historical-1';project.createdAt=STAMP;project.updatedAt=STAMP;project.location={...SITE};
   project.siteBoundary=[[-79.381,43.649],[-79.379,43.649],[-79.379,43.651],[-79.381,43.651],[-79.381,43.649]];
   project.buildingBoundary=[[-79.3806,43.6494],[-79.3794,43.6494],[-79.3794,43.6506],[-79.3806,43.6506],[-79.3806,43.6494]];
+  project.annotations=[{id:'note-b-1',figureCode:'B',text:'Former tank location',position:{lat:43.6502,lng:-79.3798},target:{lat:43.65,lng:-79.38},mask:true}];
   project.dpi=150;project.figures.D={...project.figures.D,title:'CUSTOM SURFICIAL GEOLOGY',extentMeters:4250};
   project.historical=[
     manualItem({id:IDS.firstItem,assetId:IDS.firstAsset,year:1960,sequence:1,title:'scan one.png'}),
@@ -162,6 +163,7 @@ test('exports a deterministic versioned package and round-trips two manual image
   assert.deepEqual(candidate.project.geology.bedrock.source,value.project.geology.bedrock.source,'custom geology provenance round-trips without guessed fields');
   assert.deepEqual(candidate.project.siteBoundary,value.project.siteBoundary,'site drawings round-trip in the SHR project file');
   assert.deepEqual(candidate.project.buildingBoundary,value.project.buildingBoundary,'building drawings round-trip in the SHR project file');
+  assert.deepEqual(candidate.project.annotations,value.project.annotations,'masked sheet annotations round-trip in the SHR project file');
   assert.deepEqual(candidate.project.figures,value.project.figures,'figure titles, extents and saved views round-trip in the SHR project file');
   assert.equal(candidate.project.dpi,value.project.dpi,'composition settings round-trip in the SHR project file');
   assert.deepEqual(candidate.project.companyProfileSnapshot,candidate.companyProfile);assert.deepEqual(candidate.assets.map(value=>value.metadata.id),['company-logo-acme',IDS.firstAsset,IDS.secondAsset]);

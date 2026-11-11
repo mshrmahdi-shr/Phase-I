@@ -89,17 +89,21 @@ for(const mode of ['timeout','cancel'])test(`${mode} during bitmap decoding prom
   await new Promise(resolve=>setImmediate(resolve));
   assert.ok(pending.length>0);assert.equal(surface.stats().closed,pending.length,'each bitmap resolving after cancellation is closed exactly once');assert.equal(surface.stats().drawn,0);
 });
-test('map overlays retain holes, distinguish site/building outlines and anchor SITE with the shared transform',async()=>{
+test('map overlays retain holes, keep buildings on Figure B only, and anchor SITE with the shared transform',async()=>{
   const {paintMapOverlays}=await import('../src/map-compositor.mjs'),{sheetGeometry}=await import('../src/sheet-layout.mjs');
   const ring=[[-79.301,43.699],[-79.299,43.699],[-79.299,43.701],[-79.301,43.701],[-79.301,43.699]];
   const project={...createProject(),location:{lat:43.7,lng:-79.3},siteBoundary:ring,buildingBoundary:ring},geometry=sheetGeometry(project,'A');
   const fills=[],strokes=[],points=[],labels=[];let paths=0;
   const ctx={beginPath(){paths=0;},moveTo(){paths++;},lineTo(){},closePath(){},fill(rule){fills.push({rule,paths,alpha:this.globalAlpha});},stroke(){strokes.push({color:this.strokeStyle,width:this.lineWidth,dash:this.dash});},setLineDash(dash){this.dash=dash;},arc(x,y){points.push([x,y]);},strokeText(){},fillText(text){labels.push(text);}};
-  paintMapOverlays(ctx,{project,geometry,features:[{polygon:ring,holes:[ring],fillOpacity:.6,color:'#ff0000'}]});
+  paintMapOverlays(ctx,{project,code:'A',geometry,features:[{polygon:ring,holes:[ring],fillOpacity:.6,color:'#ff0000'}]});
   assert.deepEqual(fills[0],{rule:'evenodd',paths:2,alpha:.6});
   assert.equal(strokes[1].color,'#ef4444');assert.deepEqual(strokes[1].dash,[]);
-  assert.equal(strokes[2].color,'#111111');assert.equal(strokes[2].dash.length,2);assert.ok(strokes[1].width>strokes[2].width);
+  assert.equal(strokes.some(stroke=>stroke.color==='#111111'),false,'building is hidden outside Site Plan');
   assert.deepEqual(labels,['SITE']);assert.ok(Math.abs(points[0][0]-geometry.raster.width/2)<.001);assert.ok(Math.abs(points[0][1]-geometry.raster.height/2)<.1);
+
+  strokes.length=0;labels.length=0;
+  paintMapOverlays(ctx,{project,code:'B',geometry,features:[]});
+  const building=strokes.find(stroke=>stroke.color==='#111111');assert.ok(building);assert.equal(building.dash.length,2);
 });
 
 function a3Bounds(location,halfWidth=2000){const [x,y]=projectPoint([location.lng,location.lat]),halfHeight=halfWidth/(420/297),sw=unprojectPoint([x-halfWidth,y-halfHeight]),ne=unprojectPoint([x+halfWidth,y+halfHeight]);return {west:sw[0],south:sw[1],east:ne[0],north:ne[1]};}

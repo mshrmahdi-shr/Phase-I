@@ -12,8 +12,9 @@ const MAX_JSON_BYTES=4*1024*1024;
 const MAX_ENTRIES=68;
 const MAX_COMPRESSION_RATIO=200;
 const MAX_PIXELS=16_000_000;
-const README='Phase I SHR project file\n\nOpen this .shr file with Open Project File, review the project and company summary, then confirm replacement. The file preserves project settings, saved map views, site/building drawings, branding, the exact logo, and permitted local historical images. JSON import remains available only for legacy projects.\n';
-const PROJECT_FIELDS=['address','buildingBoundary','company','companyProfileSnapshot','createdAt','date','dpi','exportPreferences','figures','geology','historical','historicalSequenceCounters','id','location','name','projectNo','schemaVersion','siteBoundary','updatedAt'];
+const README='Phase I SHR project file\n\nOpen this .shr file with Open Project File, review the project and company summary, then confirm replacement. The file preserves project settings, saved map views, site/building drawings, sheet annotations, branding, the exact logo, and permitted local historical images. JSON import remains available only for legacy projects.\n';
+const LEGACY_PROJECT_FIELDS=['address','buildingBoundary','company','companyProfileSnapshot','createdAt','date','dpi','exportPreferences','figures','geology','historical','historicalSequenceCounters','id','location','name','projectNo','schemaVersion','siteBoundary','updatedAt'];
+const PROJECT_FIELDS=[...LEGACY_PROJECT_FIELDS,'annotations'];
 const PROFILE_FIELDS=['address','companyName','email','id','logoAssetId','logoHeight','logoMime','logoPlacement','logoWidth','phone','preparedBy','reviewedBy','schemaVersion','updatedAt','website'];
 const PLACEMENT_FIELDS=['align','scale'];
 const MANIFEST_FIELDS=['companyProfileId','entries','format','projectId','schemaVersion'];
@@ -75,7 +76,8 @@ function checkedProfile(value,{strict=false}={}){
   if(strict&&!equalValue(profile,value))fail('Company profile JSON is not canonical or contains unsupported values.');return profile;
 }
 function checkedProject(value,{strict=false}={}){
-  if(strict)exactObject(value,PROJECT_FIELDS,'Project package project');
+  const legacyStrict=strict&&!Object.hasOwn(value,'annotations');
+  if(strict)exactObject(value,legacyStrict?LEGACY_PROJECT_FIELDS:PROJECT_FIELDS,'Project package project');
   const project=restoreProject(value);
   if(!SAFE_ID.test(project.id))fail('Project ID must use safe bounded characters.');
   isoTimestamp(project.createdAt,'Project createdAt');isoTimestamp(project.updatedAt,'Project updatedAt');
@@ -83,7 +85,7 @@ function checkedProject(value,{strict=false}={}){
   if(![150,300].includes(project.dpi))fail('Project DPI must be 150 or 300.');
   if(project.schemaVersion!==6)fail('Project package requires project schema version 6.');
   if(!project.companyProfileSnapshot)fail('Project branding is not assigned. Apply the current company template to this project before packaging it.');
-  if(strict&&!equalValue(project,value))fail('Project JSON is not canonical, has unsupported fields, or attempts a legacy trust upgrade.');
+  if(strict&&!equalValue(legacyStrict?Object.fromEntries(Object.entries(project).filter(([key])=>key!=='annotations')):project,value))fail('Project JSON is not canonical, has unsupported fields, or attempts a legacy trust upgrade.');
   return project;
 }
 

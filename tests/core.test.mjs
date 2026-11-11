@@ -45,6 +45,25 @@ test('createProject creates the five core figures with expected extents', () => 
   assert.equal(p.figures.B.extentMeters, 100);
   assert.equal(p.figures.D.extentMeters, 2000);
   assert.equal(p.figures.E.extentMeters, 20000);
+  assert.deepEqual(p.annotations,[]);
+});
+
+test('restoreProject preserves strict sheet annotations and rejects malformed markup',()=>{
+  const project=createProject();
+  project.annotations=[
+    {id:'note-1',figureCode:'B',text:'Former tank location',position:{lat:43.65,lng:-79.38},target:null,mask:true},
+    {id:'note-2',figureCode:'D',text:'Approximate contact',position:{lat:43.651,lng:-79.381},target:{lat:43.652,lng:-79.382},mask:true}
+  ];
+  assert.deepEqual(core.restoreProject(project).annotations,project.annotations);
+  for(const annotation of [
+    {...project.annotations[0],figureCode:'H'},
+    {...project.annotations[0],text:''},
+    {...project.annotations[0],position:{lat:100,lng:0}},
+    {...project.annotations[0],mask:false},
+    {...project.annotations[0],unexpected:true}
+  ]){
+    assert.throws(()=>core.restoreProject({...project,annotations:[annotation]}),/annotation|markup|text|position|figure/i);
+  }
 });
 
 test('new project keeps project number blank and restores a profile snapshot',()=>{

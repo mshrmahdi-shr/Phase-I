@@ -14,6 +14,8 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const PROVIDER_ID=/^[a-z][a-z0-9-]{0,63}$/;
 const KIND=/^[a-z][a-z0-9-]{0,63}$/;
 const RESULT_ID=/^[a-z][a-z0-9-]{0,63}:[A-Za-z0-9][A-Za-z0-9._~-]{0,199}$/;
+const ANNOTATION_FIELDS=['id','figureCode','text','position','target','mask'];
+const ANNOTATION_POINT_FIELDS=['lat','lng'];
 export const HISTORICAL_A3_RATIO=420/297;
 // 100 ppm is wider than JSON/double round-trip error while rejecting any visible crop distortion.
 export const HISTORICAL_A3_ASPECT_TOLERANCE=1e-4;
@@ -168,7 +170,7 @@ export function createProject({name='',projectNo='',address='',date='',company='
     id: (globalThis.crypto?.randomUUID?.() || `p-${Date.now()}`),
     name, projectNo, address, date, company,
     location:null,
-    siteBoundary:[], buildingBoundary:[], historical:[],historicalSequenceCounters:{},
+    siteBoundary:[], buildingBoundary:[], annotations:[], historical:[],historicalSequenceCounters:{},
     geology:{surficial:null,bedrock:null},
     dpi:300,
     companyProfileSnapshot:branding,
@@ -176,6 +178,23 @@ export function createProject({name='',projectNo='',address='',date='',company='
     figures:figureDefaults(),
     createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()
   };
+}
+
+function restoredAnnotations(value){
+  if(value===undefined)return [];
+  if(!Array.isArray(value)||value.length>500)throw new Error('Project annotations must be a bounded list.');
+  const ids=new Set();
+  return value.map((entry,index)=>{
+    const fields=exactRecord(entry,ANNOTATION_FIELDS,`Project annotation ${index+1}`);
+    if(typeof fields.id!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(fields.id)||ids.has(fields.id))throw new Error('Project annotation IDs are invalid or duplicated.');
+    ids.add(fields.id);
+    if(!['A','B','C','D','E'].includes(fields.figureCode))throw new Error('Project annotation figure is invalid.');
+    if(typeof fields.text!=='string'||!fields.text.trim()||fields.text.length>300||/[\u0000-\u001f\u007f]/.test(fields.text))throw new Error('Project annotation text is invalid.');
+    const point=(raw,label)=>{const record=exactRecord(raw,ANNOTATION_POINT_FIELDS,label),result={lat:record.lat,lng:record.lng};if(!validLocation(result))throw new Error(`${label} is invalid.`);return result;};
+    const position=point(fields.position,'Project annotation position'),target=fields.target===null?null:point(fields.target,'Project annotation target');
+    if(fields.mask!==true)throw new Error('Project annotation white mask must be enabled.');
+    return {id:fields.id,figureCode:fields.figureCode,text:fields.text.trim(),position,target,mask:true};
+  });
 }
 
 export function closeRing(points){
@@ -233,6 +252,7 @@ export function restoreProject(value){
   for(const key of ['name','projectNo','date','address']) if(typeof p[key]!=='string') throw new Error('Project fields must contain text.');
   if(p.location!==null&&!validLocation(p.location)) throw new Error('The project has invalid SITE coordinates.');
   for(const key of ['siteBoundary','buildingBoundary']) if(!Array.isArray(p[key])||(p[key].length&&!validBoundary(p[key]))) throw new Error('The project contains an invalid boundary.');
+  p.annotations=restoredAnnotations(value.annotations);
   if(!Array.isArray(p.historical)) throw new Error('The project has an invalid aerial image list.');
   p.historical=restoredHistorical(p.historical,p.location);
   p.historicalSequenceCounters=restoredHistoricalCounters(value.historicalSequenceCounters,p.historical);

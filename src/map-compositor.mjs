@@ -74,20 +74,32 @@ async function decodeImage(blob,signal){
 function pathRing(ctx,ring,geometry){
   ring.forEach((point,i)=>{const [x,y]=mapPoint(point,geometry);if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});ctx.closePath();
 }
-export function paintMapOverlays(ctx,{project,features=[],geometry}){
+function paintAnnotation(ctx,annotation,geometry,factor){
+  const [x,y]=mapPoint([annotation.position.lng,annotation.position.lat],geometry),fontSize=3.3*factor,padding=1.25*factor;
+  ctx.font=`bold ${fontSize}px sans-serif`;const measured=ctx.measureText?.(annotation.text)?.width||annotation.text.length*fontSize*.58,width=Math.min(90*factor,Math.max(10*factor,measured))+padding*2,height=fontSize*1.35+padding*2;
+  if(annotation.target){
+    const [tx,ty]=mapPoint([annotation.target.lng,annotation.target.lat],geometry),angle=Math.atan2(ty-y,tx-x),head=2.8*factor;
+    ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(tx,ty);ctx.strokeStyle='#111111';ctx.lineWidth=.45*factor;ctx.setLineDash([]);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(tx-head*Math.cos(angle-.5),ty-head*Math.sin(angle-.5));ctx.lineTo(tx-head*Math.cos(angle+.5),ty-head*Math.sin(angle+.5));ctx.closePath();ctx.fillStyle='#111111';ctx.fill();
+  }
+  ctx.fillStyle='#ffffff';ctx.globalAlpha=.96;ctx.fillRect(x-padding,y-height+padding,width,height);ctx.globalAlpha=1;ctx.strokeStyle='#111111';ctx.lineWidth=.25*factor;ctx.strokeRect?.(x-padding,y-height+padding,width,height);
+  ctx.fillStyle='#111111';ctx.fillText(annotation.text,x,y-padding);
+}
+export function paintMapOverlays(ctx,{project,code,features=[],geometry}){
   const factor=geometry.dpi/25.4;
   for(const feature of features){
     ctx.beginPath();for(const ring of [feature.polygon,...(feature.holes||[])])pathRing(ctx,ring,geometry);
     ctx.fillStyle=/^#[0-9a-f]{6}$/i.test(feature.color)?feature.color:'#5fa8d3';ctx.globalAlpha=Number.isFinite(feature.fillOpacity)?Math.min(1,Math.max(0,feature.fillOpacity)):.6;
     ctx.fill('evenodd');ctx.globalAlpha=1;ctx.strokeStyle='#475569';ctx.lineWidth=.18*factor;ctx.stroke();
   }
-  for(const [key,color,lineWidth,dash] of [['siteBoundary','#ef4444',.8,[]],['buildingBoundary','#111111',.5,[2*factor,1.5*factor]]]){
+  for(const [key,color,lineWidth,dash] of [['siteBoundary','#ef4444',.8,[]],...(code==='B'?[['buildingBoundary','#111111',.5,[2*factor,1.5*factor]]]:[])]){
     if(!project[key]?.length)continue;
     ctx.beginPath();pathRing(ctx,project[key],geometry);ctx.strokeStyle=color;ctx.lineWidth=lineWidth*factor;ctx.setLineDash(dash);ctx.stroke();
   }
   ctx.setLineDash([]);const [x,y]=mapPoint([project.location.lng,project.location.lat],geometry);
   ctx.beginPath();ctx.arc(x,y,1.6*factor,0,Math.PI*2);ctx.fillStyle='#ef4444';ctx.fill();ctx.strokeStyle='#ffffff';ctx.lineWidth=.6*factor;ctx.stroke();
   ctx.font=`bold ${3.5*factor}px sans-serif`;ctx.lineWidth=.9*factor;ctx.strokeStyle='#ffffff';ctx.strokeText('SITE',x+3*factor,y-2*factor);ctx.fillStyle='#111111';ctx.fillText('SITE',x+3*factor,y-2*factor);
+  for(const annotation of project.annotations||[])if(annotation.figureCode===code)paintAnnotation(ctx,annotation,geometry,factor);
 }
 /** Independently sized raster, including map overlays. Never reads or mutates the editor. */
 export async function composeMap({project,code,features=[],geometry,signal,onProgress=()=>{},requestTimeoutMs=30000}){
@@ -129,7 +141,7 @@ export async function composeMap({project,code,features=[],geometry,signal,onPro
     }
     await Promise.all(Array.from({length:Math.min(4,requests.length)},worker));
     throwIfAborted(signal);if(firstError)throw firstError;
-    paintMapOverlays(ctx,{project,features,geometry});throwIfAborted(signal);
+    paintMapOverlays(ctx,{project,code,features,geometry});throwIfAborted(signal);
     const dataUrl=canvas.toDataURL('image/jpeg',.94);if(!dataUrl.startsWith('data:image/jpeg'))throw new Error('Map canvas encoding failed.');
     return {dataUrl,width,height,bounds:geometry.bounds,dispose};
   }catch(error){dispose();throw error;}finally{signal?.removeEventListener('abort',cancel);}
@@ -303,6 +315,6 @@ export async function composeHistoricalImage({project,item,geometry,assetStore,p
         ctx.save();ctx.setTransform(a*scaleX,-b*scaleY,c*scaleX,-d*scaleY,(e-geometry.projected.west)*scaleX,(geometry.projected.north-f)*scaleY);ctx.drawImage(image,0,0);ctx.restore();onProgress({phase:'imagery',code,completed:1,total:1});
       }finally{image?.close?.();}
     }
-    paintMapOverlays(ctx,{project,geometry});throwIfAborted(signal);const dataUrl=canvas.toDataURL('image/jpeg',.94);if(!dataUrl.startsWith('data:image/jpeg'))throw new Error('Historical image canvas encoding failed.');return {dataUrl,width,height,bounds:{...geometry.bounds},dispose};
+    paintMapOverlays(ctx,{project,code:null,geometry});throwIfAborted(signal);const dataUrl=canvas.toDataURL('image/jpeg',.94);if(!dataUrl.startsWith('data:image/jpeg'))throw new Error('Historical image canvas encoding failed.');return {dataUrl,width,height,bounds:{...geometry.bounds},dispose};
   }catch(error){dispose();if(signal?.aborted||error?.name==='AbortError')throw new DOMException('Export cancelled.','AbortError');throw error;}finally{signal?.removeEventListener('abort',cancel);}
 }

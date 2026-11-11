@@ -31,6 +31,7 @@ function saveCompanyProfile(profile){const normalized=normalizeCompanyProfile(pr
 let companyProfile=loadCompanyProfile();
 let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject({companyProfileSnapshot:companyProfile})})();
 let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,packageUI,geologyProvenance,exportBusy=false,printBranding=null,packagePersistenceToken=null;
+let annotationMode=null,annotationTarget=null;const annotationLayers=[];
 const assetStore=createAssetStore();
 const companyDialog=createCompanyProfileDialog({document,assetStore,loadProfile:loadCompanyProfile,saveProfile:saveCompanyProfile,Zip:JSZip,isAssetReferenced:id=>project.companyProfileSnapshot?.logoAssetId===id,onChanged:profile=>{
   companyProfile=profile;preflight?.refresh();exportDialog?.refresh();if(!printSession?.isOpen)refreshPrint();
@@ -162,23 +163,42 @@ $('undoPoint').onclick=()=>drawingController.undo();
 function reportDrawResult(result){if(result&&result.ok===false)status('drawState',result.message,'error');return result;}
 $('finishDraw').onclick=()=>reportDrawResult(drawingController.finish());
 $('clearGeometry').onclick=()=>{drawingController.cancel();project.siteBoundary=[];project.buildingBoundary=[];redraw();save();};
+function annotationText(){const text=$('annotationText').value.trim();if(!text)throw new Error('Enter annotation text first.');return text;}
+function cancelAnnotation(message='No annotation tool active.'){annotationMode=null;annotationTarget=null;map.getContainer().style.cursor='';status('annotationStatus',message);}
+function beginAnnotation(mode){if(exportBusy)return;try{annotationText();drawingController.cancel();annotationMode=mode;annotationTarget=null;map.getContainer().style.cursor='crosshair';status('annotationStatus',mode==='text'?`Click the Figure ${active} map to place the masked text.`:`Click the arrow point on Figure ${active}, then click the label position.`,'ok');$('map').scrollIntoView({behavior:'smooth',block:'center'});}catch(error){status('annotationStatus',error.message,'error');$('annotationText').focus();}}
+$('placeText').onclick=()=>beginAnnotation('text');$('placeLeader').onclick=()=>beginAnnotation('leader-target');
+function annotationId(){return globalThis.crypto?.randomUUID?.()||`note-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;}
+function commitAnnotation(position,target=null){project.annotations.push({id:annotationId(),figureCode:active,text:annotationText(),position:{lat:position.lat,lng:position.lng},target:target?{lat:target.lat,lng:target.lng}:null,mask:true});cancelAnnotation(`Annotation added to Figure ${active}.`);redrawAnnotations();save();refreshPrint();}
+$('clearAnnotations').onclick=()=>{const before=project.annotations.length;project.annotations=project.annotations.filter(item=>item.figureCode!==active);cancelAnnotation(before===project.annotations.length?`Figure ${active} has no notes.`:`Notes cleared from Figure ${active}.`);redrawAnnotations();save();refreshPrint();};
 map.on('click',e=>{
+  if(annotationMode&&!exportBusy){
+    if(annotationMode==='text'){commitAnnotation(e.latlng);return;}
+    if(annotationMode==='leader-target'){annotationTarget=e.latlng;annotationMode='leader-label';status('annotationStatus','Arrow point set. Now click where the masked label should sit.','ok');return;}
+    if(annotationMode==='leader-label'){commitAnnotation(e.latlng,annotationTarget);return;}
+  }
   const mode=drawingController.state().mode;
   if(!mode||exportBusy)return;
   if(mode==='marker'){siteChanged({lat:e.latlng.lat,lng:e.latlng.lng});drawingController.cancel();return;}
   drawingController.add([e.latlng.lng,e.latlng.lat]);
 });
-document.addEventListener('keydown',event=>reportDrawResult(drawingController.handleKey(event)),{signal:drawingBindings.signal});
+document.addEventListener('keydown',event=>{if(annotationMode&&event.key==='Escape'){event.preventDefault();cancelAnnotation('Annotation placement cancelled.');return;}reportDrawResult(drawingController.handleKey(event));},{signal:drawingBindings.signal});
 map.getContainer().addEventListener('contextmenu',event=>reportDrawResult(drawingController.handleContextMenu(event)),{signal:drawingBindings.signal});
 window.addEventListener('pagehide',event=>{if(event.persisted)return;packageUI?.destroy();historicalUI?.destroy();geologyProvenance?.destroy();drawingBindings.abort();if(document[DRAWING_BINDINGS]===drawingBindings)delete document[DRAWING_BINDINGS];},{signal:drawingBindings.signal});
-function redraw(){siteLayer?.remove();buildingLayer?.remove();if(project.siteBoundary?.length)siteLayer=L.polygon(project.siteBoundary.map(([x,y])=>[y,x]),{color:'#ef4444',weight:4,fill:false}).addTo(map);if(project.buildingBoundary?.length)buildingLayer=L.polygon(project.buildingBoundary.map(([x,y])=>[y,x]),{color:'#111827',weight:3,dashArray:'6 4',fillColor:'#fff',fillOpacity:.1}).addTo(map)}
+function redraw(){siteLayer?.remove();buildingLayer?.remove();siteLayer=buildingLayer=null;if(project.siteBoundary?.length)siteLayer=L.polygon(project.siteBoundary.map(([x,y])=>[y,x]),{color:'#ef4444',weight:4,fill:false}).addTo(map);if(active==='B'&&project.buildingBoundary?.length)buildingLayer=L.polygon(project.buildingBoundary.map(([x,y])=>[y,x]),{color:'#111827',weight:3,dashArray:'6 4',fillColor:'#fff',fillOpacity:.1}).addTo(map);redrawAnnotations()}
+function annotationBearing(target,position){const lat=(target.lat+position.lat)/2*Math.PI/180;return Math.atan2((position.lng-target.lng)*Math.cos(lat),position.lat-target.lat)*180/Math.PI;}
+function annotationIcon(annotation){const wrapper=document.createElement('div');wrapper.className='map-annotation-label';wrapper.textContent=annotation.text;return L.divIcon({className:'annotation-icon-shell',html:wrapper.outerHTML,iconSize:null,iconAnchor:[0,18]});}
+function redrawAnnotations(){while(annotationLayers.length)annotationLayers.pop().remove();const list=$('annotationList');list.replaceChildren();const items=(project.annotations||[]).filter(item=>item.figureCode===active);for(const item of items){
+  if(item.target){annotationLayers.push(L.polyline([[item.position.lat,item.position.lng],[item.target.lat,item.target.lng]],{color:'#111827',weight:2.2,interactive:false}).addTo(map));const arrow=document.createElement('span');arrow.className='annotation-arrow-tip';arrow.style.transform=`rotate(${annotationBearing(item.target,item.position)}deg)`;annotationLayers.push(L.marker([item.target.lat,item.target.lng],{interactive:false,icon:L.divIcon({className:'annotation-arrow-shell',html:arrow.outerHTML,iconSize:[16,16],iconAnchor:[8,8]})}).addTo(map));}
+  annotationLayers.push(L.marker([item.position.lat,item.position.lng],{interactive:false,icon:annotationIcon(item)}).addTo(map));
+  const row=document.createElement('div');row.className='annotation-list-row';const text=document.createElement('span');text.textContent=item.text;const remove=document.createElement('button');remove.type='button';remove.textContent='Remove';remove.onclick=()=>{project.annotations=project.annotations.filter(value=>value.id!==item.id);redrawAnnotations();save();refreshPrint();};row.append(text,remove);list.append(row);
+  }if(!items.length){const empty=document.createElement('p');empty.className='helper';empty.textContent=`No notes on Figure ${active}.`;list.append(empty);}}
 function renderFigures(){const h=$('figureList');h.innerHTML='';for(const [c,f] of Object.entries(project.figures)){const d=document.createElement('div');d.className='figure-row'+(c===active?' active':'');d.innerHTML=`<div class="figure-top"><div><div class="figure-code">FIGURE ${c}</div><div class="figure-title">${esc(f.title)}</div></div><span class="badge" title="${f.bounds?'Saved A3 map span':'Default A3 map span'}">${fmt(f.extentMeters)}</span></div><div class="figure-actions"><button title="${f.bounds?'Restore the saved A3 map position and zoom':'Show the current A3 map extent'}">${f.bounds?'View saved':'View'}</button><button title="Save the current map position and zoom for A3/PDF">${f.bounds?'Update A3 view':'Use for A3'}</button></div>`;d.children[1].children[0].onclick=()=>selectFig(c,true);d.children[1].children[1].onclick=()=>useForA3(c);h.appendChild(d)}}
 function fmt(m){return m>=1000?`${m/1000} km`:`${m} m`;}
 function currentBounds(){const b=map.getBounds();return{north:b.getNorth(),south:b.getSouth(),east:b.getEast(),west:b.getWest()};}
 function requiredGeologyBounds(kind='surficial'){return geologySheetBounds(project,kind,150);}
 function selectFig(code,fit){
   if(exportBusy)return;
-  active=code;drawingController.cancel();renderFigures();
+  active=code;drawingController.cancel();cancelAnnotation();redraw();renderFigures();
   setBasemap(assignedBasemap());
   if(fit)zoom(code);renderGeo();detect();refreshPrint();preflight.refresh();refreshGeologyProvenanceAction();
   const kind=geologyKind();
@@ -349,7 +369,7 @@ function setExportBusy(value){
     busyHandlers.forEach(([handler])=>handler.disable());
   }else{
     busyControls.forEach(([node,disabled])=>node.disabled=node.dataset.loading===undefined?disabled:node.dataset.loading==='true');busyControls=[];
-    busyHandlers.forEach(([handler,enabled])=>{if(enabled)handler.enable();});busyHandlers=[];
+    busyHandlers.forEach(([handler,enabled])=>{const marker=handler._marker;if(enabled&&(!marker||marker._map&&marker._icon))handler.enable();});busyHandlers=[];
   }
 }
 async function exportBrandedPdf(args){const branding=await companyDialog.outputSnapshot(args.companyProfile);return exportCombinedPdf({...args,...branding});}
@@ -365,7 +385,7 @@ function refreshPrint(){
   $('printFigure').textContent=active;$('printTitle').textContent=f.title;
   $('printScale').textContent='AS SHOWN';
   const kind=geologyKind(),units=kind?relevantUnits(geo[kind],currentBounds()):[];
-  $('printLegend').innerHTML='<div class="legend-row"><span class="site-key"></span>SITE</div>'+ (project.siteBoundary.length?'<div class="legend-row"><span class="line-key"></span>Site boundary</div>':'')+(project.buildingBoundary.length?'<div class="legend-row"><span class="building-key"></span>Building boundary</div>':'')+(kind?(units.length?units.map(legendEntry).join(''):'No geology loaded'):'');
+  $('printLegend').innerHTML='<div class="legend-row"><span class="site-key"></span>SITE</div>'+ (project.siteBoundary.length?'<div class="legend-row"><span class="line-key"></span>Site boundary</div>':'')+(active==='B'&&project.buildingBoundary.length?'<div class="legend-row"><span class="building-key"></span>Building boundary</div>':'')+(kind?(units.length?units.map(legendEntry).join(''):'No geology loaded'):'');
   const base=sourceForFigure(active).credits,source=kind?geoSource[kind]:null;
   $('printSource').textContent=[source?[source.name,source.credits].filter(Boolean).join('. '):'',base,active==='B'?'Imagery acquisition date not verified.':''].filter(Boolean).join(' | ');
 }

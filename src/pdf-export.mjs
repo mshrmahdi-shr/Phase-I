@@ -114,7 +114,7 @@ function legendEntries(project,sheet){
   return [
     {name:'SITE',symbol:'site'},
     ...(project.siteBoundary?.length?[{name:'Site boundary',symbol:'siteBoundary'}]:[]),
-    ...(project.buildingBoundary?.length?[{name:'Building boundary',symbol:'buildingBoundary'}]:[]),
+    ...(sheet.code==='B'&&project.buildingBoundary?.length?[{name:'Building boundary',symbol:'buildingBoundary'}]:[]),
     ...sheet.units.map(unit=>({...unit,code:String(unit.unitCode||unit.name||'Geology unit')})),
   ];
 }

@@ -68,7 +68,7 @@ export function createProjectPackageUI({document,assetStore,Zip=globalThis.JSZip
     try{return await run('commit',async({controller,token})=>{
       const result=await commitPackage(selected,{assetStore,signal:controller.signal,readState,persistState,initialize,isAssetReferenced});if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();await onCommitted(result);
       if(controller.signal.aborted||token!==generation)throw controller.signal.reason??abortError();candidate=null;preview.hidden=true;confirmButton.disabled=true;text(`Project package imported. ${result.addedAssetIds.length} local files restored; ${result.reusedAssetIds.length} existing verified files reused.`,'ok');return true;
-    });}catch(error){if(!aborted(error)&&!destroyed)text(`Project package was not imported; the previous project and company profile were preserved: ${error.message}`,'error');return false;}
+    });}catch(error){if(!aborted(error)&&!destroyed){console.error('SHR project import failed',error);text(`Project package was not imported; the previous project and company profile were preserved: ${error.message}`,'error');}return false;}
   }
   function cancel(){return close();}
   function keydown(event){

@@ -6,6 +6,7 @@ import {deflateSync} from 'node:zlib';
 import {createProject} from '../src/core.mjs';
 import {IDBFactory} from 'fake-indexeddb';
 import {createAssetStore} from '../src/asset-store.mjs';
+import {exportProjectPackage} from '../src/project-package.mjs';
 
 const COMPANY_PROFILE={schemaVersion:1,id:'company-1',companyName:'Acme Environmental',address:'22 King Street',phone:'416-555-0110',
   email:'hello@acme.test',website:'https://acme.test',preparedBy:'Pat Lee',reviewedBy:'Sam Roy',logoAssetId:'logo-ui',
@@ -25,6 +26,7 @@ const LOGO_BYTES=pngBytes();
 test('index exposes the core Phase I workflow controls', () => {
   const html=fs.readFileSync(new URL('../index.html', import.meta.url),'utf8');
   for (const id of ['address','searchAddress','drawSite','drawBuilding','finishDraw','figureList','manageHistorical','historicalDialog','historicalYear',
+    'annotationText','placeText','placeLeader','clearAnnotations','annotationStatus',
     'searchHistorical','manualHistoricalFile','manualWorldFile','manualCitation','manualPermission','historicalCropFrame','historicalApprovedList','historicalViewControls','cancelHistoricalView','uploadGeology','printA3','exportDxf',
     'exportProjectPackage','importProjectPackage','importProjectPackageFile','projectPackageDialog','projectPackageStatus','confirmProjectPackageImport','cancelProjectPackage',
     'editCompanyProfile','applyCompanyTemplate','exportCompanyTemplate','importCompanyTemplate','companyProfileDialog','printCompanyLogo','printCompanyName','printCompanyContact',
@@ -33,6 +35,7 @@ test('index exposes the core Phase I workflow controls', () => {
   }
   const document=new JSDOM(html).window.document;assert.match(document.getElementById('exportPdf').textContent,/PDF.*AutoCAD/i);
   assert.match(html,/Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels\./);
+  assert.match(html,/white mask/i);
 });
 
 test('app wires the current historical provider registry and asset store into PDF planning',()=>{
@@ -157,6 +160,13 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   saved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2'));
   assert.deepEqual(saved.buildingBoundary,[[-79.379,43.651],[-79.378,43.651],[-79.378,43.652],[-79.379,43.651]]);
   assert.equal($('drawState').textContent,'Building boundary completed.');
+  const buildingLayer=()=>Object.values(map._layers).find(layer=>layer instanceof L.Polygon&&layer.options.dashArray==='6 4');
+  assert.equal(buildingLayer(),undefined,'building stays hidden on Figure A');choose('B');assert.ok(buildingLayer(),'building is visible on Site Plan');choose('C');assert.equal(buildingLayer(),undefined,'building stays hidden on other sheets');choose('A');
+  $('annotationText').value='Former tank location';$('placeText').click();map.fire('click',{latlng:L.latLng(43.6515,-79.3785)});
+  saved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2'));assert.equal(saved.annotations.length,1);assert.equal(saved.annotations[0].figureCode,'A');assert.equal(saved.annotations[0].target,null);
+  $('annotationText').value='Approximate contact';$('placeLeader').click();map.fire('click',{latlng:L.latLng(43.651,-79.379)});map.fire('click',{latlng:L.latLng(43.652,-79.378)});
+  saved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2'));assert.equal(saved.annotations.length,2);assert.deepEqual(saved.annotations[1].target,{lat:43.651,lng:-79.379});
+  assert.equal(document.querySelectorAll('.map-annotation-label').length,2);choose('B');assert.equal(document.querySelectorAll('.map-annotation-label').length,0);choose('A');
   $('drawSite').click();
   for(const [lat,lng] of [[43.653,-79.379],[43.653,-79.377],[43.654,-79.377],[43.654,-79.379]])map.fire('click',{latlng:L.latLng(lat,lng)});
   $('undoPoint').focus();
@@ -197,6 +207,14 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
   assert.ok(restored.getNorth()>=savedView.bounds.north&&restored.getSouth()<=savedView.bounds.south);
   assert.ok(restored.getEast()>=savedView.bounds.east&&restored.getWest()<=savedView.bounds.west);
   assert.match($('mapSourceStatus').textContent,/Figure B.*restored/i);
+  const imported={...JSON.parse(localStorage.getItem('phase-i-esa-project-v2')),name:'Imported QA project',updatedAt:new Date(Date.parse(p.createdAt)+1000).toISOString()};
+  const packageOutput=await exportProjectPackage({project:imported,assetStore:companyAssets,Zip:globalThis.JSZip});
+  const importInput=$('importProjectPackageFile');Object.defineProperty(importInput,'files',{value:[packageOutput.blob],configurable:true});importInput.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
+  for(let attempt=0;attempt<50&&$('confirmProjectPackageImport').disabled;attempt++)await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal($('confirmProjectPackageImport').disabled,false,$('projectPackageStatus').textContent);$('confirmProjectPackageImport').click();
+  for(let attempt=0;attempt<50&&!/imported\./i.test($('projectPackageStatus').textContent);attempt++)await new Promise(resolve=>setTimeout(resolve,0));
+  assert.match($('projectPackageStatus').textContent,/Project package imported\./i);assert.equal($('projectName').value,'Imported QA project');assert.equal(JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).annotations.length,2);
+  $('cancelProjectPackage').click();
   let browserPlanning=globalThis.window;delete globalThis.window;
   try{await $('exportPdf').onclick();assert.equal($('exportDialog').hidden,false);await $('selectAllReady').onclick();}
   finally{globalThis.window=browserPlanning;}

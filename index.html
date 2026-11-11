@@ -33,25 +33,43 @@
     </div>
 
   <main class="app-shell">
-    <aside class="panel project-panel">
-      <section>
-        <div class="section-heading"><h2><span class="step-number">1</span> Project Setup</h2><span id="saveState" class="badge">Browser</span></div>
+    <aside class="panel project-panel" aria-label="Project workflow">
+      <details class="workflow-card" open>
+        <summary><span><span class="step-number">1</span> Project Setup</span><span id="saveState" class="badge">Browser</span></summary>
+        <div class="workflow-card-body">
         <label>Project name<input id="projectName" placeholder="Phase I ESA – 92 Orchard Road" /></label>
         <div class="two-col"><label>Project no.<input id="projectNo" placeholder="AB-12345" /></label><label>Date<input id="projectDate" type="date" /></label></div>
         <label>Address<div class="inline-input"><input id="address" placeholder="92 Orchard Road, Ajax, ON" /><button id="searchAddress" class="primary">Find</button></div></label>
         <div id="searchStatus" class="helper">Uses OpenStreetMap/Nominatim for address lookup.</div>
         <div id="saveMessage" class="helper" role="status">Quick Save stays in this browser. Save an SHR project file for a portable editable copy.</div>
-      </section>
+        </div>
+      </details>
 
-      <section>
-        <div class="section-heading"><h2><span class="step-number">2</span> Site Geometry</h2><span id="drawState" class="badge">Idle</span></div>
+      <details class="workflow-card" open>
+        <summary><span><span class="step-number">2</span> Site Geometry</span><span id="drawState" class="badge">Idle</span></summary>
+        <div class="workflow-card-body">
         <div class="button-grid"><button id="setSite">Set SITE</button><button id="drawSite">Draw Site Boundary</button><button id="drawBuilding">Draw Building</button><button id="finishDraw">Finish Draw</button><button id="undoPoint">Undo Point</button><button id="clearGeometry" class="danger-soft">Clear Geometry</button></div>
+        <p class="scope-note">Building outlines are visible and exported on Figure B — Site Plan only.</p>
         <p class="helper">Find tries to add an editable boundary from the address source automatically. Review and adjust it when needed; if no boundary is published, draw one manually.</p>
         <p class="helper">Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels.</p>
-      </section>
+        </div>
+      </details>
 
-      <section>
-        <div class="section-heading"><h2><span class="step-number">3</span> Map &amp; Imagery</h2><span class="badge">Official + manual</span></div>
+      <details class="workflow-card" open>
+        <summary><span><span class="step-number">3</span> Map Markup</span><span class="badge">Per sheet</span></summary>
+        <div class="workflow-card-body">
+          <label>Annotation text<input id="annotationText" maxlength="300" placeholder="e.g. Former tank location" /></label>
+          <div class="button-grid"><button id="placeText" type="button">Place Text</button><button id="placeLeader" type="button">Text + Arrow</button></div>
+          <button id="clearAnnotations" type="button" class="danger-soft">Clear Notes on Active Figure</button>
+          <p class="scope-note">Notes are saved to the active figure with a printable white mask. For an arrow, click the arrow point first, then the label position.</p>
+          <div id="annotationStatus" class="helper" role="status">No annotation tool active.</div>
+          <div id="annotationList" class="annotation-list"></div>
+        </div>
+      </details>
+
+      <details class="workflow-card">
+        <summary><span><span class="step-number">4</span> Imagery &amp; Map</span><span class="badge">Sources</span></summary>
+        <div class="workflow-card-body">
         <button id="manageHistorical" class="primary wide">Find or add historical imagery</button>
         <label>Composition DPI<select id="dpi"><option>150</option><option selected>300</option><option value="600">600 (too large for A3)</option></select></label>
         <button id="openEarth">Open site in Google Earth</button>
@@ -59,10 +77,12 @@
         <button id="saveEsriApiKey" type="button">Save Esri key and reload map</button>
         <div id="esriKeyStatus" class="helper">Optional. The key is kept in this browser and is never included in project exports.</div>
         <div id="imageryStatus" class="helper">Search approved official sources or add a validated local image.</div>
-      </section>
+        </div>
+      </details>
 
-      <section>
-        <div class="section-heading"><h2><span class="step-number">4</span> Geology</h2><span class="badge">OGS data</span></div>
+      <details class="workflow-card">
+        <summary><span><span class="step-number">5</span> Geology</span><span class="badge">OGS</span></summary>
+        <div class="workflow-card-body">
         <button id="loadMrd128" class="primary wide">Load official MRD128 Surficial</button>
         <button id="loadBedrock" class="primary wide">Load official MRD126 Bedrock</button>
         <p class="helper">OGS MRD128-REV polygons load from this site's cached KML/KMZ, with the supplied official legend. Reload geology after reopening a project.</p>
@@ -71,10 +91,12 @@
         <button id="editGeologyProvenance" type="button" hidden>Edit custom source details</button>
         <p class="helper">Official Bedrock: MRD126-REV1 With Lowlands, compiled at 1:250,000. Custom imports keep their own legend; use the official button to replace them.</p>
         <div id="geologyStatus" class="helper">Locate the property first, then load MRD128.</div>
-      </section>
+        </div>
+      </details>
 
-      <section>
-        <div class="section-heading"><h2><span class="step-number">5</span> Export &amp; Project File</h2><span id="dpiBadge" class="badge">300 DPI</span></div>
+      <details class="workflow-card" open>
+        <summary><span><span class="step-number">6</span> Save &amp; Export</span><span id="dpiBadge" class="badge">300 DPI</span></summary>
+        <div class="workflow-card-body">
         <button id="exportPdf" class="primary wide" aria-describedby="exportButtonHelp" title="Open the export checklist to see exactly what is missing">Export PDF / AutoCAD</button>
         <p id="exportButtonHelp" class="helper export-button-help">If export is unavailable, open the checklist: disabled rows show the exact missing item and the top warning lists all active problems.</p>
         <div class="project-file-actions"><button id="exportProjectPackage" class="primary wide">Save Project File (.shr)</button><button id="importProjectPackage" type="button">Open Project File (.shr)</button></div>
@@ -82,8 +104,9 @@
         <input id="importProjectPackageFile" type="file" accept=".shr,application/x-shr-project,application/zip,.phasei-project.zip" hidden />
         <div class="legacy-project-tools"><span class="helper">Legacy compatibility</span><div class="button-grid"><button id="exportJson">Export Legacy JSON</button><label for="importJson" class="file-button">Import Legacy JSON<input id="importJson" type="file" accept="application/json,.json" /></label></div></div>
         <div id="printValidation" class="validation-panel" role="alert" hidden></div>
-        <p class="helper">The `.shr` file is the complete editable project: settings, saved figure views, site/building drawings, branding, exact logo, and permitted local historical files. Save it inside the project folder and reopen it whenever revisions are needed. JSON is legacy metadata only.</p>
-      </section>
+        <p class="helper">The `.shr` file is the complete editable project: settings, saved figure views, site/building drawings, masked annotations, branding, exact logo, and permitted local historical files. Save it inside the project folder and reopen it whenever revisions are needed. JSON is legacy metadata only.</p>
+        </div>
+      </details>
     </aside>
 
     <section class="workspace">
@@ -120,7 +143,7 @@
   <div id="projectPackageDialog" hidden role="dialog" aria-modal="true" aria-labelledby="projectPackageHeading" aria-describedby="projectPackageHelp">
     <section class="project-package-panel">
       <div class="project-package-heading"><div><div class="eyebrow">PORTABLE EDITABLE PROJECT</div><h2 id="projectPackageHeading">SHR Project File</h2></div></div>
-      <p id="projectPackageHelp">The `.shr` file preserves project settings, saved figure views, site/building drawings, required company branding, the exact logo, and permitted local historical imagery. Save it in the job folder, then reopen it later to continue editing. Every file is inspected before current data is replaced.</p>
+      <p id="projectPackageHelp">The `.shr` file preserves project settings, saved figure views, site/building drawings, masked sheet annotations, required company branding, the exact logo, and permitted local historical imagery. Save it in the job folder, then reopen it later to continue editing. Every file is inspected before current data is replaced.</p>
       <div id="projectPackagePreview" class="project-package-preview" hidden>
         <h3>Review imported package</h3>
         <p id="projectPackageSummary"></p><p id="projectPackageCompanySummary"></p><p id="projectPackageAssetSummary"></p>
