@@ -254,3 +254,21 @@ test('status callback failures never change finish results or core state',()=>{
   assert.deepEqual(commits,[{mode:'site',ring:result.ring}]);
   assert.deepEqual(controller.state(),{mode:null,points:[]});
 });
+
+
+test('Ctrl+Z, Ctrl+Shift+Z, and Ctrl+Y delegate undo and redo without hijacking inputs',()=>{
+  const calls=[];
+  const {controller}=createDrawingController({closeRing,validBoundary,onUndo:()=>calls.push('undo'),onRedo:()=>calls.push('redo')});
+  for(const event of [
+    keyEvent({key:'z',ctrlKey:true}),
+    keyEvent({key:'z',ctrlKey:true,shiftKey:true}),
+    keyEvent({key:'y',ctrlKey:true})
+  ]){
+    controller.handleKey(event);
+    assert.equal(event.defaultPrevented,true);
+  }
+  const input=keyEvent({key:'z',ctrlKey:true,target:{matches:selector=>selector.includes('input'),closest:()=>null}});
+  assert.equal(controller.handleKey(input),undefined);
+  assert.equal(input.defaultPrevented,false);
+  assert.deepEqual(calls,['undo','redo','redo']);
+});
