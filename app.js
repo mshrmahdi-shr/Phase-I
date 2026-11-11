@@ -246,7 +246,7 @@ function toggleGeometryEdit(mode){
   if(drawingController.state().mode)drawingController.cancel();
   startGeometryEdit(mode);
 }
-const drawingController=createDrawingController({closeRing,validBoundary,
+const drawingController=createDrawingController({closeRing,validBoundary,onUndo:undoGeometry,onRedo:redoGeometry,
   onDraft:points=>{draft?.remove();draft=points.length?L.polyline(points.map(([x,y])=>[y,x]),{color:'#fbbf24',dashArray:'7 5'}).addTo(map):null;},
   onCommit:(mode,ring)=>{if(mode==='site')project.siteBoundary=ring;else project.buildingBoundary=ring;recordGeometryChange(drawingBefore);drawingBefore=null;deactivateDrawing();redraw();save();updateGeometryHistoryButtons();},
   onCancel:()=>deactivateDrawing(),onStatus:message=>$('drawState').textContent=message
@@ -507,7 +507,7 @@ async function initializePackageState(next,context={}){
   const normalized=normalizedPackageState(next,{requireProfile:context.phase!=='rollback'});project=normalized.project;companyProfile=normalized.companyProfile;drawingController.cancel();printSession?.close();printBranding=null;locationRevision++;
   for(const kind of ['surficial','bedrock']){geoRequest[kind]++;geo[kind].length=0;geoSource[kind]=null;geoCoverage[kind]=null;geoReady[kind]=false;}
   geoLayer?.remove();geoLayer=null;siteMarker?.remove();siteMarker=null;siteLayer?.remove();siteLayer=null;buildingLayer?.remove();buildingLayer=null;active='A';$('coords').textContent='No site selected';
-  sync();autoLoadOfficialGeology();await companyDialog.refresh();await historicalUI.refresh();preflight?.refresh();exportDialog?.refresh();return true;
+  sync();autoLoadOfficialGeology();await companyDialog.refresh();updateGeometryHistoryButtons();await historicalUI.refresh();preflight?.refresh();exportDialog?.refresh();return true;
 }
 packageUI=createProjectPackageUI({document,assetStore,Zip:JSZip,getState:readPackageState,readState:readPackageState,persistState:persistPackageState,initialize:initializePackageState,
   isAssetReferenced:(id,state)=>state?.companyProfile?.logoAssetId===id||state?.project?.companyProfileSnapshot?.logoAssetId===id||state?.project?.historical?.some(item=>item.assetId===id),setBusy:setExportBusy,
