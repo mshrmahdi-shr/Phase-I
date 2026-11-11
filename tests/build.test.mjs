@@ -230,3 +230,16 @@ test('Fisher Engineering is seeded as the default company template',async()=>{
   assert.match(defaults,/fisher@fishereng\.com/);
   assert.match(defaults,/fisher-default-logo/);
 });
+
+
+test('boundary corners expose edit controls and keyboard history',async()=>{
+  const html=await fs.readFile(path.join(process.cwd(),'index.html'),'utf8');
+  const app=await fs.readFile(path.join(process.cwd(),'app.js'),'utf8');
+  assert.match(html,/id="editSiteCorners"/);
+  assert.match(html,/id="editBuildingCorners"/);
+  assert.match(html,/Ctrl\+Z/);
+  assert.match(app,/createGeometryHistory\(\)/);
+  assert.match(app,/onUndo:undoGeometry/);
+  assert.match(app,/onRedo:redoGeometry/);
+  assert.match(app,/function renderGeometryHandles\(mode\)/);
+});
