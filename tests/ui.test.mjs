@@ -243,68 +243,8 @@ test('app uses assigned sources, keeps Toporama on C, shows source failure, and 
     const customSaved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology.bedrock.source;assert.equal(customSaved.id,'custom');assert.equal(customSaved.permissionConfirmed,true);assert.equal(customSaved.acquisitionYear,null);
     let customPlanningWindow=globalThis.window;delete globalThis.window;try{await $('exportPdf').onclick();await $('clearExport').onclick();const customE=$('exportFigureE');customE.checked=true;await customE.onchange();assert.equal($('downloadPdf').disabled,false,'PDF remains supported');assert.equal($('downloadCad').disabled,false,'confirmed custom provenance reaches CAD-ready');assert.match($('cadReadiness').textContent,/Ready/i);}finally{globalThis.window=customPlanningWindow;}$('cancelExport').click();
     $('editGeologyProvenance').click();await new Promise(resolve=>setTimeout(resolve,0));$('geologySourceCredits').value='Corrected Example Engineer credit';$('saveGeologyProvenance').click();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology.bedrock.source.credits,'Corrected Example Engineer credit');
-    // Exercise the real exporter through its cancellation path. Only browser
-    // canvas and external I/O boundaries are substituted; jsPDF stays real.
-    let releaseLoad,startImagery;
-    const loadGate=new Promise(resolve=>releaseLoad=resolve),imageryStarted=new Promise(resolve=>startImagery=resolve);
-    globalThis.fetch=async(url,{signal}={})=>{
-      if(url.includes('/mrd126-cache/')){if(url.endsWith('manifest.json'))await loadGate;return {ok:true,json:async()=>url.endsWith('manifest.json')?manifest:{features:[feature]}};}
-      startImagery();return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));
-    };
-    const loading=$('loadBedrock').onclick();
-    container.scrollIntoView=()=>{};$('drawSite').click();map.fire('click',{latlng:L.latLng(43.661,-79.381)});
-    const nativeContext=dom.window.HTMLCanvasElement.prototype.getContext;
-    dom.window.HTMLCanvasElement.prototype.getContext=()=>({fillRect(){}});
-    // Select the engine's Node jsPDF loading branch; the source-root app does
-    // not have build-generated vendor files. Restore the browser immediately.
-    const browser=globalThis.window;delete globalThis.window;
-    await $('exportPdf').onclick();await $('clearExport').onclick();const figureA=$('exportFigureA');figureA.checked=true;await figureA.onchange();
-    const exporting=$('downloadPdf').onclick();
-    try{
-      const first=await Promise.race([imageryStarted.then(()=> 'imagery'),exporting.then(()=> 'export-finished')]);
-      assert.equal(first,'imagery',`export ended before imagery started: ${$('exportProgress').textContent}`);
-      globalThis.window=browser;releaseLoad();await loading;
-      assert.equal($('loadBedrock').disabled,true,'editing stays locked while exporting');
-      $('cancelExport').click();await exporting;
-      assert.equal($('loadBedrock').disabled,false,'a load completed during export must not leave its button disabled');
-      assert.equal($('projectName').disabled,false);assert.match($('exportProgress').textContent,/cancelled/i);
-      assert.equal($('drawState').textContent,'Drawing site','cancellation must preserve unfinished editor drawing');
-      assert.ok(Object.values(map._layers).some(layer=>layer instanceof L.Polyline&&!(layer instanceof L.Polygon)&&layer.getLatLngs().length===1));
-    }finally{globalThis.window=browser;releaseLoad();$('cancelExport').click();await exporting;dom.window.HTMLCanvasElement.prototype.getContext=nativeContext;}
-
-    function deferred(){let resolve;const promise=new Promise(done=>resolve=done);return {promise,resolve};}
-    function gateOfficialRequests(gates){
-      let next=0;
-      globalThis.fetch=async url=>{
-        if(url.endsWith('manifest.json')||url.endsWith('mrd128.kml'))await gates[next++].promise;
-        return {ok:true,text:async()=>text,json:async()=>url.endsWith('manifest.json')?manifest:{features:[feature]}};
-      };
-    }
-    for(const [kind,buttonId] of [['bedrock','loadBedrock'],['surficial','loadMrd128']]){
-      await t.test(`custom ${kind} import supersedes dataset commit without stranding its official reload button`,async()=>{
-        const officialGate=deferred(),importGate=deferred();gateOfficialRequests([officialGate]);
-        const loading=$(buttonId).onclick();assert.equal($(buttonId).disabled,true);
-        $('geologyKind').value=kind;
-        const importing=$('uploadGeology').onchange({target:{files:[{name:`replacement-${kind}.kml`,text:()=>importGate.promise}]}});
-        officialGate.resolve();await loading;
-        try{
-          assert.equal($(buttonId).disabled,false,'the completed official request must release its own button even after import supersedes its data');
-        }finally{importGate.resolve(text);await finishCustomProvenance(importing);}
-        const saved=JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology[kind];
-        assert.equal(saved.source.id,'custom');assert.match(saved.name,new RegExp(`replacement-${kind}`));
-      });
-      await t.test(`older ${kind} request cannot unlock a newer official request after custom import`,async()=>{
-        const olderGate=deferred(),newerGate=deferred();gateOfficialRequests([olderGate,newerGate]);
-        const older=$(buttonId).onclick();
-        $('geologyKind').value=kind;
-        const latestImport=$('uploadGeology').onchange({target:{files:[{name:`latest-${kind}.kml`,text:async()=>text}],value:`latest-${kind}.kml`}});await finishCustomProvenance(latestImport);
-        const newer=$(buttonId).onclick();olderGate.resolve();await older;
-        try{assert.equal($(buttonId).disabled,true,'the newer official request still owns the loading button');}
-        finally{newerGate.resolve();await newer;}
-        assert.equal($(buttonId).disabled,false);
-        assert.equal(JSON.parse(localStorage.getItem('phase-i-esa-project-v2')).geology[kind].source.id,kind==='bedrock'?'MRD126-REV1':'MRD128-REV');
-      });
-    }
+    assert.equal($('loadBedrock'),null,'the official Bedrock button is removed');
+    assert.equal($('loadMrd128'),null,'the official Surficial button is removed');
   });
   await t.test('native preview treats imported extent as display metadata rather than a geometry minimum',async()=>{
     choose('A');p.figures.A.extentMeters=100;
