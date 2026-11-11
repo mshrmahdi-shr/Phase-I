@@ -425,4 +425,4 @@ packageUI=createProjectPackageUI({document,assetStore,Zip:JSZip,getState:readPac
 requestProjectImport=()=>{companyDialog.hideForExternalFlow();return packageUI.selectFile();};
 const openHistorical=()=>{if(exportBusy)return;drawingController.cancel();historicalUI.open();};
 $('manageHistorical').onclick=openHistorical;$('manageHistoricalHeader').onclick=openHistorical;
-sync();autoLoadOfficialGeology();await companyDialog.refresh();if(!companyProfile)await companyDialog.open();else if(!project.companyProfileSnapshot)status('saveMessage','This legacy project has no assigned branding. Review the reusable Company Profile, then choose Apply Current Template to Project before creating outputs.','error');
+sync();autoLoadOfficialGeology();await companyDialog.refresh();if(!companyProfile)status('saveMessage','Complete the Company Profile only when you are ready to create PDF/CAD outputs.');else if(!project.companyProfileSnapshot)status('saveMessage','This legacy project has no assigned branding. Review the reusable Company Profile, then choose Apply Current Template to Project before creating outputs.','error');
