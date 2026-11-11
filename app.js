@@ -13,6 +13,7 @@ import {normalizeCompanyProfile,validateCompanyProfile} from './src/company-prof
 import {createCompanyProfileDialog} from './src/company-ui.mjs';
 import {createProjectPackageUI} from './src/project-package-ui.mjs';
 import {createDrawingController} from './src/drawing-controller.mjs';
+import {createGeometryHistory} from './src/geometry-history.mjs';
 import {createGeologyProvenanceController} from './src/geology-provenance-ui.mjs';
 import {createHistoricalImageryUI,migrateLegacyHistoricalImagery} from './src/historical-ui.mjs';
 import {ONTARIO_IMAGERY_PROVIDER} from './src/imagery/providers/ontario.mjs';
@@ -147,7 +148,7 @@ $('searchAddress').onclick=async()=>{
     const a=await r.json();if(!a.length)throw Error('Address not found. Try a more complete address or use Set SITE.');
     if(exportBusy||revision!==locationRevision)return;
     project.address=a[0].display_name;$('address').value=project.address;
-    siteChanged({lat:+a[0].lat,lng:+a[0].lon});const suggested=geocoderBoundary(a[0]);if(!project.siteBoundary?.length&&suggested){project.siteBoundary=suggested;redraw();save();status('searchStatus',`Located: ${project.address}. An editable boundary was added from the address source; review it before export.`,'ok');}else status('searchStatus',`Located: ${project.address}`,'ok');zoom(active);
+    siteChanged({lat:+a[0].lat,lng:+a[0].lon});const suggested=geocoderBoundary(a[0]);if(!project.siteBoundary?.length&&suggested){const before=geometrySnapshot();project.siteBoundary=suggested;recordGeometryChange(before);redraw();save();status('searchStatus',`Located: ${project.address}. An editable boundary was added from the address source; review it before export.`,'ok');}else status('searchStatus',`Located: ${project.address}`,'ok');zoom(active);
   }catch(e){status('searchStatus',e.name==='TimeoutError'?'Address search timed out. Try again or use Set SITE.':e.message,'error');}
   finally{loadingButton('searchAddress',false);}
 };
@@ -170,17 +171,92 @@ function setMarker(p){
   $('coords').textContent=`${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`;
 }
 function deactivateDrawing(){map.getContainer().style.cursor='';map.doubleClickZoom.enable();}
+const geometryHistory=createGeometryHistory();
+let geometryEditMode=null,geometryHandles=[],geometryDragBefore=null,drawingBefore=null;
+function geometrySnapshot(){return {siteBoundary:(project.siteBoundary||[]).map(point=>[...point]),buildingBoundary:(project.buildingBoundary||[]).map(point=>[...point])};}
+function updateGeometryHistoryButtons(){
+  const undo=$('undoPoint'),redo=$('redoPoint');
+  if(undo)undo.disabled=exportBusy||(!drawingController.state().mode&&!geometryHistory.canUndo());
+  if(redo)redo.disabled=exportBusy||Boolean(drawingController.state().mode)||!geometryHistory.canRedo();
+}
+function recordGeometryChange(before){if(before&&geometryHistory.record(before,geometrySnapshot()))updateGeometryHistoryButtons();}
+function removeGeometryHandles(){while(geometryHandles.length)geometryHandles.pop().remove();}
+function openBoundary(mode){
+  const boundary=mode==='site'?project.siteBoundary:project.buildingBoundary;
+  if(!Array.isArray(boundary)||boundary.length<4)return [];
+  const closed=boundary.length>1&&boundary[0][0]===boundary.at(-1)[0]&&boundary[0][1]===boundary.at(-1)[1];
+  return closed?boundary.slice(0,-1):boundary.slice();
+}
+function movedBoundaryVertex(mode,index,latlng){
+  const open=openBoundary(mode);if(index<0||index>=open.length)return null;
+  open[index]=[latlng.lng,latlng.lat];return closeRing(open);
+}
+function updateBoundaryLayer(mode,ring){
+  const layer=mode==='site'?siteLayer:buildingLayer;
+  layer?.setLatLngs(ring.map(([x,y])=>[y,x]));
+}
+function renderGeometryHandles(mode){
+  removeGeometryHandles();
+  for(const [index,[lng,lat]] of openBoundary(mode).entries()){
+    const handle=L.marker([lat,lng],{draggable:true,icon:L.divIcon({className:'geometry-vertex-handle',html:'<span></span>',iconSize:[18,18],iconAnchor:[9,9]})}).addTo(map);
+    handle.on('dragstart',()=>{geometryDragBefore=geometrySnapshot();});
+    handle.on('drag',event=>{
+      const candidate=movedBoundaryVertex(mode,index,event.target.getLatLng());
+      if(candidate&&validBoundary(candidate))updateBoundaryLayer(mode,candidate);
+    });
+    handle.on('dragend',event=>{
+      const candidate=movedBoundaryVertex(mode,index,event.target.getLatLng()),before=geometryDragBefore;
+      geometryDragBefore=null;
+      if(!candidate||!validBoundary(candidate)){
+        status('drawState','That corner would make the boundary invalid. The previous position was restored.','error');
+        redraw();renderGeometryHandles(mode);return;
+      }
+      if(mode==='site')project.siteBoundary=candidate;else project.buildingBoundary=candidate;
+      recordGeometryChange(before);save();redraw();renderGeometryHandles(mode);
+      status('drawState',mode==='site'?'Editing SITE corners — drag a handle or choose Undo.':'Editing building corners — drag a handle or choose Undo.','ok');
+    });
+    geometryHandles.push(handle);
+  }
+}
+function startGeometryEdit(mode){
+  const boundary=openBoundary(mode);if(boundary.length<3){status('drawState','Draw the '+(mode==='site'?'SITE':'building')+' boundary first.','error');return false;}
+  geometryEditMode=mode;redraw();renderGeometryHandles(mode);
+  status('drawState',mode==='site'?'Editing SITE corners — drag a handle.':'Editing building corners — drag a handle.','ok');
+  return true;
+}
+function stopGeometryEdit(message='Idle'){removeGeometryHandles();geometryEditMode=null;geometryDragBefore=null;status('drawState',message);}
+function applyGeometrySnapshot(next){
+  const editMode=geometryEditMode;
+  project.siteBoundary=next.siteBoundary.map(point=>[...point]);project.buildingBoundary=next.buildingBoundary.map(point=>[...point]);
+  redraw();if(editMode)renderGeometryHandles(editMode);save();updateGeometryHistoryButtons();
+}
+function undoGeometry(){
+  if(drawingController.state().mode)return drawingController.undo();
+  const next=geometryHistory.undo();if(!next){status('drawState','Nothing to undo.');return undefined;}
+  applyGeometrySnapshot(next);status('drawState',geometryEditMode?'Last corner change undone.':'Last geometry change undone.','ok');return next;
+}
+function redoGeometry(){
+  if(drawingController.state().mode)return undefined;
+  const next=geometryHistory.redo();if(!next){status('drawState','Nothing to redo.');return undefined;}
+  applyGeometrySnapshot(next);status('drawState',geometryEditMode?'Corner change restored.':'Geometry change restored.','ok');return next;
+}
+function toggleGeometryEdit(mode){
+  if(exportBusy)return;
+  if(geometryEditMode===mode){stopGeometryEdit();return;}
+  if(drawingController.state().mode)drawingController.cancel();
+  startGeometryEdit(mode);
+}
 const drawingController=createDrawingController({closeRing,validBoundary,
   onDraft:points=>{draft?.remove();draft=points.length?L.polyline(points.map(([x,y])=>[y,x]),{color:'#fbbf24',dashArray:'7 5'}).addTo(map):null;},
-  onCommit:(mode,ring)=>{if(mode==='site')project.siteBoundary=ring;else project.buildingBoundary=ring;deactivateDrawing();redraw();save();},
+  onCommit:(mode,ring)=>{if(mode==='site')project.siteBoundary=ring;else project.buildingBoundary=ring;recordGeometryChange(drawingBefore);drawingBefore=null;deactivateDrawing();redraw();save();updateGeometryHistoryButtons();},
   onCancel:()=>deactivateDrawing(),onStatus:message=>$('drawState').textContent=message
 });
-function beginDrawing(mode){if(exportBusy)return;drawingController.begin(mode);map.getContainer().style.cursor='crosshair';map.doubleClickZoom.disable();$('map').scrollIntoView({behavior:'smooth',block:'center'});}
+function beginDrawing(mode){if(exportBusy)return;stopGeometryEdit();drawingBefore=mode==='site'||mode==='building'?geometrySnapshot():null;drawingController.begin(mode);map.getContainer().style.cursor='crosshair';map.doubleClickZoom.disable();$('map').scrollIntoView({behavior:'smooth',block:'center'});}
 $('setSite').onclick=()=>beginDrawing('marker');$('drawSite').onclick=()=>beginDrawing('site');$('drawBuilding').onclick=()=>beginDrawing('building');
-$('undoPoint').onclick=()=>drawingController.undo();
+$('undoPoint').onclick=()=>reportDrawResult(undoGeometry());$('redoPoint').onclick=()=>reportDrawResult(redoGeometry());$('editSiteCorners').onclick=()=>toggleGeometryEdit('site');$('editBuildingCorners').onclick=()=>toggleGeometryEdit('building');
 function reportDrawResult(result){if(result&&result.ok===false)status('drawState',result.message,'error');return result;}
 $('finishDraw').onclick=()=>reportDrawResult(drawingController.finish());
-$('clearGeometry').onclick=()=>{drawingController.cancel();project.siteBoundary=[];project.buildingBoundary=[];redraw();save();};
+$('clearGeometry').onclick=()=>{const before=geometrySnapshot();stopGeometryEdit();drawingController.cancel();project.siteBoundary=[];project.buildingBoundary=[];recordGeometryChange(before);redraw();save();updateGeometryHistoryButtons();};
 function annotationText(){const text=$('annotationText').value.trim();if(!text)throw new Error('Enter annotation text first.');return text;}
 function cancelAnnotation(message='No annotation tool active.'){annotationMode=null;annotationTarget=null;map.getContainer().style.cursor='';status('annotationStatus',message);}
 function beginAnnotation(mode){if(exportBusy)return;try{annotationText();drawingController.cancel();annotationMode=mode;annotationTarget=null;map.getContainer().style.cursor='crosshair';status('annotationStatus',mode==='text'?`Click the Figure ${active} map to place the masked text.`:`Click the arrow point on Figure ${active}, then click the label position.`,'ok');$('map').scrollIntoView({behavior:'smooth',block:'center'});}catch(error){status('annotationStatus',error.message,'error');$('annotationText').focus();}}
