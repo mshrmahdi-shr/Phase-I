@@ -516,3 +516,14 @@ requestProjectImport=()=>{companyDialog.hideForExternalFlow();return packageUI.s
 const openHistorical=()=>{if(exportBusy)return;drawingController.cancel();historicalUI.open();};
 $('manageHistorical').onclick=openHistorical;$('manageHistoricalHeader').onclick=openHistorical;
 sync();autoLoadOfficialGeology();await companyDialog.refresh();if(!companyProfile)status('saveMessage','Complete the Company Profile only when you are ready to create PDF/CAD outputs.');else if(!project.companyProfileSnapshot)status('saveMessage','This legacy project has no assigned branding. Review the reusable Company Profile, then choose Apply Current Template to Project before creating outputs.','error');
+
+async function loadAppVersion(){
+  const node=$('appVersion');if(!node)return;
+  try{
+    const response=await fetch('./version.json',{cache:'no-store'});if(!response.ok)throw new Error('version unavailable');
+    const data=await response.json(),revision=String(data.revision||'local').trim()||'local';
+    node.textContent=`Version ${revision==='local-development'?'local':revision.slice(0,8)}`;
+    node.title=data.builtAt?`Build ${data.builtAt}`:'Application build version';
+  }catch{node.textContent='Version local';}
+}
+loadAppVersion();
