@@ -50,8 +50,9 @@ export async function buildSite({output=path.join(root,'_site'),revision=process
   const proj4Module=proj4BrowserModuleSource(proj4Source,packageManifest.dependencies?.proj4);
   await fs.mkdir(output,{recursive:true});
   const index=await fs.readFile(path.join(root,'index.html'),'utf8');
+  const appVersion=String(revision).trim()||'local-development';
   await fs.writeFile(path.join(output,'index.html'),index
-    .replace('href="vendor/leaflet.css"',`href="${releaseUrl('vendor/leaflet.css',revision)}"`)
+    .replace('>Version —<',`>Version ${appVersion==='local-development'?'local':appVersion.slice(0,8)}<`)\n    .replace('href="vendor/leaflet.css"',`href="${releaseUrl('vendor/leaflet.css',revision)}"`)
     .replace('href="styles.css"',`href="${releaseUrl('styles.css',revision)}"`)
     .replace('src="vendor/leaflet.js"',`src="${releaseUrl('vendor/leaflet.js',revision)}"`)
     .replace('src="vendor/jszip.min.js"',`src="${releaseUrl('vendor/jszip.min.js',revision)}"`)
