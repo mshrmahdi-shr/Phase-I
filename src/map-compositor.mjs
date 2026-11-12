@@ -211,7 +211,7 @@ export async function revalidateHistoricalOfficialSource({project,item,providers
   const current=[...grouped.exact,...grouped.nearby,...grouped.remaining].find(result=>result.id===item.officialExport.resultId);
   if(!current){
     const detail=grouped.errors?.[0]?.message||'';
-    if(/timed out|timeout|network|fetch failed|HTTP 5\\d\\d/i.test(detail))return savedOfficialResult({project,item,providers});
+    if(/timed out|timeout|network|fetch failed|HTTP 5\d\d/i.test(detail))return savedOfficialResult({project,item,providers});
     throw new Error(code+': the approved official source is no longer returned by its current provider. '+(detail ? detail+' ' : '')+'Reopen and approve a source again.');
   }
   return validateCurrentOfficialResult(project,item,provider,current);
