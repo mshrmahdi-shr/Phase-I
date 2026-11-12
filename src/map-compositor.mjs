@@ -124,7 +124,7 @@ export async function composeMap({project,code,features=[],geometry,signal,onPro
     const requests=imageryPlan(code,geometry);let cursor=0,complete=0;
     async function worker(){
       while(cursor<requests.length&&!controller.signal.aborted){
-        const request=requests[cursor++];let image;
+        const request=requests[cursor++];let image;onProgress({phase:'imagery-start',code,completed:complete,total:requests.length});
         const timeout=setTimeout(()=>{firstError??=new Error(`${sourceForFigure(code).label} image request timed out. Check your connection and retry.`);controller.abort();},Math.max(1,Math.min(45000,requestTimeoutMs||30000)));
         try{
           throwIfAborted(controller.signal);
@@ -197,10 +197,23 @@ function validateCurrentOfficialResult(project,item,provider,currentResult){
   return currentResult;
 }
 
+function savedOfficialResult({project,item,providers}={}){
+  const provider=officialProvider(project,item,providers),descriptor=item.officialExport,preview=descriptor.preview;
+  const current={id:descriptor.resultId,providerId:item.providerId,title:item.title,year:item.year,resolutionMeters:item.resolutionMeters,
+    coverage:{...descriptor.coverage},preview:{kind:preview.kind,url:preview.url,...(preview.layer===null?{}:{layer:preview.layer}),...(preview.tileTemplate===null?{}:{tileTemplate:preview.tileTemplate})},
+    export:{kind:descriptor.kind,url:descriptor.url,...(descriptor.layer===null?{}:{layer:descriptor.layer}),maxWidth:descriptor.maxWidth,maxHeight:descriptor.maxHeight},
+    policy:'exportable',sourceUrl:item.sourceUrl,licenseUrl:item.licenseUrl,attribution:item.attribution};
+  return validateCurrentOfficialResult(project,item,provider,current);
+}
+
 export async function revalidateHistoricalOfficialSource({project,item,providers,signal,fetchImpl=globalThis.fetch}={}){
   throwIfAborted(signal);const provider=officialProvider(project,item,providers),code=historicalCode(item),grouped=await searchOfficialImagery({providers:[provider],location:project.location,year:item.year,signal,fetchImpl});throwIfAborted(signal);
   const current=[...grouped.exact,...grouped.nearby,...grouped.remaining].find(result=>result.id===item.officialExport.resultId);
-  if(!current){const detail=grouped.errors?.[0]?.message?` ${grouped.errors[0].message}`:'';throw new Error(`${code}: the approved official source is no longer returned by its current provider.${detail} Reopen and approve a source again.`);}
+  if(!current){
+    const detail=grouped.errors?.[0]?.message||'';
+    if(/timed out|timeout|network|fetch failed|HTTP 5\\d\\d/i.test(detail))return savedOfficialResult({project,item,providers});
+    throw new Error(code+': the approved official source is no longer returned by its current provider. '+(detail ? detail+' ' : '')+'Reopen and approve a source again.');
+  }
   return validateCurrentOfficialResult(project,item,provider,current);
 }
 
@@ -288,7 +301,7 @@ export async function loadHistoricalAssetSnapshot({project,item,assetStore,signa
 }
 
 /** Independently composes the exact approved historical crop and shared project overlays. */
-export async function composeHistoricalImage({project,item,geometry,assetStore,providers,currentOfficialResult,signal,onProgress=()=>{},fetchImpl=globalThis.fetch,requestTimeoutMs=120000}={}){
+export async function composeHistoricalImage({project,item,geometry,assetStore,providers,currentOfficialResult,signal,onProgress=()=>{},fetchImpl=globalThis.fetch,requestTimeoutMs=60000}={}){
   throwIfAborted(signal);checkedHistorical({project,item,geometry});let requests=null,asset=null;
   if(item.mode==='official'){const current=currentOfficialResult??await revalidateHistoricalOfficialSource({project,item,providers,signal,fetchImpl});requests=historicalImageryPlan({project,item,geometry,providers,currentResult:current});}else asset=await loadHistoricalAssetSnapshot({project,item,assetStore,signal});
   throwIfAborted(signal);if(typeof document==='undefined')throw new Error('Historical image composition requires a browser canvas.');
@@ -301,7 +314,7 @@ export async function composeHistoricalImage({project,item,geometry,assetStore,p
     const ctx=canvas.getContext('2d');if(!ctx)throw new Error('The browser could not allocate a historical image canvas.');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,width,height);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
     if(requests){
       let cursor=0,complete=0,firstError;
-      async function worker(){while(cursor<requests.length&&!controller.signal.aborted){const request=requests[cursor++];let image;const timeout=setTimeout(()=>{firstError??=new Error(`${code}: official image request timed out. Check your connection and retry.`);controller.abort();},Math.max(1,Math.min(180000,requestTimeoutMs||120000)));try{
+      async function worker(){while(cursor<requests.length&&!controller.signal.aborted){const request=requests[cursor++];let image;onProgress({phase:'imagery-start',code,completed:complete,total:requests.length});const timeout=setTimeout(()=>{firstError??=new Error(`${code}: official image request timed out. Check your connection and retry.`);controller.abort();},Math.max(1,Math.min(180000,requestTimeoutMs||120000)));try{
         throwIfAborted(controller.signal);const response=await fetchImpl(request.url,{mode:'cors',credentials:'omit',redirect:'error',signal:controller.signal});if(!response.ok)throw new Error(`${code}: official image request failed (HTTP ${response.status}).`);
         if(!/^image\/(png|jpeg|webp)/i.test(response.headers.get('content-type')||''))throw new Error(`${code}: the official service returned an error instead of an image.`);
         const blob=await readImageResponse(response,{signal:controller.signal,code});
