@@ -251,7 +251,7 @@ test('export reports historical source requests and exposes the deployed app ver
   const compositor=await fs.readFile(path.join(process.cwd(),'src/map-compositor.mjs'),'utf8');
   const exporter=await fs.readFile(path.join(process.cwd(),'src/export-selection.mjs'),'utf8');
   assert.match(html,/id="appVersion"/);
-  assert.match(app,/version\\.json/);
+  assert.match(app,/version\.json/);
   assert.match(compositor,/phase:'imagery-start'/);
   assert.match(compositor,/savedOfficialResult/);
   assert.match(exporter,/requesting source image/);
