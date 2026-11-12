@@ -210,7 +210,6 @@ export async function revalidateHistoricalOfficialSource({project,item,providers
   throwIfAborted(signal);const provider=officialProvider(project,item,providers),code=historicalCode(item),grouped=await searchOfficialImagery({providers:[provider],location:project.location,year:item.year,signal,fetchImpl});throwIfAborted(signal);
   const current=[...grouped.exact,...grouped.nearby,...grouped.remaining].find(result=>result.id===item.officialExport.resultId);
   if(!current){
-    const detail=grouped.errors?.[0]?.message||'';
     // The project already stores the exact approved export endpoint. Use it when
     // the provider catalog is temporarily incomplete or has renamed the record;
     // the image request below remains the final availability check.
