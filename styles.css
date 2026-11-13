@@ -176,6 +176,11 @@ button,.file-button{background:#f5f8fa;color:#263d4e;box-shadow:none;backdrop-fi
 .validation-panel{background:#fff1f1;color:#9a343c}.validation-panel strong{color:#812c34}.map-note[data-kind="error"]{background:#fff2f2;color:#a53b43}
 @media(max-width:700px){.company-profile-heading,.historical-heading{background:#fff}}
 
+/* Historical result cards keep a usable information column even in narrow panels. */
+.historical-result{grid-template-columns:92px minmax(240px,1fr) auto;min-width:0}
+.historical-result h4,.historical-result-meta{min-width:0}
+.historical-result h4{word-break:normal;overflow-wrap:anywhere}
+
 /* Dense, predictable controls: map stays primary and actions read as tools. */
 .app-shell{grid-template-columns:286px minmax(420px,1fr) 250px}
 .project-panel{padding:9px;gap:5px}.figures-panel{padding:11px 9px}
@@ -192,9 +197,6 @@ button,.file-button{background:#f5f8fa;color:#263d4e;box-shadow:none;backdrop-fi
 @media(max-width:1200px){.app-shell{grid-template-columns:270px minmax(360px,1fr) 230px}}
 @media(max-width:990px){.app-shell{grid-template-columns:270px minmax(0,1fr)}}
 @media(max-width:700px){.app-shell{display:flex}.project-panel,.figures-panel{padding:9px}.map-toolbar{flex-direction:row;flex-wrap:wrap}.workspace #mapHome{height:420px}}
-
-/* Let a one-finger swipe scroll the document on touch screens. */
-@media(pointer:coarse){#map{touch-action:pan-y}}
 
 .scale-calibration{margin:10px 0;padding:10px;border:1px solid #9ccac5;border-radius:9px;background:#f1f8f7}
 .scale-calibration>summary{cursor:pointer;font-weight:700;color:#176f6b}
