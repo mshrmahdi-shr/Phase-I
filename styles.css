@@ -167,3 +167,11 @@ button,.file-button{background:#f5f8fa;color:#263d4e;box-shadow:none;backdrop-fi
 @media(max-width:1200px){.app-shell{grid-template-columns:290px minmax(360px,1fr) 245px}}
 @media(max-width:990px){.app-shell{height:auto;grid-template-columns:290px minmax(0,1fr);gap:0}.workspace{min-height:570px}.figures-panel{grid-column:1/-1;border-left:0;border-top:1px solid #d5e0e5}.project-panel,.figures-panel{overflow:visible}.topbar{height:auto;min-height:64px}.top-actions{flex-wrap:wrap}}
 @media(max-width:700px){.app-shell{display:flex;flex-direction:column}.project-panel{order:2;border-right:0;border-top:1px solid #d5e0e5}.workspace{order:1;min-height:480px}.workspace #mapHome{height:420px;min-height:420px}.figures-panel{order:3}.topbar{padding:9px 12px}.top-actions{width:100%}.brand-lockup h1{font-size:16px}}
+.project-package-panel>p,.project-package-preview p,.company-profile-panel>p,.export-panel p,.historical-panel>p,.historical-crop-controls p{color:#536b7c}
+.company-profile-panel fieldset,.export-row,#manualPlacementControls{border-color:#d7e3e7}.company-profile-heading,.historical-heading{background:#fff;border-color:#dbe5e8}
+.logo-preview-box,.cad-export-summary,.historical-result{background:#f6f9fa;border-color:#d7e3e7}.export-row:has(input:checked),.project-package-preview,.company-import-preview,.historical-crop-controls{background:#eaf6f4;border-color:#6eb4ae}
+.export-reason,.cad-export-summary p,.historical-result-meta{color:#536b7c}.export-reason.export-continuation,.historical-year-heading{color:#16827e}
+.cad-export-summary>div{color:#315d68}.export-footer{background:#fff}.historical-modes button[aria-selected="true"]{background:#d8f0ec;border-color:#168e89;color:#146c68}
+.historical-approved-item{border-color:#dae5e8}.historical-approved-item strong{color:#203849}.historical-readiness{color:#16835e}
+.validation-panel{background:#fff1f1;color:#9a343c}.validation-panel strong{color:#812c34}.map-note[data-kind="error"]{background:#fff2f2;color:#a53b43}
+@media(max-width:700px){.company-profile-heading,.historical-heading{background:#fff}}
