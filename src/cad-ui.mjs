@@ -79,7 +79,20 @@ export function createCadExportController({document,getSnapshot,setBusy,exportPa
     const pending=new AbortController();active=pending;onBusyChange(true);const controls=[...elements.dialog.querySelectorAll('button,input,select')].filter(node=>node!==elements.cancel),disabled=controls.map(node=>[node,node.disabled]);controls.forEach(node=>node.disabled=true);elements.cancel.disabled=false;elements.cancel.textContent='Cancel export';elements.meter.hidden=false;elements.meter.removeAttribute('value');elements.progress.textContent=PHASE_LABELS.preflight;
     try{
       setBusy(true);const result=await exportPackage({...input,signal:pending.signal,onProgress:progress});throwIfAborted(pending.signal);download(result,{document,signal:pending.signal,fallbackContainer:elements.dialog.querySelector('.export-footer')});throwIfAborted(pending.signal);const warnings=Array.isArray(result.warnings)&&result.warnings.length?` Warning: ${result.warnings.join(' ')}`:'';elements.progress.textContent=`Downloaded ${imageLabel(result.imageCount)} with ${result.pageCount} PDF ${result.pageCount===1?'sheet':'sheets'} in one AutoCAD ZIP.${warnings}`;
-    }catch(error){elements.progress.textContent=pending.signal.aborted||error?.name==='AbortError'?'AutoCAD export cancelled. No ZIP downloaded.':`Export blocked: ${error?.message||String(error)}`;}
+    }catch(error){
+      if(!pending.signal.aborted&&/official image request timed out/i.test(error?.message||'')&&input.selection.length>1){
+        const failedId=(error.message.match(/H-\\d+-\\d+/)||[])[0];
+        const retrySelection=input.selection.filter(item=>item?.id!==failedId);
+        if(retrySelection.length<input.selection.length){
+          try{
+            elements.progress.textContent=`${failedId} timed out. Retrying with the remaining ${retrySelection.length} selected images…`;
+            const retry=await exportPackage({...input,selection:retrySelection,signal:pending.signal,onProgress:progress});throwIfAborted(pending.signal);download(retry,{document,signal:pending.signal,fallbackContainer:elements.dialog.querySelector('.export-footer')});
+            elements.progress.textContent=`Downloaded ${imageLabel(retry.imageCount)} with ${retry.pageCount} PDF ${retry.pageCount===1?'sheet':'sheets'}. ${failedId} was skipped because its official source timed out.`;return;
+          }catch(retryError){error=retryError;}
+        }
+      }
+      elements.progress.textContent=pending.signal.aborted||error?.name==='AbortError'?'AutoCAD export cancelled. No ZIP downloaded.':`Export blocked: ${error?.message||String(error)}`;
+    }
     finally{active=null;let cleanupError=null;try{setBusy(false);}catch(error){cleanupError=error;}disabled.forEach(([node,value])=>node.disabled=value);elements.cancel.textContent='Close';elements.meter.hidden=true;refresh();onBusyChange(false);if(cleanupError)elements.progress.textContent=`Export finished, but editing controls could not be restored: ${cleanupError.message}`;}
   }
   function start(){if(destroyed||active)return;currentRun=run();return currentRun;}
