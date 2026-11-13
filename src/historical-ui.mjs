@@ -1,7 +1,7 @@
 import {figureBounds,restoreProject,validHistoricalA3Bounds} from './core.mjs';
 import {decodeManualImage,parseWorldFile} from './imagery/manual-image.mjs';
 import {createCanvasImageOverlay} from './imagery/canvas-overlay.mjs';
-import {geographicPlacementCorners,placementCorners,placementFromExtent,placementFromGeoReference,projectWebMercator,rotationFromPoint,unprojectWebMercator,validatePlacement} from './imagery/placement.mjs';
+import {geographicPlacementCorners,placementCorners,placementFromExtent,placementFromGeoReference,placementFromScaleBar,projectWebMercator,rotationFromPoint,unprojectWebMercator,validatePlacement} from './imagery/placement.mjs';
 import {groupImageryResults,searchOfficialImagery} from './imagery/search.mjs';
 import {validateAcquisitionYear,validateImageryProvider,validateImageryResult,validateProviderUrl} from './imagery/provider-registry.mjs';
 
@@ -159,7 +159,7 @@ export function createHistoricalImageryUI({
   if(!document||!map||!L||!assetStore||typeof getProject!=='function'||typeof saveProject!=='function'||typeof isAssetReferencedOutsideHistorical!=='function'||!Array.isArray(providers))fail('Historical imagery UI dependencies are incomplete.');
   for(const provider of providers)validateImageryProvider(provider);
   const providerById=new Map(providers.map(provider=>[provider.id,provider]));
-  const ids=['historicalDialog','closeHistorical','historicalOfficialMode','historicalManualMode','historicalOfficialPanel','historicalManualPanel','historicalYear','searchHistorical','cancelHistoricalSearch','historicalSearchProgress','historicalProviderErrors','showAllHistorical','manualHistoricalYear','manualHistoricalFile','manualWorldFile','manualWorldCrs','manualCitation','manualSourceUrl','manualPermission','previewManualHistorical','manualPlacementControls','manualCenterLat','manualCenterLng','manualGroundWidth','manualGroundHeight','manualRotation','applyManualPlacement','drawManualExtent','historicalCropControls','historicalCropTitle','useHistoricalCrop','resetHistoricalCrop','cancelHistoricalCrop','commitHistorical','historicalViewControls','cancelHistoricalView','historicalStatus','historicalCropFrame','historicalApprovedList','aerialCount'];
+  const ids=['historicalDialog','closeHistorical','historicalOfficialMode','historicalManualMode','historicalOfficialPanel','historicalManualPanel','historicalYear','searchHistorical','cancelHistoricalSearch','historicalSearchProgress','historicalProviderErrors','showAllHistorical','manualHistoricalYear','manualHistoricalFile','manualWorldFile','manualWorldCrs','manualCitation','manualSourceUrl','manualPermission','previewManualHistorical','manualPlacementControls','manualScaleCalibration','manualScaleImageFrame','manualScaleImage','manualScaleLine','manualScaleStroke','manualScaleDistance','applyManualScale','resetManualScalePoints','manualScaleStatus','manualCenterLat','manualCenterLng','manualGroundWidth','manualGroundHeight','manualRotation','applyManualPlacement','drawManualExtent','historicalCropControls','historicalCropTitle','useHistoricalCrop','resetHistoricalCrop','cancelHistoricalCrop','commitHistorical','historicalViewControls','cancelHistoricalView','historicalStatus','historicalCropFrame','historicalApprovedList','aerialCount'];
   const elements=Object.fromEntries(ids.map(id=>{const element=document.getElementById(id);if(!element)fail(`Historical imagery UI is missing #${id}.`);return [id,element];}));
   const $=id=>elements[id],WindowAbortController=document.defaultView?.AbortController||globalThis.AbortController,bindings=new WindowAbortController();
   let alive=true,open=false,mode='official',lastFocus=null,searchController=null,searchGeneration=0,previewGeneration=0,refreshGeneration=0,mutationGeneration=0,mutationController=null;
@@ -209,7 +209,8 @@ export function createHistoricalImageryUI({
   function removeExtentListener(){map.off?.('click',onExtentClick);extentPoints=[];$('drawManualExtent').dataset.active='false';}
   function removeActive({restore=false}={}){
     previewGeneration++;removeExtentListener();
-    if(active){active.controller?.abort(abortError());removeLayer(active.layer);removeLayer(active.overlay);removeRotateHandle(active);if(restore)restoreMap(active.before);}
+    if(active){active.controller?.abort(abortError());if(active.scaleUrl)document.defaultView?.URL?.revokeObjectURL?.(active.scaleUrl);removeLayer(active.layer);removeLayer(active.overlay);removeRotateHandle(active);if(restore)restoreMap(active.before);}
+    $('manualScaleImage').removeAttribute('src');$('manualScaleCalibration').open=false;resetScaleLine();
     active=null;$('historicalDialog').classList.remove('historical-cropping','historical-viewing');$('historicalCropControls').hidden=true;$('historicalViewControls').hidden=true;$('historicalCropFrame').hidden=true;$('manualPlacementControls').hidden=true;$('commitHistorical').disabled=true;$('commitHistorical').textContent='Add to package';
   }
   function resetBoundsFor(item){
@@ -336,6 +337,39 @@ export function createHistoricalImageryUI({
     $('manualGroundWidth').value=String(placement.groundWidth);$('manualGroundHeight').value=String(placement.groundHeight);$('manualRotation').value=String(placement.rotationDegrees);
   }
 
+  let scaleStart=null,scaleEnd=null,scaleDrawing=false;
+  function resetScaleLine(){scaleStart=null;scaleEnd=null;scaleDrawing=false;$('manualScaleStroke').style.visibility='hidden';$('manualScaleStatus').textContent='Draw a line along the scale bar.';}
+  function scalePoint(event){
+    const rect=$('manualScaleImage').getBoundingClientRect();
+    if(!rect.width||!rect.height)return null;
+    return {x:Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),y:Math.max(0,Math.min(1,(event.clientY-rect.top)/rect.height))};
+  }
+  function renderScaleLine(){
+    if(!scaleStart||!scaleEnd)return;
+    const svg=$('manualScaleLine'),stroke=$('manualScaleStroke');svg.setAttribute('viewBox','0 0 1000 1000');
+    for(const [key,value] of Object.entries({x1:scaleStart.x*1000,y1:scaleStart.y*1000,x2:scaleEnd.x*1000,y2:scaleEnd.y*1000}))stroke.setAttribute(key,String(value));
+    stroke.style.visibility='visible';
+  }
+  function showScaleImage(session){
+    resetScaleLine();$('manualScaleCalibration').open=false;
+    if(session.scaleUrl)document.defaultView?.URL?.revokeObjectURL?.(session.scaleUrl);
+    const urlApi=document.defaultView?.URL;
+    if(typeof urlApi?.createObjectURL==='function'){session.scaleUrl=urlApi.createObjectURL(session.image.blob);$('manualScaleImage').src=session.scaleUrl;}
+  }
+  async function applyScaleBar(){
+    requireInteractive();const session=active;
+    if(!ownsActive(session)||session.kind!=='manual'||!session.image)fail('Place a manual image first.');
+    if(!scaleStart||!scaleEnd)fail('Draw a line over the scale bar first.');
+    const pixels=Math.hypot((scaleEnd.x-scaleStart.x)*session.image.width,(scaleEnd.y-scaleStart.y)*session.image.height);
+    const placement=placementFromScaleBar(session.placement,pixels,Number($('manualScaleDistance').value));
+    validatePlacement(placement,{location:getProject().location});
+    if(await replaceManualOverlay(placement,session)&&ownsActive(session)){
+      session.crop=null;$('commitHistorical').disabled=true;
+      $('manualScaleStatus').textContent=`Scale matched: ${($('manualScaleDistance').value)} m across ${Math.round(pixels)} image pixels. Align the image on the map, then use current crop.`;
+      showStatus('Image scale updated. Check its position against map features and choose Use current crop.','ok');
+    }
+  }
+
   async function replaceManualOverlay(placement,session=active){
     if(!ownsActive(session)||session.kind!=='manual')return false;
     const generation=(session.overlayGeneration||0)+1;session.overlayGeneration=generation;removeLayer(session.overlay);session.placement=placement;
@@ -413,7 +447,7 @@ export function createHistoricalImageryUI({
       if(image.geo)placement=placementFromGeoReference({geo:image.geo,width:image.width,height:image.height});
       else if(world){const worldText=await world.text();if(!ownsActive(session)){disposeLateImage(image);return;}placement=placementFromGeoReference({geo:{crs:$('manualWorldCrs').value,transform:parseWorldFile(worldText)},width:image.width,height:image.height});}
       else placement=sitePlacement(project,image);
-      if(!ownsActive(session)){disposeLateImage(image);return;}validatePlacement(placement,{location:project.location});session.image=image;session.placement=placement;
+      if(!ownsActive(session)){disposeLateImage(image);return;}validatePlacement(placement,{location:project.location});session.image=image;session.placement=placement;$('manualScaleCalibration').hidden=Boolean(image.geo||world);showScaleImage(session);
       map.fitBounds(boundsPair(a3CropForPlacement(placement,project.location)),{animate:false,padding:[0,0]});showCrop(null);$('manualPlacementControls').hidden=false;
       if(await replaceManualOverlay(placement,session)&&ownsActive(session))showStatus('Image placement is ready. Adjust it if needed, then choose Use current crop.','ok');
     }catch(error){if(active===session)removeActive({restore:true});throw error;}
@@ -558,7 +592,7 @@ export function createHistoricalImageryUI({
     try{
       const asset=await loadHistoricalAsset(item,{session});if(!ownsActive(session))return;if(!asset){removeActive({restore:true});fail('The manual image asset is missing. Restore it from a project backup before editing.');}
       const image={blob:asset.blob,mime:asset.metadata.mime,width:asset.metadata.width,height:asset.metadata.height,geo:null};Object.assign(session,{kind:'manual',file:{name:item.title},image,placement:clone(item.placement),crop:null,year:item.year,citation:item.attribution,sourceUrl:item.sourceUrl});
-      $('manualHistoricalYear').value=String(item.year);$('manualCitation').value=item.attribution;$('manualSourceUrl').value=item.sourceUrl||'';$('manualPermission').checked=true;
+      $('manualHistoricalYear').value=String(item.year);$('manualCitation').value=item.attribution;$('manualSourceUrl').value=item.sourceUrl||'';$('manualPermission').checked=true;$('manualScaleCalibration').hidden=false;showScaleImage(session);
       map.fitBounds(boundsPair(item.bounds),{animate:false});showCrop(item);$('manualPlacementControls').hidden=false;
       if(await replaceManualOverlay(session.placement,session)&&ownsActive(session))showStatus(`Editing ${historicalFigureCode(getProject().historical,item.id)}. Approved bounds change only after Update.`,'ok');
     }catch(error){if(active===session)removeActive({restore:true});throw error;}
@@ -654,6 +688,18 @@ export function createHistoricalImageryUI({
   $('closeHistorical').addEventListener('click',closeDialog,{signal:bindings.signal});$('historicalOfficialMode').addEventListener('click',()=>setMode('official'),{signal:bindings.signal});$('historicalManualMode').addEventListener('click',()=>setMode('manual'),{signal:bindings.signal});
   $('searchHistorical').addEventListener('click',()=>track(search()),{signal:bindings.signal});$('cancelHistoricalSearch').addEventListener('click',()=>searchController?.abort(abortError()),{signal:bindings.signal});$('showAllHistorical').addEventListener('click',showAll,{signal:bindings.signal});
   $('previewManualHistorical').addEventListener('click',()=>track(previewManual()),{signal:bindings.signal});$('applyManualPlacement').addEventListener('click',()=>track(applyPlacement()),{signal:bindings.signal});$('drawManualExtent').addEventListener('click',()=>{try{drawExtent();}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});
+  $('manualScaleImageFrame').addEventListener('pointerdown',event=>{
+    if(!active?.image||event.button!==0)return;const point=scalePoint(event);if(!point)return;
+    event.preventDefault();scaleStart=point;scaleEnd=point;scaleDrawing=true;$('manualScaleImageFrame').setPointerCapture?.(event.pointerId);renderScaleLine();
+  },{signal:bindings.signal});
+  $('manualScaleImageFrame').addEventListener('pointermove',event=>{if(!scaleDrawing)return;scaleEnd=scalePoint(event)||scaleEnd;renderScaleLine();},{signal:bindings.signal});
+  $('manualScaleImageFrame').addEventListener('pointerup',event=>{
+    if(!scaleDrawing)return;scaleDrawing=false;scaleEnd=scalePoint(event)||scaleEnd;renderScaleLine();
+    $('manualScaleStatus').textContent='Enter the real distance represented by this line, then apply image scale.';
+  },{signal:bindings.signal});
+  $('manualScaleImageFrame').addEventListener('pointercancel',resetScaleLine,{signal:bindings.signal});
+  $('resetManualScalePoints').addEventListener('click',resetScaleLine,{signal:bindings.signal});
+  $('applyManualScale').addEventListener('click',()=>track(applyScaleBar()),{signal:bindings.signal});
   $('useHistoricalCrop').addEventListener('click',()=>{try{useCrop();}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});$('resetHistoricalCrop').addEventListener('click',()=>{try{resetCrop();}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});$('cancelHistoricalCrop').addEventListener('click',()=>{try{requireInteractive();$('closeHistorical').focus();removeActive({restore:true});}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});$('commitHistorical').addEventListener('click',()=>track(commitActive()),{signal:bindings.signal});
   $('cancelHistoricalView').addEventListener('click',()=>{try{requireInteractive();$('closeHistorical').focus();removeActive({restore:true});showStatus('Historical image view closed.');}catch(error){showStatus(error.message,'error');}},{signal:bindings.signal});
   document.addEventListener('keydown',event=>{
