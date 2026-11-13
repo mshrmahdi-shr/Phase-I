@@ -12,7 +12,7 @@
   <header class="topbar">
     <div class="brand-lockup"><div class="eyebrow">PHASE I ESA</div><h1>Mapping & Figure Generator</h1><span>Ontario figure workspace</span></div>
     <div class="top-actions">
-      <button id="manageHistoricalHeader" class="glass-button">Historical Imagery</button>
+      
       <details class="action-menu"><summary>Company &amp; Branding</summary><div class="action-menu-panel">
         <button id="editCompanyProfile">Edit Company Profile</button>
         <button id="applyCompanyTemplate">Apply Template to Project</button>
@@ -20,7 +20,7 @@
         <button id="importCompanyTemplate">Import Company Template</button>
       </div></details>
       <input id="importCompanyTemplateFile" type="file" accept=".zip,.phasei-template.zip,application/zip" hidden />
-      <span id="appVersion" class="app-version" title="Application build version">Version —</span><button id="newProject" class="glass-button">New Project</button><button id="saveProject" class="primary">Quick Save</button>
+      <details class="action-menu"><summary>Project</summary><div class="action-menu-panel"><button id="newProject" type="button">New Project</button><button id="saveProject" type="button">Quick Save</button><button id="importProjectPackage" type="button">Open Project File (.shr)</button><button id="exportProjectPackage" type="button">Save Project File (.shr)</button></div></details><span id="appVersion" class="app-version" title="Application build version">Version —</span>
     </div>
     </header>
 
@@ -48,7 +48,7 @@
       <details class="workflow-card" open>
         <summary><span><span class="step-number">2</span> Site Geometry</span><span id="drawState" class="badge">Idle</span></summary>
         <div class="workflow-card-body">
-        <div class="button-grid"><button id="setSite">Set SITE</button><button id="drawSite">Draw Site Boundary</button><button id="drawBuilding">Draw Building</button><button id="finishDraw">Finish Draw</button><button id="editSiteCorners">Edit SITE Corners</button><button id="editBuildingCorners">Edit Building Corners</button><button id="undoPoint">Undo (Ctrl+Z)</button><button id="redoPoint">Redo (Ctrl+Y)</button><button id="clearGeometry" class="danger-soft">Clear Geometry</button></div>
+        <div class="button-grid"><button id="setSite">Set SITE</button><button id="drawSite">Draw Site Boundary</button><button id="finishDraw">Finish Draw</button><button id="editSiteCorners">Edit SITE Corners</button></div><details class="compact-tools"><summary>Building &amp; geometry tools</summary><div class="button-grid"><button id="drawBuilding">Draw Building</button><button id="editBuildingCorners">Edit Building Corners</button><button id="undoPoint">Undo (Ctrl+Z)</button><button id="redoPoint">Redo (Ctrl+Y)</button><button id="clearGeometry" class="danger-soft">Clear Geometry</button></div></details>
         <p class="scope-note">Building outlines are visible and exported on Figure B — Site Plan only.</p>
         <p class="helper">Find tries to add an editable boundary from the address source automatically. Review and adjust it when needed; if no boundary is published, draw one manually.</p>
         <p class="helper">Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels. After finishing, use Edit SITE Corners or Edit Building Corners and drag a handle. Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.</p>
@@ -60,7 +60,7 @@
         <div class="workflow-card-body">
           <label>Annotation text<input id="annotationText" maxlength="300" placeholder="e.g. Former tank location" /></label>
           <div class="button-grid"><button id="placeText" type="button">Place Text</button><button id="placeLeader" type="button">Text + Arrow</button></div>
-          <button id="clearAnnotations" type="button" class="danger-soft">Clear Notes on Active Figure</button>
+          <details class="compact-tools"><summary>Note options</summary><button id="clearAnnotations" type="button" class="danger-soft">Clear Notes on Active Figure</button></details>
           <p class="scope-note">Notes are saved to the active figure with a printable white mask. For an arrow, click the arrow point first, then the label position.</p>
           <div id="annotationStatus" class="helper" role="status">No annotation tool active.</div>
           <div id="annotationList" class="annotation-list"></div>
@@ -97,11 +97,11 @@
         <div class="workflow-card-body">
         <button id="exportPdf" class="primary wide" aria-describedby="exportButtonHelp" title="Open the export checklist to see exactly what is missing">Export PDF / AutoCAD</button>
         <p id="exportButtonHelp" class="helper export-button-help">If export is unavailable, open the checklist: disabled rows show the exact missing item and the top warning lists all active problems.</p>
-        <div class="project-file-actions"><button id="exportProjectPackage" class="primary wide">Save Project File (.shr)</button><button id="importProjectPackage" type="button">Open Project File (.shr)</button></div>
-        <div class="button-grid"><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button></div>
+        
+        <details class="compact-tools"><summary>More export options</summary><div class="button-grid"><button id="printA3">Single-sheet A3 preview</button><button id="exportDxf">Export DXF</button></div>
         <input id="importProjectPackageFile" type="file" accept=".shr,application/x-shr-project,application/zip,.phasei-project.zip" hidden />
         <div class="legacy-project-tools"><span class="helper">Legacy compatibility</span><div class="button-grid"><button id="exportJson">Export Legacy JSON</button><label for="importJson" class="file-button">Import Legacy JSON<input id="importJson" type="file" accept="application/json,.json" /></label></div></div>
-        <div id="printValidation" class="validation-panel" role="alert" hidden></div>
+        </details><div id="printValidation" class="validation-panel" role="alert" hidden></div>
         <p class="helper">The `.shr` file is the complete editable project: settings, saved figure views, site/building drawings, masked annotations, branding, exact logo, and permitted local historical files. Save it inside the project folder and reopen it whenever revisions are needed. JSON is legacy metadata only.</p>
         </div>
       </details>
@@ -111,11 +111,11 @@
       <div class="map-toolbar"><div class="segmented"><button class="basemap active" data-map="street">Street</button><button class="basemap" data-map="satellite">Satellite</button><button class="basemap" data-map="toporama">Toporama</button></div><div class="coords" id="coords">No site selected</div></div>
       <div id="mapHome" class="map-home"><div id="map"></div><div id="historicalCropFrame" hidden aria-hidden="true"><span>A3 crop</span></div></div>
       <div class="map-note" id="mapSourceStatus" role="status"></div>
-      <div class="map-note">Assigned output sources: A/D/E OpenStreetMap, B Esri imagery, C NRCan Toporama. Preview and PDF use those sources. Composition DPI does not increase source detail.</div>
+      
     </section>
 
     <aside class="panel figures-panel">
-      <div class="section-heading"><h2>Figure Sheets</h2><span class="badge">A3</span></div>
+      <div class="section-heading"><h2>Figure Sheets</h2><span class="badge">A3</span></div><button id="manageHistoricalHeader" class="primary wide">Historical Imagery</button>
       <div id="figureList"></div>
       <div class="legend-card"><div class="section-heading"><h3>Detected geology</h3><span class="badge" id="geoUnitBadge">—</span></div><div id="geoLegend" class="helper">Select Figure D/E and load the geology source.</div></div>
       <div class="aerial-card"><div class="section-heading"><h3>Historical aerials</h3><span class="badge" id="aerialCount">0</span></div><div id="historicalApprovedList" class="helper">No historical imagery approved.</div></div>
