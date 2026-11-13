@@ -133,3 +133,37 @@ button,.file-button{background:rgba(255,255,255,.055);font-weight:650;box-shadow
 /* Compact single-screen editing workspace */
 .app-shell{height:calc(100dvh - 76px);min-height:0;overflow:hidden}.project-panel,.figures-panel{min-height:0;overflow-y:auto;scrollbar-width:thin}.workspace{min-height:0;display:flex;flex-direction:column}.workspace #mapHome{height:auto;min-height:300px;flex:1}.topbar{height:76px}.top-actions{flex-wrap:nowrap}.compact-tools{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:8px}.compact-tools>summary{cursor:pointer;color:#bae6fd;font-size:12px;font-weight:700;padding:3px 5px}.compact-tools[open]>summary{margin-bottom:8px}.compact-tools .button-grid{margin-top:6px}.figures-panel>#manageHistoricalHeader{margin:8px 0 12px}
 @media(max-width:1100px){.app-shell{height:auto;overflow:visible}.project-panel,.figures-panel{overflow:visible}.workspace #mapHome{height:520px}.topbar{height:auto}.top-actions{flex-wrap:wrap}}
+
+/* TopoAssist-inspired survey workspace: light controls around a large map. */
+:root{--panel:#fff;--line:#d6e0e5;--line-strong:#8abfbd;--muted:#64748b;--accent:#178c87;--accent2:#137f7b;color:#192b3b;background:#eef3f7}
+body{background:#eef3f7;color:#192b3b}
+.topbar{height:64px;min-height:64px;padding:8px 16px;background:#fff;border-bottom:1px solid #d5e0e5;box-shadow:0 2px 12px #24445a12;backdrop-filter:none}
+.brand-lockup .eyebrow{color:#178c87}.brand-lockup h1{font-size:17px;color:#183143}.brand-lockup>span{color:#647b8a}
+.top-actions>button,.action-menu>summary{min-height:36px;padding:7px 11px;background:#f5f8fa;border-color:#d7e1e6;color:#203849;box-shadow:none;backdrop-filter:none}
+.top-actions>button:hover,.action-menu>summary:hover{background:#e8f5f3;border-color:#8abfbd}
+.action-menu-panel{background:#fff;border-color:#cbdde0;box-shadow:0 16px 38px #1d3a5033;backdrop-filter:none}
+.action-menu-panel button{color:#263e4f;border-color:#e5ecef}.action-menu-panel button:hover{background:#e8f5f3}
+.app-version{color:#4b7180}.app-shell{height:calc(100dvh - 64px);min-height:0;grid-template-columns:320px minmax(420px,1fr) 270px;gap:0;padding:0;background:#edf3f7}
+.panel,.workspace{border:0;border-radius:0;background:#fff;box-shadow:none;backdrop-filter:none}
+.project-panel{padding:12px;background:#fff;border-right:1px solid #d5e0e5;gap:9px}
+.figures-panel{padding:14px 12px;background:#fff;border-left:1px solid #d5e0e5}
+.workspace{background:#eef3f7}.map-toolbar{min-height:60px;padding:10px 15px;background:#fff;border-bottom:1px solid #dbe5ea}
+.segmented{background:#edf3f5;border-color:#d8e3e6;box-shadow:none}.segmented button{color:#465e6f}.segmented button.active{background:#168e89;border-color:#168e89;color:#fff;box-shadow:0 2px 6px #147a7540}
+.coords{color:#526b7c}.map-note{background:#fff;color:#64748b;border-top:1px solid #dbe5ea}
+.workflow-card{background:#f8fafb;border-color:#d8e4e8;border-radius:13px;box-shadow:0 2px 9px #2243580a}
+.workflow-card>summary{color:#1c3547;min-height:47px}.workflow-card>summary::after{background:#e9f1f3;color:#267c7a}.workflow-card[open]>summary{background:#eef7f5;border-bottom-color:#d8e4e8}
+.step-number{background:#e0f3ef;border-color:#9acac4;color:#187e7a}.badge{background:#eff4f6;border-color:#dbe5e9;color:#506879}
+.section-heading h2,.section-heading h3{color:#183143}.helper{color:#667d8d}.helper[data-kind="error"]{color:#b43c43}.helper[data-kind="ok"]{color:#167c58}
+label{color:#40586a}input,textarea,select,button,.file-button{background:#fff;color:#203849;border-color:#cbd9e0;box-shadow:none;backdrop-filter:none}
+input:hover,textarea:hover,select:hover{border-color:#83bbb6}input:focus,textarea:focus,select:focus{background:#fff;border-color:#178c87;outline:2px solid #178c8733}
+button,.file-button{background:#f5f8fa;color:#263d4e;box-shadow:none;backdrop-filter:none}button:hover,.file-button:hover{background:#eaf5f3;border-color:#82bcb8;box-shadow:none}
+.primary,.top-actions>.primary{background:#188e89;border-color:#188e89;color:#fff}.primary:hover{background:#137a76;color:#fff}.danger-soft{background:#fff5f5;border-color:#edc8c8;color:#a83b44}
+.scope-note{background:#eaf6f5;border-left-color:#2a9b96;color:#426471}.compact-tools{border-color:#d9e5e7}.compact-tools>summary{color:#237e7b}
+.annotation-list-row{background:#fff;border-color:#dae4e8}.figure-row{background:#fff;border-color:#d9e4e8;border-radius:12px}.figure-row:hover{border-color:#88bfbc}.figure-row.active{background:#edf8f6;border-color:#259b95;box-shadow:inset 3px 0 #178c87}
+.figure-title,.legend-copy strong{color:#203849}.figure-code{color:#18837e}.figure-meta,.legend-copy>span{color:#667d8d}
+.legend-card,.aerial-card{background:#f8fafb;border-color:#d9e5e8}.legend-card .geology-legend-row{background:#fff;border-color:#dce6e9}
+.project-package-panel,.company-profile-panel,.geology-provenance-panel,.export-panel,.historical-panel{background:#fff;border-color:#b8d4d5;color:#203849;box-shadow:0 25px 65px #1b354b44}
+.project-package-panel .helper,.company-profile-panel .helper,.historical-panel .helper{color:#607788}
+@media(max-width:1200px){.app-shell{grid-template-columns:290px minmax(360px,1fr) 245px}}
+@media(max-width:990px){.app-shell{height:auto;grid-template-columns:290px minmax(0,1fr);gap:0}.workspace{min-height:570px}.figures-panel{grid-column:1/-1;border-left:0;border-top:1px solid #d5e0e5}.project-panel,.figures-panel{overflow:visible}.topbar{height:auto;min-height:64px}.top-actions{flex-wrap:wrap}}
+@media(max-width:700px){.app-shell{display:flex;flex-direction:column}.project-panel{order:2;border-right:0;border-top:1px solid #d5e0e5}.workspace{order:1;min-height:480px}.workspace #mapHome{height:420px;min-height:420px}.figures-panel{order:3}.topbar{padding:9px 12px}.top-actions{width:100%}.brand-lockup h1{font-size:16px}}
