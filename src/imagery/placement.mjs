@@ -27,6 +27,17 @@ export function normalizedRotation(value){
   return Object.is(normalized,-0)?0:normalized;
 }
 
+/** Calibrate a north-up raster from a drawn segment measured in source pixels. */
+export function placementFromScaleBar(placement,pixelLength,groundDistanceMeters){
+  const value=checkedPlacement(placement);
+  if(!Number.isFinite(pixelLength)||pixelLength<2)fail('Draw a longer line along the scale bar.');
+  if(!Number.isFinite(groundDistanceMeters)||groundDistanceMeters<=0)fail('Enter a positive scale-bar distance in metres.');
+  const latitude=unprojectWebMercator(value.center)[1]*DEGREES;
+  const metresPerPixel=groundDistanceMeters/Math.cos(latitude)/pixelLength;
+  const result={...value,groundWidth:value.sourceWidth*metresPerPixel,groundHeight:value.sourceHeight*metresPerPixel};
+  checkedPlacement(result);return result;
+}
+
 function sourceDimensions(width,height){
   if(!Number.isSafeInteger(width)||!Number.isSafeInteger(height)||width<=0||height<=0||width>Math.floor(MAX_SOURCE_PIXELS/height))fail('Placement source dimensions must be positive safe integers within the pixel limit.');
 }
