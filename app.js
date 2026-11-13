@@ -67,7 +67,7 @@ const geo={surficial:[],bedrock:[]}, geoSource={surficial:null,bedrock:null};
 const map=L.map('map',{zoomSnap:0,fadeAnimation:false,zoomAnimation:false,scrollWheelZoom:false,touchZoom:true,dragging:!(window.matchMedia?.('(pointer:coarse)').matches)}).setView([43.75,-79.3],11);
 map.getContainer().setAttribute('data-drawing-shortcuts','');
 // A click opts into wheel zoom until the pointer leaves the map; touch keeps one-finger page scrolling.
-map.getContainer().addEventListener('click',()=>{if(!window.matchMedia?.('(pointer:coarse)').matches)map.scrollWheelZoom.enable();});
+map.getContainer().addEventListener('click',()=>{if(!exportBusy&&!window.matchMedia?.('(pointer:coarse)').matches)map.scrollWheelZoom.enable();});
 map.getContainer().addEventListener('mouseleave',()=>map.scrollWheelZoom.disable());
 const baseSources={street:sourceForFigure('A'),satellite:sourceForFigure('B'),toporama:sourceForFigure('C')};
 const baseLayers=Object.fromEntries(Object.entries(baseSources).map(([kind,source])=>[kind,source.createLayer(L)]));
