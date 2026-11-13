@@ -6,6 +6,17 @@ const overlayModule=()=>import('../src/imagery/canvas-overlay.mjs');
 const near=(actual,expected,epsilon=1e-8)=>assert.ok(Math.abs(actual-expected)<=epsilon,`${actual} != ${expected}`);
 const nearPoint=(actual,expected,epsilon=1e-8)=>{near(actual[0],expected[0],epsilon);near(actual[1],expected[1],epsilon);};
 
+test('scale-bar line sets both raster dimensions from one known distance',async()=>{
+  const {placementFromScaleBar,projectWebMercator}=await placementModule();
+  const original={center:projectWebMercator([-79.38,43.65]),groundWidth:80,groundHeight:40,sourceWidth:2000,sourceHeight:1000,rotationDegrees:12};
+  const result=placementFromScaleBar(original,250,100);
+  near(result.groundWidth*Math.cos(43.65*Math.PI/180),800,1e-6);
+  near(result.groundHeight/result.groundWidth,.5);
+  assert.deepEqual(result.center,original.center);assert.equal(result.rotationDegrees,12);
+  assert.throws(()=>placementFromScaleBar(original,0,100),/longer line/);
+  assert.throws(()=>placementFromScaleBar(original,250,0),/positive scale-bar distance/);
+});
+
 test('rotationFromPoint derives clockwise-from-north degrees for the drag-to-rotate map handle',async()=>{
   const {rotationFromPoint}=await placementModule(),center=[500,1000];
   near(rotationFromPoint(center,[500,1100]),0,1e-9);
