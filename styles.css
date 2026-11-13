@@ -192,3 +192,6 @@ button,.file-button{background:#f5f8fa;color:#263d4e;box-shadow:none;backdrop-fi
 @media(max-width:1200px){.app-shell{grid-template-columns:270px minmax(360px,1fr) 230px}}
 @media(max-width:990px){.app-shell{grid-template-columns:270px minmax(0,1fr)}}
 @media(max-width:700px){.app-shell{display:flex}.project-panel,.figures-panel{padding:9px}.map-toolbar{flex-direction:row;flex-wrap:wrap}.workspace #mapHome{height:420px}}
+
+/* Let a one-finger swipe scroll the document on touch screens. */
+@media(pointer:coarse){#map{touch-action:pan-y}}
