@@ -64,11 +64,8 @@ const geoCoverage={surficial:null,bedrock:null},geoReady={surficial:false,bedroc
 // Imports supersede dataset commits, but only an official request owns its load button.
 const officialLoading={surficial:0,bedrock:0};
 const geo={surficial:[],bedrock:[]}, geoSource={surficial:null,bedrock:null};
-const map=L.map('map',{zoomSnap:0,fadeAnimation:false,zoomAnimation:false,scrollWheelZoom:false,touchZoom:true,dragging:!(window.matchMedia?.('(pointer:coarse)').matches)}).setView([43.75,-79.3],11);
+const map=L.map('map',{zoomSnap:0,fadeAnimation:false,zoomAnimation:false}).setView([43.75,-79.3],11);
 map.getContainer().setAttribute('data-drawing-shortcuts','');
-// A click opts into wheel zoom until the pointer leaves the map; touch keeps one-finger page scrolling.
-map.getContainer().addEventListener('click',()=>{if(!exportBusy&&!window.matchMedia?.('(pointer:coarse)').matches)map.scrollWheelZoom.enable();});
-map.getContainer().addEventListener('mouseleave',()=>map.scrollWheelZoom.disable());
 const baseSources={street:sourceForFigure('A'),satellite:sourceForFigure('B'),toporama:sourceForFigure('C')};
 const baseLayers=Object.fromEntries(Object.entries(baseSources).map(([kind,source])=>[kind,source.createLayer(L)]));
 let basemapKind='street';const sourceErrors=new Set();baseLayers.street.addTo(map);
@@ -167,8 +164,14 @@ function siteChanged(location){
   const moved=!project.location||project.location.lat!==location.lat||project.location.lng!==location.lng;
   project.location=location;
   if(moved){
+    const staleAssets=(project.historical||[]).filter(item=>item.mode==='manual'&&item.assetId).map(item=>item.assetId);
+    project.historical=[];
+    project.historicalSequenceCounters={};
+    project.exportPreferences.selection=(project.exportPreferences.selection||[]).filter(entry=>entry?.kind!=='historical');
+    for(const assetId of staleAssets)assetStore.delete(assetId).catch(()=>{});
     for(const kind of ['surficial','bedrock']){if(officialLoading[kind]){geoRequest[kind]++;officialLoading[kind]=0;}}
     for(const figure of Object.values(project.figures))delete figure.bounds;
+    status('searchStatus','SITE changed. Historical aerials and saved A3 views were reset for the new address.','ok');
   }
   locationRevision++;setMarker(location);detect();renderFigures();save();historicalUI?.refresh();refreshPrint();autoLoadOfficialGeology();
 }
