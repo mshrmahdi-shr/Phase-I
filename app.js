@@ -10,6 +10,7 @@ import {exportCombinedPdf,planPdfExport} from './src/pdf-export.mjs';
 import {exportCadPackage} from './src/cad-package.mjs';
 import {createAssetStore} from './src/asset-store.mjs';
 import {normalizeCompanyProfile,validateCompanyProfile} from './src/company-profile.mjs';
+import {DEFAULT_FISHER_LOGO_ASSET_ID,DEFAULT_FISHER_LOGO_DATA_URL,DEFAULT_FISHER_LOGO_METADATA,DEFAULT_FISHER_PROFILE} from './src/company-defaults.mjs';
 import {createCompanyProfileDialog} from './src/company-ui.mjs';
 import {createProjectPackageUI} from './src/project-package-ui.mjs';
 import {createDrawingController} from './src/drawing-controller.mjs';
@@ -46,6 +47,12 @@ async function ensureDefaultCompanyProfile(){
 let companyProfile=loadCompanyProfile();
 if(!companyProfile)companyProfile=await ensureDefaultCompanyProfile();
 let project=(()=>{for(const k of [STORAGE,'phase-i-esa-project-v1']){try{const v=localStorage.getItem(k);if(v)return restoreProject(JSON.parse(v))}catch{}}return createProject({companyProfileSnapshot:companyProfile})})();
+// Assign the bundled template only to legacy projects without branding.
+// Existing project branding, including imported SHR files, remains authoritative.
+if(!project.companyProfileSnapshot&&companyProfile?.id===DEFAULT_FISHER_PROFILE.id){
+  project=applyCompanyProfileToProject(project,companyProfile);
+  try{localStorage.setItem(STORAGE,JSON.stringify(project));}catch{}
+}
 let active='A',siteMarker,siteLayer,buildingLayer,draft,geoLayer,preflight,printSession,exportDialog,historicalUI,packageUI,geologyProvenance,exportBusy=false,printBranding=null,packagePersistenceToken=null;
 let annotationMode=null,annotationTarget=null;const annotationLayers=[];
 let requestProjectImport=()=>false;
