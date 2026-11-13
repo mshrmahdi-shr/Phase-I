@@ -267,17 +267,6 @@ function renderContinuationPage(doc,project,page,index,count,{draw=true,companyP
   if(draw){doc.setFontSize(6.5);doc.setTextColor(17,17,17);doc.text(`Figure ${sheet.code} · legend continuation ${page.continuationIndex}`,m.x+2,m.y+m.height-1.3);doc.text(`Page ${index+1} of ${count}`,m.x+m.width-2,m.y+m.height-1.3,{align:'right'});}
 }
 function historicalResolution(value){return value===null?'Not published':`${Number(value.toPrecision(6))} m`;}
-function failedHistoricalPlaceholder(page,error){
-  const {width,height}=page.geometry.raster;
-  const fallback='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
-  if(typeof document==='undefined')return {dataUrl:fallback,width,height,dispose(){}};
-  const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
-  const ctx=canvas.getContext('2d');if(!ctx)return {dataUrl:fallback,width,height,dispose(){}};
-  ctx.fillStyle='#f8fafc';ctx.fillRect(0,0,width,height);ctx.strokeStyle='#b91c1c';ctx.lineWidth=Math.max(2,Math.round(width/900));ctx.strokeRect(width*.04,height*.04,width*.92,height*.92);
-  ctx.fillStyle='#7f1d1d';ctx.textAlign='center';ctx.font=`bold ${Math.max(24,Math.round(width/35))}px sans-serif`;ctx.fillText('HISTORICAL IMAGE UNAVAILABLE',width/2,height*.46);
-  ctx.font=`${Math.max(14,Math.round(width/70))}px sans-serif`;ctx.fillText('Retry this sheet when the source service is available.',width/2,height*.54);
-  const dataUrl=canvas.toDataURL('image/jpeg',.9);return {dataUrl,width,height,dispose(){canvas.width=canvas.height=0;}};
-}
 function renderHistoricalPage(doc,project,page,index,count,{draw=true,companyProfile,companyLogoDataUrl}={}){
   const {geometry:g,item,code}=page,m=g.mapFrame,t=g.titleFrame,gap=2,widths=[104,96,132],used=widths.reduce((sum,value)=>sum+value,0)+gap*3;
   const boxes=[];let x=t.x;for(const width of [...widths,t.width-used]){boxes.push({x,y:t.y,width,height:t.height});x+=width+gap;}
@@ -348,11 +337,9 @@ export async function exportCombinedPdf({project,codes,selection,datasets={},com
   for(let i=0;i<pagePlan.length;i++){
     const page=pagePlan[i],sheet=page.sheet;let image;try{
       throwIfAborted(signal);if(page.kind==='map'){onProgress({phase:'sheet',code:sheet.code,completed:completedMaps,total:mapCount});image=await compose({project:snapshot.project,code:sheet.code,features:sheet.features,geometry:sheet.geometry,signal,onProgress});throwIfAborted(signal);}
-      if(page.kind==='historical'){onProgress({phase:'sheet',code:page.code,completed:completedMaps,total:mapCount});const preflightFailure=officialFailures.get(page.item.id);if(preflightFailure){warnings.push(`${page.code}: ${preflightFailure}`);image=failedHistoricalPlaceholder(page,new Error(preflightFailure));}else{image=await composeHistorical({project:snapshot.project,item:page.item,geometry:page.geometry,assetStore:historicalAssetStore,providers,currentOfficialResult:officialResults.get(page.item.id),signal,onProgress,fetchImpl});throwIfAborted(signal);}}
+      if(page.kind==='historical'){onProgress({phase:'sheet',code:page.code,completed:completedMaps,total:mapCount});const preflightFailure=officialFailures.get(page.item.id);if(preflightFailure)throw new Error(`${page.code}: ${preflightFailure}`);image=await composeHistorical({project:snapshot.project,item:page.item,geometry:page.geometry,assetStore:historicalAssetStore,providers,currentOfficialResult:officialResults.get(page.item.id),signal,onProgress,fetchImpl});throwIfAborted(signal);}
     }catch(error){
-      if(page.kind==='historical'&&signal?.aborted!==true&&error?.name!=='AbortError'){
-        warnings.push(`${page.code}: ${error.message}`);image=failedHistoricalPlaceholder(page,error);
-      }else{image?.dispose?.();if(signal?.aborted||error.name==='AbortError')throw new DOMException('Export cancelled.','AbortError');const label=page.kind==='historical'?page.code:`Figure ${page.code}`;throw new Error(`${label}: ${error.message}`,{cause:error});}
+      image?.dispose?.();if(signal?.aborted||error.name==='AbortError')throw new DOMException('Export cancelled.','AbortError');const label=page.kind==='historical'?page.code:`Figure ${page.code}`;throw new Error(`${label}: ${error.message}`,{cause:error});
     }
     try{
       if(image&&(!image.dataUrl||!(image.width>0&&image.height>0)))throw new Error('Map composition did not return a complete image.');if(i)doc.addPage('a3','landscape');
