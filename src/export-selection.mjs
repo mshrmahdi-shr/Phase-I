@@ -14,6 +14,7 @@ import {createCadExportController} from './cad-ui.mjs';
 import {snapshotCompanyProfile} from './company-profile.mjs';
 import {decodeManualImage} from './imagery/manual-image.mjs';
 
+const BLOCKING_PRINT_CODES=new Set(['figure','site-boundary','surficial-layer','surficial-unit','bedrock-layer','bedrock-unit']);
 const DEFAULT_PROVIDERS=Object.freeze([ONTARIO_IMAGERY_PROVIDER,TORONTO_IMAGERY_PROVIDER,OTTAWA_IMAGERY_PROVIDER,ESRI_WAYBACK_PROVIDER]);
 const PDF_PLAN_CONCURRENCY=2;
 const BRANDING_FIELDS=Object.freeze(['companyLogo','companyProfile']),COMPANY_LOGO_FIELDS=Object.freeze(['blob','metadata']),COMPANY_LOGO_METADATA_FIELDS=Object.freeze(['createdAt','height','id','kind','mime','sha256','size','width']),SHA256=/^[a-f0-9]{64}$/,ISO_TIMESTAMP=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -37,8 +38,8 @@ function figureRows({project,datasets,companyProfile}){
       }catch(error){reasons.push(`Invalid ${kind} geometry: ${error.message}`);}
     }
     const validation=validatePrintRequirements({project,companyProfile,figureCode:code,geologyLoaded:loaded,geologySiteUnit:hit?.name});
-    reasons.push(...validation.filter(error=>error.severity!=='warning').map(error=>error.message));
-    warnings.push(...validation.filter(error=>error.severity==='warning').map(error=>error.message));
+    reasons.push(...validation.filter(error=>BLOCKING_PRINT_CODES.has(error.code)).map(error=>error.message));
+    warnings.push(...validation.filter(error=>!BLOCKING_PRINT_CODES.has(error.code)).map(error=>error.message));
     if(project.buildingBoundary?.length&&!validBoundary(project.buildingBoundary))reasons.push('Correct the invalid building boundary.');
     if(code!=='B'&&project.siteBoundary?.length&&!validBoundary(project.siteBoundary))warnings.push('The saved site boundary is invalid and was omitted from this sheet.');
     const selection={kind:'figure',code};return {kind:'figure',key:selectionKey(selection),code,title:project.figures?.[code]?.title||defaults.title,source:sourceForFigure(code),selection,ready:reasons.length===0,reasons,warnings};
