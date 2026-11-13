@@ -10,8 +10,8 @@ function validDate(v){
 export function validatePrintRequirements({project={},companyProfile={},figureCode='A',geologyLoaded=false,geologySiteUnit=null}={}){
   const errors=[];
   if(!hasText(project.name))errors.push({code:'project-name',message:'Enter a project name.'});
-  if(!hasText(project.projectNo))errors.push({code:'project-number',message:'Enter the project number.'});
-  if(!validDate(project.date))errors.push({code:'project-date',message:'Select a valid project date.'});
+  if(!hasText(project.projectNo))errors.push({code:'project-number',message:'Project number is missing — enter it in Project Setup.'});
+  if(!validDate(project.date))errors.push({code:'project-date',message:'Project date is missing or invalid — choose a date in Project Setup.'});
   if(!hasText(project.address))errors.push({code:'address',message:'Enter the property address.'});
   if(!validLocation(project.location))errors.push({code:'location',message:'Locate the property on the map using Find or Set SITE.'});
   if(!['A','B','C','D','E'].includes(figureCode))errors.push({code:'figure',message:'Select a valid figure before printing.'});
@@ -25,7 +25,7 @@ export function validatePrintRequirements({project={},companyProfile={},figureCo
       errors.push({code:'company-contact-fit',message:'Shorten the company contact details so they fit the output title block.'});
     }
   }catch(error){
-    errors.push({code:'company-profile-invalid',message:`Company Profile data is invalid or from an older saved version. Open Company Profile, upload the logo again, save it, then apply the template to this project. (${error.message})`});
+    errors.push({code:'company-profile-invalid',message:`Company Profile cannot be read: ${error.message} Open Company & Branding, save the profile again, then apply the current template to this project.`});
   }
 
   if(figureCode==='B'&&!validBoundary(project.siteBoundary)){
