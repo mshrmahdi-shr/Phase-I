@@ -49,13 +49,11 @@
         <summary><span><span class="step-number">2</span> Site Geometry</span><span id="drawState" class="badge">Idle</span></summary>
         <div class="workflow-card-body">
         <div class="button-grid"><button id="setSite">Set SITE</button><button id="drawSite">Draw Site Boundary</button><button id="finishDraw">Finish Draw</button><button id="editSiteCorners">Edit SITE Corners</button></div><details class="compact-tools"><summary>Building &amp; geometry tools</summary><div class="button-grid"><button id="drawBuilding">Draw Building</button><button id="editBuildingCorners">Edit Building Corners</button><button id="undoPoint">Undo (Ctrl+Z)</button><button id="redoPoint">Redo (Ctrl+Y)</button><button id="clearGeometry" class="danger-soft">Clear Geometry</button></div></details>
-        <p class="scope-note">Building outlines are visible and exported on Figure B — Site Plan only.</p>
-        <p class="helper">Find tries to add an editable boundary from the address source automatically. Review and adjust it when needed; if no boundary is published, draw one manually.</p>
-        <p class="helper">Left-click adds points; Enter or right-click finishes; Backspace removes the last point; Escape cancels. After finishing, use Edit SITE Corners or Edit Building Corners and drag a handle. Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.</p>
+        <details class="compact-tools"><summary>Drawing help</summary><p class="scope-note">Building outlines appear on Figure B only.</p><p class="helper">Find can load a boundary from the address. If none is available, draw it manually. Click to add points; Enter or right-click finishes. Drag corner handles to edit. Ctrl+Z undoes; Ctrl+Y redoes.</p></details>
         </div>
       </details>
 
-      <details class="workflow-card" open>
+      <details class="workflow-card">
         <summary><span><span class="step-number">3</span> Map Markup</span><span class="badge">Per sheet</span></summary>
         <div class="workflow-card-body">
           <label>Annotation text<input id="annotationText" maxlength="300" placeholder="e.g. Former tank location" /></label>
