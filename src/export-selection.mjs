@@ -25,7 +25,7 @@ function covers(coverage,bounds){return bounds.west>=coverage.west&&bounds.east<
 
 function figureRows({project,datasets,companyProfile}){
   return Object.entries(figureDefaults()).map(([code,defaults])=>{
-    const kind=code==='D'?'surficial':code==='E'?'bedrock':null,dataset=datasets[kind],reasons=[];let geometry,loaded=false,hit=null;
+    const kind=code==='D'?'surficial':code==='E'?'bedrock':null,dataset=datasets[kind],reasons=[],warnings=[];let geometry,loaded=false,hit=null;
     try{geometry=sheetGeometry(project,code,150);}catch(error){reasons.push(error.message);}
     if(kind&&dataset?.features?.length){
       try{
@@ -36,10 +36,12 @@ function figureRows({project,datasets,companyProfile}){
         if(geometry&&!containsBounds(dataset.coverage,geometry.bounds)){loaded=false;reasons.push('The geology data does not cover the final sheet extent. Reload this source.');}hit=siteFeature(dataset.features,project.location);
       }catch(error){reasons.push(`Invalid ${kind} geometry: ${error.message}`);}
     }
-    reasons.push(...validatePrintRequirements({project,companyProfile,figureCode:code,geologyLoaded:loaded,geologySiteUnit:hit?.name}).map(error=>error.message));
+    const validation=validatePrintRequirements({project,companyProfile,figureCode:code,geologyLoaded:loaded,geologySiteUnit:hit?.name});
+    reasons.push(...validation.filter(error=>error.severity!=='warning').map(error=>error.message));
+    warnings.push(...validation.filter(error=>error.severity==='warning').map(error=>error.message));
     if(project.buildingBoundary?.length&&!validBoundary(project.buildingBoundary))reasons.push('Correct the invalid building boundary.');
-    if(code!=='B'&&project.siteBoundary?.length&&!validBoundary(project.siteBoundary))reasons.push('Correct the invalid site boundary.');
-    const selection={kind:'figure',code};return {kind:'figure',key:selectionKey(selection),code,title:project.figures?.[code]?.title||defaults.title,source:sourceForFigure(code),selection,ready:reasons.length===0,reasons};
+    if(code!=='B'&&project.siteBoundary?.length&&!validBoundary(project.siteBoundary))warnings.push('The saved site boundary is invalid and was omitted from this sheet.');
+    const selection={kind:'figure',code};return {kind:'figure',key:selectionKey(selection),code,title:project.figures?.[code]?.title||defaults.title,source:sourceForFigure(code),selection,ready:reasons.length===0,reasons,warnings};
   });
 }
 
@@ -102,7 +104,7 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,pla
     const exact=rows.filter(row=>selectedKeys.has(row.key)&&(!planPdf||planStates.get(row.key)?.status==='ready')).map(row=>({...row.selection}));
     return {...state,...(brandingState.status==='ready'?brandingState.value:{}),selection:exact,ready:!controller&&exact.length===selected.length&&exact.length>0&&blockers.length===0,blockers};
   }
-  function rowDetail(row,planned,pending,blocked){if(!row.ready)return row.reasons.join(' ');if(blocked)return planned.error.message;if(pending)return 'Checking PDF layout…';if(row.kind==='historical')return `Ready · Year: ${row.year} · Source: ${row.source.label} · Attribution: ${row.attribution} · Crop: ${cropSpan(row.bounds)} · Licence: ${row.policy}`;const continuations=planned?.continuations||0;return continuations?`Figure ${row.code} will include ${continuations} legend continuation ${continuations===1?'sheet':'sheets'}.`:`Ready · ${row.source.label}`;}
+  function rowDetail(row,planned,pending,blocked){if(!row.ready)return row.reasons.join(' ');if(blocked)return planned.error.message;if(pending)return 'Checking PDF layout…';if(row.kind==='historical')return `Ready · Year: ${row.year} · Source: ${row.source.label} · Attribution: ${row.attribution} · Crop: ${cropSpan(row.bounds)} · Licence: ${row.policy}`;const continuations=planned?.continuations||0;const warning=row.warnings?.length?` Warning: ${row.warnings.join(' ')}`:'';return continuations?`Figure ${row.code} will include ${continuations} legend continuation ${continuations===1?'sheet':'sheets'}.${warning}`:`Ready · ${row.source.label}.${warning}`;}
   function render(){
     if(dialog.hidden||controller)return;const locked=cadOperationBusy,state=getState(),rows=exportRows(state),saved=projectSelection(state.project),savedKeys=new Set(saved.map(selectionKey));
     const retained=rows.filter(row=>savedKeys.has(row.key)&&row.ready&&(!planPdf||planStates.get(row.key)?.status!=='error')).map(row=>row.selection);persist(retained);const retainedKeys=new Set(retained.map(selectionKey)),selected=rows.filter(row=>retainedKeys.has(row.key)&&row.ready&&(!planPdf||planStates.get(row.key)?.status==='ready'));const focused=document.activeElement?.id;
