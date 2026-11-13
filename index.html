@@ -179,6 +179,13 @@
         <button id="previewManualHistorical" type="button" class="primary">Place image and crop</button>
         <fieldset id="manualPlacementControls" hidden><legend>Image placement</legend>
           <p class="historical-source-help">A blue rotate handle appears above the image on the map — drag it to rotate, or focus it and press the arrow keys. Draw extent or the fields below set position and size.</p>
+          <details id="manualScaleCalibration" class="scale-calibration"><summary>Match image scale bar</summary>
+            <p class="helper">Draw a line over one known segment of the image scale bar, then enter that segment's real distance. Align the image position on the map separately.</p>
+            <div id="manualScaleImageFrame" class="scale-image-frame"><img id="manualScaleImage" alt="Uploaded historical image for scale calibration" /><svg id="manualScaleLine" aria-hidden="true" preserveAspectRatio="none"><line id="manualScaleStroke" x1="0" y1="0" x2="0" y2="0" /></svg></div>
+            <label>Scale-bar segment distance (m)<input id="manualScaleDistance" type="number" min="0.01" step="any" inputmode="decimal" /></label>
+            <div class="button-grid"><button id="applyManualScale" type="button">Apply image scale</button><button id="resetManualScalePoints" type="button">Draw line again</button></div>
+            <p id="manualScaleStatus" class="helper" role="status">Draw a line along the scale bar.</p>
+          </details>
           <div class="three-col"><label>Centre latitude<input id="manualCenterLat" type="number" step="any" /></label><label>Centre longitude<input id="manualCenterLng" type="number" step="any" /></label><label>Rotation °<input id="manualRotation" type="number" min="-180" max="180" step="0.1" /></label></div>
           <div class="two-col"><label>Ground width (m)<input id="manualGroundWidth" type="number" min="0.01" step="0.1" /></label><label>Ground height (m)<input id="manualGroundHeight" type="number" min="0.01" step="0.1" /></label></div>
           <div class="button-grid"><button id="applyManualPlacement" type="button">Apply placement</button><button id="drawManualExtent" type="button">Draw extent on map</button></div>
