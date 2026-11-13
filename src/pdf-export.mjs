@@ -302,7 +302,7 @@ async function preparePagePlan({project,codes,selection,datasets={},companyProfi
     if(historicalItems.some(item=>item.mode==='manual')&&!store){ownedStore=createAssetStore();store=ownedStore;}
     for(const item of historicalItems){
       const code=historicalCode(item);try{
-        const errors=validatePrintRequirements({project:snapshot.project,companyProfile:snapshot.companyProfile,figureCode:'A'}).filter(error=>error.severity!=='warning');if(errors.length)throw new Error(errors.map(error=>error.message).join(' '));
+        const errors=validatePrintRequirements({project:snapshot.project,companyProfile:snapshot.companyProfile,figureCode:'A'}).filter(error=>['figure','site-boundary','surficial-layer','surficial-unit','bedrock-layer','bedrock-unit'].includes(error.code));if(errors.length)throw new Error(errors.map(error=>error.message).join(' '));
         const geometry=historicalSheetGeometry(snapshot.project,item,dpi);
         if(item.mode==='official'){
           try{
