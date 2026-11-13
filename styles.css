@@ -175,3 +175,20 @@ button,.file-button{background:#f5f8fa;color:#263d4e;box-shadow:none;backdrop-fi
 .historical-approved-item{border-color:#dae5e8}.historical-approved-item strong{color:#203849}.historical-readiness{color:#16835e}
 .validation-panel{background:#fff1f1;color:#9a343c}.validation-panel strong{color:#812c34}.map-note[data-kind="error"]{background:#fff2f2;color:#a53b43}
 @media(max-width:700px){.company-profile-heading,.historical-heading{background:#fff}}
+
+/* Dense, predictable controls: map stays primary and actions read as tools. */
+.app-shell{grid-template-columns:286px minmax(420px,1fr) 250px}
+.project-panel{padding:9px;gap:5px}.figures-panel{padding:11px 9px}
+.workflow-card{border-radius:9px;box-shadow:none}.workflow-card>summary{min-height:38px;padding:6px 9px;font-size:12px}.workflow-card>summary::after{width:18px;height:18px;border-radius:5px}.workflow-card-body{padding:7px 9px 10px}
+.step-number{width:20px;height:20px;margin-right:5px;border-radius:6px}.badge{font-size:10px;padding:3px 6px}
+.workflow-card label{margin:5px 0;font-size:11px}.workflow-card input,.workflow-card select,.workflow-card button,.workflow-card .file-button{min-height:32px;margin-top:3px;padding:5px 8px;border-radius:7px;font-size:12px;line-height:1.25}
+.workflow-card .button-grid{gap:5px}.workflow-card .button-grid button{min-height:34px}.workflow-card .inline-input button{padding-inline:10px}
+.workflow-card .helper{font-size:10.5px;line-height:1.35;margin-top:5px}.workflow-card .scope-note{font-size:10.5px}.compact-tools{margin-top:6px;padding:6px;border-radius:7px}.compact-tools>summary{font-size:11px}
+.map-toolbar{min-height:48px;padding:6px 11px}.segmented{gap:2px;padding:2px;border-radius:8px}.segmented button{min-height:30px;padding:5px 9px;border-radius:6px;font-size:12px}.coords{font-size:11px}
+.figures-panel .section-heading{min-height:22px}.figures-panel .section-heading h2{font-size:14px;margin:0}.figures-panel>#manageHistoricalHeader{min-height:32px;margin:8px 0;padding:5px 8px;border-radius:7px;font-size:11px}
+.figure-row{margin-bottom:5px;padding:7px 8px;border-radius:8px}.figure-top{align-items:center}.figure-code{font-size:9px}.figure-title{font-size:11px;line-height:1.2}.figure-actions{margin-top:5px;gap:5px}.figure-actions button{min-height:27px;padding:3px 6px;border-radius:6px;font-size:10.5px}
+.legend-card,.aerial-card{margin-top:8px;padding:9px;border-radius:9px}.legend-card h3,.aerial-card h3{font-size:12px}
+.map-note{padding:5px 9px;font-size:10px}
+@media(max-width:1200px){.app-shell{grid-template-columns:270px minmax(360px,1fr) 230px}}
+@media(max-width:990px){.app-shell{grid-template-columns:270px minmax(0,1fr)}}
+@media(max-width:700px){.app-shell{display:flex}.project-panel,.figures-panel{padding:9px}.map-toolbar{flex-direction:row;flex-wrap:wrap}.workspace #mapHome{height:420px}}
