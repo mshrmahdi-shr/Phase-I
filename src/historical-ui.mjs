@@ -160,6 +160,7 @@ export function createHistoricalImageryUI({
   for(const provider of providers)validateImageryProvider(provider);
   const providerById=new Map(providers.map(provider=>[provider.id,provider]));
   const ids=['historicalDialog','closeHistorical','historicalOfficialMode','historicalManualMode','historicalOfficialPanel','historicalManualPanel','historicalYear','searchHistorical','cancelHistoricalSearch','historicalSearchProgress','historicalProviderErrors','showAllHistorical','manualHistoricalYear','manualHistoricalFile','manualWorldFile','manualWorldCrs','manualCitation','manualSourceUrl','manualPermission','previewManualHistorical','manualPlacementControls','manualScaleCalibration','manualScaleImageFrame','manualScaleImage','manualScaleLine','manualScaleStroke','manualScaleDistance','applyManualScale','resetManualScalePoints','manualScaleStatus','manualCenterLat','manualCenterLng','manualGroundWidth','manualGroundHeight','manualRotation','applyManualPlacement','drawManualExtent','historicalCropControls','historicalCropTitle','useHistoricalCrop','resetHistoricalCrop','cancelHistoricalCrop','commitHistorical','historicalViewControls','cancelHistoricalView','historicalStatus','historicalCropFrame','historicalApprovedList','aerialCount'];
+  ids.push('manualImageName');
   const elements=Object.fromEntries(ids.map(id=>{const element=document.getElementById(id);if(!element)fail(`Historical imagery UI is missing #${id}.`);return [id,element];}));
   const $=id=>elements[id],WindowAbortController=document.defaultView?.AbortController||globalThis.AbortController,bindings=new WindowAbortController();
   let alive=true,open=false,mode='official',lastFocus=null,searchController=null,searchGeneration=0,previewGeneration=0,refreshGeneration=0,mutationGeneration=0,mutationController=null;
@@ -390,9 +391,11 @@ export function createHistoricalImageryUI({
       try{commitRotation(session,session.placement.rotationDegrees+delta);}catch(error){showStatus(error.message,'error');}
     },{signal:bindings.signal});
     map.getPanes?.().overlayPane?.appendChild(element);session.rotateHandle=element;
+    const scale=document.createElement('button');scale.type='button';scale.className='historical-scale-handle';scale.title='Drag to resize image';scale.setAttribute('aria-label','Drag to resize the placed image');
+    scale.addEventListener('pointerdown',event=>beginImageDrag(event,session,'scale'),{signal:bindings.signal});map.getPanes?.().overlayPane?.appendChild(scale);session.scaleHandle=scale;
   }
 
-  function removeRotateHandle(session){session?.rotateHandle?.remove?.();if(session)session.rotateHandle=null;}
+  function removeRotateHandle(session){session?.rotateHandle?.remove?.();session?.scaleHandle?.remove?.();if(session){session.rotateHandle=null;session.scaleHandle=null;}}
 
   function rotateHandlePoint(placement){const corners=placementCorners(placement);return [(corners[0][0]+corners[1][0])/2,(corners[0][1]+corners[1][1])/2];}
 
@@ -401,6 +404,7 @@ export function createHistoricalImageryUI({
     const [x,y]=unprojectWebMercator(rotateHandlePoint(session.placement)),point=map.latLngToContainerPoint({lat:y,lng:x});
     if(!Number.isFinite(point?.x)||!Number.isFinite(point?.y))return;
     Object.assign(session.rotateHandle.style,{position:'absolute',left:`${point.x}px`,top:`${point.y}px`,transform:'translate(-50%,-50%)'});
+    if(session.scaleHandle){const [east,north]=unprojectWebMercator(placementCorners(session.placement)[1]),corner=map.latLngToContainerPoint({lat:north,lng:east});Object.assign(session.scaleHandle.style,{position:'absolute',left:`${corner.x}px`,top:`${corner.y}px`,transform:'translate(-50%,-50%)'});}
   }
 
   function commitRotation(session,rotationDegrees){
@@ -431,6 +435,33 @@ export function createHistoricalImageryUI({
     document.addEventListener('pointercancel',()=>{session.placement.rotationDegrees=startRotation;session.overlay?.redraw?.();positionRotateHandle(session);updatePlacementFields(session.placement);pointerUp();},{signal:controller.signal});
   }
 
+  function beginImageDrag(event,session,action='move'){
+    if(!ownsActive(session)||session.kind!=='manual'||event.button!==0)return;
+    event.preventDefault();event.stopPropagation();const original=clone(session.placement),box=map.getContainer().getBoundingClientRect();
+    const start=map.containerPointToLatLng([event.clientX-box.left,event.clientY-box.top]);
+    const origin=projectWebMercator([start.lng,start.lat]);let last=clone(original);
+    map.dragging?.disable?.();
+    const controller=new WindowAbortController();
+    const move=pointer=>{
+      if(!ownsActive(session))return;
+      try{
+        const geo=map.containerPointToLatLng([pointer.clientX-box.left,pointer.clientY-box.top]),point=projectWebMercator([geo.lng,geo.lat]);
+        if(action==='move')session.placement.center=[original.center[0]+point[0]-origin[0],original.center[1]+point[1]-origin[1]];
+        else {const before=Math.hypot(origin[0]-original.center[0],origin[1]-original.center[1]);const after=Math.hypot(point[0]-original.center[0],point[1]-original.center[1]);const factor=after/Math.max(before,.01);session.placement.groundWidth=original.groundWidth*factor;session.placement.groundHeight=original.groundHeight*factor;}
+        validatePlacement(session.placement,{location:getProject().location});last=clone(session.placement);session.overlay?.redraw?.();positionRotateHandle(session);updatePlacementFields(session.placement);
+      }catch{session.placement=clone(last);}
+    };
+    const end=()=>{controller.abort();map.dragging?.enable?.();session.crop=null;$('commitHistorical').disabled=true;showStatus('Image adjusted. Choose Use current crop to approve the new placement.','ok');};
+    document.addEventListener('pointermove',move,{signal:controller.signal});document.addEventListener('pointerup',end,{signal:controller.signal});document.addEventListener('pointercancel',()=>{session.placement=original;session.overlay?.redraw?.();positionRotateHandle(session);updatePlacementFields(original);end();},{signal:controller.signal});
+  }
+  map.getContainer?.()?.addEventListener('pointerdown',event=>{
+    const session=active;if(!ownsActive(session)||session.kind!=='manual'||event.button!==0||event.target.closest?.('button,.leaflet-control'))return;
+    const box=map.getContainer().getBoundingClientRect(),point={x:event.clientX-box.left,y:event.clientY-box.top};
+    const corners=geographicPlacementCorners(session.placement).map(([lng,lat])=>map.latLngToContainerPoint({lat,lng}));
+    let inside=false;for(let i=0,j=corners.length-1;i<corners.length;j=i++){const a=corners[i],b=corners[j];if((a.y>point.y)!==(b.y>point.y)&&point.x<(b.x-a.x)*(point.y-a.y)/(b.y-a.y)+a.x)inside=!inside;}
+    if(inside)beginImageDrag(event,session);
+  },{capture:true,signal:bindings.signal});
+
   async function previewManual(){
     requireInteractive();const project=getProject();if(!project.location)fail('Set SITE before placing manual imagery.');
     const year=validateAcquisitionYear(Number($('manualHistoricalYear').value),'Manual imagery year'),citation=$('manualCitation').value.trim();
@@ -447,7 +478,7 @@ export function createHistoricalImageryUI({
       if(image.geo)placement=placementFromGeoReference({geo:image.geo,width:image.width,height:image.height});
       else if(world){const worldText=await world.text();if(!ownsActive(session)){disposeLateImage(image);return;}placement=placementFromGeoReference({geo:{crs:$('manualWorldCrs').value,transform:parseWorldFile(worldText)},width:image.width,height:image.height});}
       else placement=sitePlacement(project,image);
-      if(!ownsActive(session)){disposeLateImage(image);return;}validatePlacement(placement,{location:project.location});session.image=image;session.placement=placement;$('manualScaleCalibration').hidden=Boolean(image.geo||world);showScaleImage(session);
+      if(!ownsActive(session)){disposeLateImage(image);return;}validatePlacement(placement,{location:project.location});session.image=image;session.placement=placement;$('manualImageName').value=file.name.replace(/\.[^.]+$/,'');$('manualScaleCalibration').hidden=Boolean(image.geo||world);showScaleImage(session);
       map.fitBounds(boundsPair(a3CropForPlacement(placement,project.location)),{animate:false,padding:[0,0]});showCrop(null);$('manualPlacementControls').hidden=false;
       if(await replaceManualOverlay(placement,session)&&ownsActive(session))showStatus('Image placement is ready. Adjust it if needed, then choose Use current crop.','ok');
     }catch(error){if(active===session)removeActive({restore:true});throw error;}
@@ -541,7 +572,7 @@ export function createHistoricalImageryUI({
     if(!session?.crop)fail('Choose Use current crop before adding the image.');
     if(session.kind==='official')return {kind:'official',item:session.item?clone(session.item):null,result:clone(session.result),crop:{...session.crop}};
     if(session.kind!=='manual'||!session.image?.blob)fail('The manual image is no longer available.');
-    return {kind:'manual',item:session.item?clone(session.item):null,fileName:String(session.file.name),year:session.year,citation:String(session.citation),sourceUrl:session.sourceUrl,
+    return {kind:'manual',item:session.item?clone(session.item):null,fileName:$('manualImageName').value.trim()||String(session.file.name),year:session.year,citation:String(session.citation),sourceUrl:session.sourceUrl,
       crop:{...session.crop},placement:{...session.placement,center:[...session.placement.center]},image:{blob:session.image.blob,mime:session.image.mime,width:session.image.width,height:session.image.height}};
   }
 
@@ -573,7 +604,7 @@ export function createHistoricalImageryUI({
             bounds:{...snapshot.crop},placement:null,assetId:null,officialExport:{kind:descriptor.kind,url:descriptor.url,layer:Object.hasOwn(descriptor,'layer')?descriptor.layer:null,maxWidth:descriptor.maxWidth,maxHeight:descriptor.maxHeight,
               resultId:snapshot.result.id,coverage:{...snapshot.result.coverage},preview:{kind:snapshot.result.preview.kind,url:snapshot.result.preview.url,layer:Object.hasOwn(snapshot.result.preview,'layer')?snapshot.result.preview.layer:null,tileTemplate:Object.hasOwn(snapshot.result.preview,'tileTemplate')?snapshot.result.preview.tileTemplate:null}},createdAt,updatedAt:stamp};
         }else{
-          validateManualCrop(snapshot.crop,snapshot.placement,project);item=manualItem({id,assetId:snapshot.assetId,year,sequence,title:currentItem?.title??snapshot.fileName,citation:snapshot.citation,sourceUrl:snapshot.sourceUrl,bounds:{...snapshot.crop},placement:snapshot.placement,createdAt});item.updatedAt=stamp;
+          validateManualCrop(snapshot.crop,snapshot.placement,project);item=manualItem({id,assetId:snapshot.assetId,year,sequence,title:snapshot.fileName,citation:snapshot.citation,sourceUrl:snapshot.sourceUrl,bounds:{...snapshot.crop},placement:snapshot.placement,createdAt});item.updatedAt=stamp;
         }
         const index=project.historical.findIndex(value=>value.id===id);if(index<0)project.historical.push(item);else project.historical[index]=item;
         project.historicalSequenceCounters[year]=Math.max(project.historicalSequenceCounters[year]||0,sequence);
@@ -591,7 +622,7 @@ export function createHistoricalImageryUI({
     const session={kind:'loading',item,before,controller,token,overlay:null,overlayGeneration:0};active=session;showStatus('Loading the saved manual image…');
     try{
       const asset=await loadHistoricalAsset(item,{session});if(!ownsActive(session))return;if(!asset){removeActive({restore:true});fail('The manual image asset is missing. Restore it from a project backup before editing.');}
-      const image={blob:asset.blob,mime:asset.metadata.mime,width:asset.metadata.width,height:asset.metadata.height,geo:null};Object.assign(session,{kind:'manual',file:{name:item.title},image,placement:clone(item.placement),crop:null,year:item.year,citation:item.attribution,sourceUrl:item.sourceUrl});
+      const image={blob:asset.blob,mime:asset.metadata.mime,width:asset.metadata.width,height:asset.metadata.height,geo:null};Object.assign(session,{kind:'manual',file:{name:item.title},image,placement:clone(item.placement),crop:null,year:item.year,citation:item.attribution,sourceUrl:item.sourceUrl});$('manualImageName').value=item.title;
       $('manualHistoricalYear').value=String(item.year);$('manualCitation').value=item.attribution;$('manualSourceUrl').value=item.sourceUrl||'';$('manualPermission').checked=true;$('manualScaleCalibration').hidden=false;showScaleImage(session);
       map.fitBounds(boundsPair(item.bounds),{animate:false});showCrop(item);$('manualPlacementControls').hidden=false;
       if(await replaceManualOverlay(session.placement,session)&&ownsActive(session))showStatus(`Editing ${historicalFigureCode(getProject().historical,item.id)}. Approved bounds change only after Update.`,'ok');
