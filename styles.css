@@ -205,9 +205,11 @@ button,.file-button{background:#f5f8fa;color:#263d4e;box-shadow:none;backdrop-fi
 .scale-image-frame svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .scale-image-frame line{stroke:#ffbd22;stroke-width:7;vector-effect:non-scaling-stroke;stroke-linecap:round;filter:drop-shadow(0 0 2px #15283d)}
 
-/* Historical imagery dialogs stay compact and float above the map. */
-#historicalDialog{padding:16px;align-items:center;justify-content:center;}
-#historicalDialog .historical-panel{width:min(760px,calc(100vw - 32px));max-height:min(680px,calc(100dvh - 32px));padding:16px;border-radius:14px;overflow:auto;}
-#historicalDialog.historical-cropping{align-items:center!important;background:#020617aa!important;pointer-events:auto!important;}
-#historicalDialog.historical-cropping .historical-panel{width:min(760px,calc(100vw - 32px));max-height:min(600px,calc(100dvh - 32px));padding:14px;}
-@media(max-width:700px){#historicalDialog{padding:8px}#historicalDialog .historical-panel,#historicalDialog.historical-cropping .historical-panel{width:calc(100vw - 16px);max-height:calc(100dvh - 16px);padding:12px;border-radius:12px}.historical-crop-controls{padding:10px}.historical-crop-controls .button-grid{grid-template-columns:1fr 1fr}.historical-crop-controls button{min-width:0;padding:8px 6px;font-size:12px}}
+/* Keep the image visible while its placement tools are open. */
+#historicalDialog.historical-cropping{pointer-events:none!important;background:transparent!important;align-items:flex-start!important;justify-content:flex-end!important;padding:12px!important}
+#historicalDialog.historical-cropping .historical-panel{pointer-events:auto;width:min(360px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:12px;box-shadow:0 12px 36px #132a4b77}
+#historicalDialog.historical-cropping #manualPlacementControls .three-col,#historicalDialog.historical-cropping #manualPlacementControls .two-col{display:none}
+#historicalDialog.historical-cropping #manualPlacementControls .button-grid{grid-template-columns:1fr 1fr}
+.historical-scale-handle{position:absolute;z-index:432;width:24px;height:24px;min-height:0;margin:0;padding:0;background:#e9a510;border:2px solid white;border-radius:5px;box-shadow:0 2px 7px #0008;cursor:nwse-resize;touch-action:none}
+.historical-scale-handle::before{content:'↗';color:#17212b;font-weight:800}
+@media(max-width:700px){#historicalDialog.historical-cropping{align-items:flex-end!important;justify-content:center!important;padding:8px!important}#historicalDialog.historical-cropping .historical-panel{width:100%;max-height:36dvh}}
