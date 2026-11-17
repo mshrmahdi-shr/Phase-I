@@ -121,7 +121,7 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,pla
     if(dialog.hidden||controller||cadOperationBusy)return Promise.all([planning||Promise.resolve(),brandingPlanning||Promise.resolve()]);planGeneration++;planningController?.abort();brandingController?.abort();planningController=null;planning=null;brandingPlanning=null;planStates=new Map();const state=getState(),generation=planGeneration,branding=beginBranding(state,generation);if(!planPdf){render();return branding;}const rows=exportRows(state).filter(row=>row.ready);if(!rows.length){render();return branding;}
     const pending=new AbortController();planningController=pending;for(const row of rows)planStates.set(row.key,{status:'pending'});render();let cursor=0,failure=null;
     async function worker(){
-      while(generation===planGeneration&&!pending.signal.aborted&&cursor<rows.length){
+      while(generation===planGeneration&&!pending.signal.aborted&&!failure&&cursor<rows.length){
         const row=rows[cursor++],plain=structuredClone({project:state.project,datasets:state.datasets||{},companyProfile:state.companyProfile,selection:[row.selection],codes:row.kind==='figure'?[row.code]:[]});
         try{
           const summary=await planPdf({...plain,providers:state.providers,assetStore:state.assetStore,dpi:Math.min(300,plain.project.dpi||300),signal:pending.signal});if(generation!==planGeneration||pending.signal.aborted)return;
@@ -129,14 +129,14 @@ export function createExportDialog({document,getState,save,setBusy,exportPdf,pla
           planStates.set(row.key,{status:'ready',continuations});render();
         }catch(error){
           if(generation!==planGeneration||pending.signal.aborted)return;
-          if(!failure)failure={row,error};planStates.set(row.key,{status:'error',error});render();
+          if(!failure)failure={row,error};planStates.set(row.key,{status:'error',error});render();return;
         }
       }
     }
     const workers=Array.from({length:Math.min(PDF_PLAN_CONCURRENCY,rows.length)},worker);
     planning=Promise.allSettled(workers).then(()=>{
       if(generation!==planGeneration)return;
-      if(failure){render();if(!cadOperationBusy)byId('exportProgress').textContent='Some sheets are blocked. Ready sheets remain available.';return;}
+      if(failure){for(const row of rows)if(planStates.get(row.key)?.status==='pending')planStates.set(row.key,{status:'error',error:new Error(`PDF planning stopped after ${failure.row.code} failed. Retry the remaining sheets separately.`)});render();if(!cadOperationBusy)byId('exportProgress').textContent='Some sheets are blocked. Ready sheets remain available.';return;}
       if(pending.signal.aborted)return;if(!cadOperationBusy)byId('exportProgress').textContent='PDF layout checked. Select the sheets to include.';
     }).finally(()=>{if(generation===planGeneration){planning=null;planningController=null;}});return Promise.all([planning,branding]);
   }
