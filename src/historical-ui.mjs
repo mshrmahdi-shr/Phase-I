@@ -478,7 +478,7 @@ export function createHistoricalImageryUI({
       if(image.geo)placement=placementFromGeoReference({geo:image.geo,width:image.width,height:image.height});
       else if(world){const worldText=await world.text();if(!ownsActive(session)){disposeLateImage(image);return;}placement=placementFromGeoReference({geo:{crs:$('manualWorldCrs').value,transform:parseWorldFile(worldText)},width:image.width,height:image.height});}
       else placement=sitePlacement(project,image);
-      if(!ownsActive(session)){disposeLateImage(image);return;}validatePlacement(placement,{location:project.location});session.image=image;session.placement=placement;$('manualImageName').value=file.name.replace(/\.[^.]+$/,'');$('manualScaleCalibration').hidden=Boolean(image.geo||world);showScaleImage(session);
+      if(!ownsActive(session)){disposeLateImage(image);return;}validatePlacement(placement,{location:project.location});session.image=image;session.placement=placement;$('manualImageName').value=file.name;$('manualScaleCalibration').hidden=Boolean(image.geo||world);showScaleImage(session);
       map.fitBounds(boundsPair(a3CropForPlacement(placement,project.location)),{animate:false,padding:[0,0]});showCrop(null);$('manualPlacementControls').hidden=false;
       if(await replaceManualOverlay(placement,session)&&ownsActive(session))showStatus('Image placement is ready. Adjust it if needed, then choose Use current crop.','ok');
     }catch(error){if(active===session)removeActive({restore:true});throw error;}
